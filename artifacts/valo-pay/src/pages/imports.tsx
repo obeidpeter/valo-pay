@@ -24,7 +24,8 @@ import { Button } from "@/components/ui/button";
 import { PageButtons } from "@/components/record-pagination";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useDialogFocusReturn } from "@/lib/focus";
-import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
+import { formatCount, formatDate, formatNumber } from "@/lib/formatters";
+import { formatMinor, formatWithOtherCurrencies } from "@/lib/currencies";
 import { readableLabel } from "@/components/record-label";
 import { ImportRowResults, importSummary, sampleImportCsv, sampleMapping } from "@/components/import-results";
 import { ImportCorrections } from "@/components/import-corrections";
@@ -426,6 +427,12 @@ function BatchEditor({
       [key]: value,
     }));
   const check = batch?.data.check;
+  // The column each checked row names its currency in, found for the saved mapping as the service finds it: only a
+  // kind with a currency field (payment evidence) reads one. A converted amount is in its row's currency, naira when it names none.
+  const currencyColumn: string | undefined =
+    batch && importFieldsOf(batch.data.kind).includes("currency")
+      ? check?.columns?.find((column: string) => (Object.hasOwn(batch.data.mapping || {}, column) ? batch.data.mapping[column] : defaultTarget(column, batch.data.identityColumn)) === "currency")
+      : undefined;
   // Suggestions come from the checked columns: a changed file takes them back until its own check.
   const withoutSuggestions = (mapping: Record<string, string>) =>
     Object.fromEntries(Object.entries(mapping).filter(([column, field]) => suggested[column] !== field));
@@ -932,11 +939,11 @@ function BatchEditor({
           {batch.data.sourceQuality && (
             <div className="rounded-lg border p-3 text-sm space-y-2">
               <h4 className="font-medium">Source quality checks</h4>
-              {/* Customers carry no amounts, so a customer batch has rows to count but no total to show. */}
+              {/* Customers carry no amounts, so a customer batch has rows to count but no total to show. Each total sums the naira rows, with other currencies beside it. */}
               <p>
                 {formatCount(batch.data.sourceQuality.sourceRows, "source row")}
                 {batch.data.kind !== "customers" &&
-                  ` · ${batch.data.sourceQuality.sourceAmountKobo == null ? "Source total unavailable" : `${formatKobo(batch.data.sourceQuality.sourceAmountKobo)} source total`}`}
+                  ` · ${batch.data.sourceQuality.sourceAmountKobo == null ? "Source total unavailable" : `${formatWithOtherCurrencies(batch.data.sourceQuality.sourceAmountKobo, batch.data.sourceQuality.sourceOtherCurrencies, "row")} source total`}`}
               </p>
               <p>
                 {formatCount(
@@ -944,7 +951,7 @@ function BatchEditor({
                   "newly imported row",
                 )}
                 {batch.data.kind !== "customers" &&
-                  ` · ${batch.data.sourceQuality.importedAmountKobo == null ? "Imported total unavailable" : `${formatKobo(batch.data.sourceQuality.importedAmountKobo)} newly imported total`}`}
+                  ` · ${batch.data.sourceQuality.importedAmountKobo == null ? "Imported total unavailable" : `${formatWithOtherCurrencies(batch.data.sourceQuality.importedAmountKobo, batch.data.sourceQuality.importedOtherCurrencies, "row")} newly imported total`}`}
               </p>
               {batch.data.sourceQuality.issues.map((issue: string) => (
                 <p key={issue} className="text-destructive">
@@ -978,7 +985,7 @@ function BatchEditor({
                 (row: any) =>
                   row.amountKobo !== undefined && (
                     <p key={row.row}>
-                      Row {row.row}: {formatKobo(row.amountKobo)}
+                      Row {row.row}: {formatMinor(row.amountKobo, String((currencyColumn && row.values?.[currencyColumn]) || "").trim() || "NGN")}
                     </p>
                   ),
               )}

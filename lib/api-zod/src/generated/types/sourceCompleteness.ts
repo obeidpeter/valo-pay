@@ -13,7 +13,7 @@ import type { SourceCompletenessStatus } from './sourceCompletenessStatus';
 import type { SourceCompletenessUndeclaredItem } from './sourceCompletenessUndeclaredItem';
 
 /**
- * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.
+ * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file's naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete.
  */
 export interface SourceCompleteness {
   /** @pattern ^\d{4}-\d{2}-\d{2}$ */

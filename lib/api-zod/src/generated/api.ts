@@ -3842,6 +3842,12 @@ export const getSourcesResponseCompletenessFilesItemReceivedRowsMax = 9007199254
 export const getSourcesResponseCompletenessFilesItemReceivedAmountKoboMin = 0;
 export const getSourcesResponseCompletenessFilesItemReceivedAmountKoboMax = 9007199254740991;
 
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMin = 0;
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMax = 9007199254740991;
+
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMin = 0;
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMax = 9007199254740991;
+
 export const getSourcesResponseCompletenessBasisDigestRegExp = new RegExp('^[a-f0-9]{64}$');
 export const getSourcesResponseCompletenessExpectedFilesMin = 0;
 export const getSourcesResponseCompletenessExpectedFilesMax = 9007199254740991;
@@ -3858,11 +3864,23 @@ export const getSourcesResponseBatchesItemQualitySourceRowsMax = 900719925474099
 export const getSourcesResponseBatchesItemQualitySourceAmountKoboMin = 0;
 export const getSourcesResponseBatchesItemQualitySourceAmountKoboMax = 9007199254740991;
 
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMin = 0;
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMin = 0;
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMax = 9007199254740991;
+
 export const getSourcesResponseBatchesItemQualityImportedRowsMin = 0;
 export const getSourcesResponseBatchesItemQualityImportedRowsMax = 9007199254740991;
 
 export const getSourcesResponseBatchesItemQualityImportedAmountKoboMin = 0;
 export const getSourcesResponseBatchesItemQualityImportedAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMin = 0;
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMin = 0;
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMax = 9007199254740991;
 
 export const getSourcesResponseBatchesItemQualityDuplicateRowsMin = 0;
 export const getSourcesResponseBatchesItemQualityDuplicateRowsMax = 9007199254740991;
@@ -3927,6 +3945,10 @@ export const GetSourcesResponse = zod.object({
   "businessDate": zod.string().regex(getSourcesResponseCompletenessFilesItemBusinessDateRegExp).nullable(),
   "receivedRows": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedRowsMin).max(getSourcesResponseCompletenessFilesItemReceivedRowsMax).nullable(),
   "receivedAmountKobo": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedAmountKoboMin).max(getSourcesResponseCompletenessFilesItemReceivedAmountKoboMax).nullable(),
+  "receivedOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMin).max(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMax),
+  "amount": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMin).max(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMax)
+})).optional(),
   "status": zod.enum(['complete', 'incomplete']),
   "problems": zod.array(zod.string())
 })),
@@ -3952,7 +3974,7 @@ export const GetSourcesResponse = zod.object({
   "basisDigest": zod.string().regex(getSourcesResponseCompletenessBasisDigestRegExp),
   "expectedFiles": zod.number().int().min(getSourcesResponseCompletenessExpectedFilesMin).max(getSourcesResponseCompletenessExpectedFilesMax),
   "completeFiles": zod.number().int().min(getSourcesResponseCompletenessCompleteFilesMin).max(getSourcesResponseCompletenessCompleteFilesMax)
-}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.'),
+}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file\'s naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete.'),
   "profiles": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -3987,14 +4009,22 @@ export const GetSourcesResponse = zod.object({
   "profileVersion": zod.string().nullable(),
   "sourceRows": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceRowsMin).max(getSourcesResponseBatchesItemQualitySourceRowsMax),
   "sourceAmountKobo": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceAmountKoboMin).max(getSourcesResponseBatchesItemQualitySourceAmountKoboMax).nullable(),
+  "sourceOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMin).max(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMax),
+  "amount": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMin).max(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMax)
+})).optional(),
   "importedRows": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedRowsMin).max(getSourcesResponseBatchesItemQualityImportedRowsMax),
   "importedAmountKobo": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedAmountKoboMin).max(getSourcesResponseBatchesItemQualityImportedAmountKoboMax).nullable(),
+  "importedOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMin).max(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMax),
+  "amount": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMin).max(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMax)
+})).optional(),
   "duplicateRows": zod.number().int().min(getSourcesResponseBatchesItemQualityDuplicateRowsMin).max(getSourcesResponseBatchesItemQualityDuplicateRowsMax),
   "conflictRows": zod.number().int().min(getSourcesResponseBatchesItemQualityConflictRowsMin).max(getSourcesResponseBatchesItemQualityConflictRowsMax),
   "invalidRows": zod.number().int().min(getSourcesResponseBatchesItemQualityInvalidRowsMin).max(getSourcesResponseBatchesItemQualityInvalidRowsMax),
   "status": zod.enum(['checked', 'needs_review', 'unavailable']),
   "issues": zod.array(zod.string())
-}).describe('The original committed totals and checks of a source batch.')
+}).describe('The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency\'s minor unit, only when there are some), never added to it. A batch committed before this keeps the totals it was committed with.')
 }).describe('A batch as the sources page lists it, with its original quality totals.')),
   "summary": zod.object({
   "lateSources": zod.number().int().min(getSourcesResponseSummaryLateSourcesMin).max(getSourcesResponseSummaryLateSourcesMax),

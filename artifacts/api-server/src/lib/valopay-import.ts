@@ -92,8 +92,9 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   const identities = input.identities ?? { source: QUICK_IMPORT_SOURCE, ids: sourceRowIds(parsed, input.identityColumn, columns) };
   // The column a field is read from, which a row error names.
   const columnOf = (field: string) => columns.find((_column, index) => targets[index] === field);
-  // Amounts in major units take the decimals of the row's own currency (ISO 4217), naira when the row names none.
-  const currencyColumn = columns.find((column) => destination(column) === 'currency');
+  // Amounts in major units take the decimals of the row's own currency (ISO 4217), naira when the row names none. Only
+  // a kind with a currency field (payment evidence) has one: elsewhere a column headed currency is extra detail.
+  const currencyColumn = importFieldsOf(input.kind).includes('currency') ? columns.find((column) => destination(column) === 'currency') : undefined;
   const working=structuredClone(state), rows:{row:number;status:string;message:string;detail?:string}[]=[];
   const amounts = new Map<number, number>();
   let valid=0,invalid=0,imported=0;

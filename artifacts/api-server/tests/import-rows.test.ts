@@ -103,6 +103,21 @@ const quick = (state: ReturnType<typeof seedMerchant>, kind: string, csv: string
 }
 
 {
+  // Integration fix: only a kind with a currency field (payment evidence) reads its amounts in the row's currency. A
+  // column headed currency in an instalment file names no currency of its amounts, which stay naira (or kobo).
+  const state = seedMerchant("currency-kinds");
+  check(!importFieldsOf("due-items").includes("currency") && importFieldsOf("observations").includes("currency"), "only payment evidence has a currency field");
+  const dues = quick(state, "due-items", 'row_id,name,reference,customerId,amount,dueDate,owner,currency\nd1,Yen column,DUE-CUR-JPY,DEMO-C1001,"1,000,000",2099-01-01,lms,JPY\nd2,Dinar column,DUE-CUR-KWD,DEMO-C1001,"15,000.5",2099-01-01,lms,KWD', { amountUnit: "naira" });
+  check(dues.imported === 2, `both instalments are imported (${JSON.stringify(dues.rows)})`);
+  assert.deepEqual(dues.preview.map((row) => row.amountKobo), [100_000_000, 1_500_050], "the preview reads naira whatever the column says"); checks += 1;
+  assert.deepEqual(["DUE-CUR-JPY", "DUE-CUR-KWD"].map((reference) => state.records.find((record) => record.reference === reference)!.amountKobo), [100_000_000, 1_500_050], "each instalment is saved in kobo"); checks += 1;
+  const attempts = quick(state, "attempts", "row_id,name,customerId,amount,dueItemId,failureCode,occurredAt,currency\na1,Yen attempt,DEMO-C1001,2500.50,DUE-CUR-JPY,INSUFFICIENT_FUNDS,2099-01-02,JPY", { commit: false, amountUnit: "naira" });
+  check(attempts.preview[0]?.amountKobo === 250_050, `a collection attempt keeps its naira decimals (${JSON.stringify(attempts.rows)})`);
+  const evidence = quick(state, "observations", 'row_id,name,reference,customerId,amount,source,currency\no1,Yen payment,OBS-CUR-JPY,DEMO-C1001,"1,000",card,JPY', { commit: false, amountUnit: "naira" });
+  check(evidence.preview[0]?.amountKobo === 1000, "payment evidence still reads its amount in its row's currency");
+}
+
+{
   // Record create and edit keep their single first message: the import path alone collects every problem.
   const state = seedMerchant("single-message");
   assert.throws(() => validateRecord(state, admin, "customers", { name: "Two problems", data: { consentCapturedAt: "2026-02-30", consentProvenance: "" } }), (error: Error) => error.message === "consentCapturedAt must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z, and name a real date."); checks += 1;

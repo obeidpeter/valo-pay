@@ -1,4 +1,4 @@
-import { sourceManifestInputSchema, businessDateSchema, sourceBatchQualitySchema, sameJson, legacyCollatedCompare, type SourceManifestInput } from "@workspace/valopay-schema";
+import { sourceManifestInputSchema, businessDateSchema, sourceBatchQualitySchema, sameJson, legacyCollatedCompare, otherCurrenciesText, type SourceManifestInput } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, recordsOf } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
@@ -53,11 +53,14 @@ export function sourceCompleteness(state: DomainState, rawDate: string) {
         if (quality.data.status !== "checked") problems.push("The committed source checks still need review.");
         if (quality.data.sourceRows !== file.expectedRows) problems.push(`Declared ${file.expectedRows} rows; received ${quality.data.sourceRows}.`);
         if (quality.data.sourceAmountKobo !== file.expectedAmountKobo) problems.push(`Declared ${file.expectedAmountKobo} kobo; received ${quality.data.sourceAmountKobo ?? "an unavailable total"}.`);
+        // The declared total is in naira and the received one sums the naira rows only; money in another currency is compared with nothing.
+        const other = quality.data.sourceOtherCurrencies;
+        if (other) problems.push(`The declared total is in naira, so it is compared with the naira rows only; this file also has ${otherCurrenciesText(other)} in ${Object.keys(other).length === 1 ? "another currency" : "other currencies"}, which no declared total covers.`);
         if (quality.data.invalidRows || quality.data.conflictRows) problems.push("Invalid or conflicting source rows remain.");
       }
     }
     if (problems.length) add(file.id, `Source file incomplete · ${file.sourceBatchId}`, problems.join(" "));
-    return { ...file, batchId: batch?.id || null, batchStatus: batch?.status || "missing", businessDate: batch?.data.businessDate || null, receivedRows: quality?.success ? quality.data.sourceRows : null, receivedAmountKobo: quality?.success ? quality.data.sourceAmountKobo : null, status: problems.length ? "incomplete" : "complete", problems };
+    return { ...file, batchId: batch?.id || null, batchStatus: batch?.status || "missing", businessDate: batch?.data.businessDate || null, receivedRows: quality?.success ? quality.data.sourceRows : null, receivedAmountKobo: quality?.success ? quality.data.sourceAmountKobo : null, ...(quality?.success && quality.data.sourceOtherCurrencies ? { receivedOtherCurrencies: quality.data.sourceOtherCurrencies } : {}), status: problems.length ? "incomplete" : "complete", problems };
   });
   // A profile whose first delivery is expected after this business date has nothing to declare for it yet.
   const activeProfiles = state.records.filter(r => r.kind === "source-profiles" && r.status === "active" && (!r.data.firstExpectedAt || watBusinessDate(r.data.firstExpectedAt) <= businessDate)).map(r => ({id:r.id,source:r.data.source,kind:r.data.kind}));

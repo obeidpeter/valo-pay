@@ -63,6 +63,34 @@ const customerAmounts = makeRecord(state, "import-batches", { data: { kind: "cus
 assert.equal(batchSourceQuality(state, customerAmounts).sourceAmountKobo, 20);
 amountBatch.data.csv = "row,amount\n1,";
 assert.equal(batchSourceQuality(state, amountBatch).status, "unavailable");
+// Integration fix: as in the import, only a kind with a currency field (payment evidence) reads a row's amount in the
+// row's currency, so a currency column in an instalment file leaves its amounts in naira.
+const dueCurrency = makeRecord(state, "import-batches", { data: { kind: "due-items", source: "amounts", csv: 'row,amount,currency\n1,"1,000,000",JPY\n2,1.5,KWD', amountUnit: "naira", mapping: {}, check: {} } });
+assert.deepEqual([batchSourceQuality(state, dueCurrency).sourceAmountKobo, batchSourceQuality(state, dueCurrency).sourceOtherCurrencies], [100_000_150, undefined]);
+// Integration fix: amounts in different currencies are never added together. The source total sums the naira rows
+// (a row that names no currency is naira) and lists each other currency's rows and money beside it, in its minor unit.
+const mixedSource = makeRecord(state, "import-batches", { data: { kind: "observations", source: "amounts", csv: 'row,amount,currency\n1,"1,000",JPY\n2,10.00,usd\n3,10.00,NGN\n4,5.00,\n5,2.50,USD', amountUnit: "naira", mapping: {}, check: {} } });
+assert.deepEqual([batchSourceQuality(state, mixedSource).sourceAmountKobo, batchSourceQuality(state, mixedSource).sourceOtherCurrencies], [1500, { JPY: { count: 1, amount: 1000 }, USD: { count: 2, amount: 1250 } }]);
+mixedSource.data.amountUnit = "kobo"; mixedSource.data.csv = "row,amount,currency\n1,1000,JPY\n2,1500,";
+assert.deepEqual([batchSourceQuality(state, mixedSource).sourceAmountKobo, batchSourceQuality(state, mixedSource).sourceOtherCurrencies], [1500, { JPY: { count: 1, amount: 1000 } }]);
+assert.equal("sourceOtherCurrencies" in batchSourceQuality(state, amountBatch), false, "a batch in naira alone lists no other currency");
+{
+  // The imported total does the same, and a profile's expected amount, which is in naira, is compared with the naira
+  // rows only: a batch with rows in another currency says so, and needs review before it is committed.
+  const evidence = fresh("source-quality-currencies");
+  const csv = 'source_row_id,name,reference,amount,source,currency\no-1,Yen payment,OBS-JPY,"1,000",card,JPY\no-2,Dollar payment,OBS-USD,10.00,card,usd\no-3,Naira payment,OBS-NGN,10.00,card,';
+  const input = { name: "Card payments 001", source: "card-feed", sourceBatchId: "cards-001", kind: "observations" as const, csv, mapping: {}, identityColumn: "source_row_id", amountUnit: "naira" as const, syntheticOnly: true as const };
+  const cardProfile = saveSourceProfile(evidence, ctx, { ...profileInput, name: "Card feed", source: "card-feed", kind: "observations", expectedRows: 3, expectedAmountKobo: 1000 });
+  const held = saveImportBatch(evidence, ctx, input);
+  assert.equal(held.data.sourceQuality.status, "needs_review");
+  assert.deepEqual(held.data.sourceQuality.issues, ["The source profile's expected amount is in naira, so it is compared with the naira rows only; this batch also has JPY 1,000 and USD 10.00 in other currencies, which it does not cover."]);
+  assert.throws(() => assertSourceBatchReady(evidence, held), /in other currencies, which it does not cover/);
+  cardProfile.data.expectedAmountKobo = null;
+  const batch = saveImportBatch(evidence, ctx, { ...input, expectedUpdatedAt: held.updatedAt }, held.id);
+  assert.equal(batch.data.sourceQuality.status, "checked", JSON.stringify(batch.data.sourceQuality.issues));
+  const saved = commitImportBatch(evidence, ctx, batch.id, batch.updatedAt).data.sourceQuality;
+  assert.deepEqual([saved.sourceAmountKobo, saved.sourceOtherCurrencies, saved.importedRows, saved.importedAmountKobo, saved.importedOtherCurrencies], [1000, { JPY: { count: 1, amount: 1000 }, USD: { count: 1, amount: 1000 } }, 3, 1000, { JPY: { count: 1, amount: 1000 }, USD: { count: 1, amount: 1000 } }]);
+}
 
 const inbox = fresh("inbox-test");
 const first = runPaystackFixture(inbox, ctx, "payment");

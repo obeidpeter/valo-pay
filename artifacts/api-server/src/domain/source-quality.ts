@@ -1,5 +1,5 @@
 import { parse } from "csv-parse/sync";
-import { counted, csvAmountToKobo, sourceProfileInputSchema, type SourceProfileInput, type SourceBatchQuality } from "@workspace/valopay-schema";
+import { counted, csvAmountToKobo, importFieldsOf, otherCurrenciesText, sourceProfileInputSchema, type SourceProfileInput, type SourceBatchQuality } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, assertSourceOpened, recordsOf } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
@@ -13,6 +13,22 @@ const safeSum = (values: number[]) => {
   if (result > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("The total exceeds the supported amount. Split this source batch.");
   return Number(result);
 };
+/**
+ * Amounts by the currency each names (none or a blank one is naira), never added across currencies: the naira total
+ * and, only when there is some, each other currency's rows and total in its minor unit, by code.
+ */
+const byCurrency = (amounts: Array<{ currency: unknown; amount: number }>) => {
+  const groups = new Map<string, number[]>();
+  for (const { currency, amount } of amounts) {
+    const code = String(currency || "").trim().toUpperCase() || "NGN";
+    if (!groups.has(code)) groups.set(code, []);
+    groups.get(code)!.push(amount);
+  }
+  const other = [...groups].filter(([code]) => code !== "NGN").sort(([a], [b]) => (a < b ? -1 : 1)).map(([code, values]) => [code, { count: values.length, amount: safeSum(values) }] as const);
+  return { kobo: safeSum(groups.get("NGN") ?? []), other: other.length ? Object.fromEntries(other) : undefined };
+};
+/** Money in other currencies for a sentence: "USD 10.00 in another currency", "JPY 1,000 and USD 10.00 in other currencies". */
+const elsewhereText = (other: Record<string, { amount: number }>) => `${otherCurrenciesText(other)} in ${Object.keys(other).length === 1 ? "another currency" : "other currencies"}`;
 
 export function saveSourceProfile(state: DomainState, ctx: Context, raw: SourceProfileInput, id?: string) {
   writer(ctx);
@@ -47,17 +63,30 @@ export function batchSourceQuality(state: DomainState, batch: ValopayRecord): So
     quality.sourceRows = rows.length;
     const columns = Object.keys(rows[0] || {});
     const field = (column: string) => Object.hasOwn(batch.data.mapping || {}, column) ? batch.data.mapping[column] : column;
-    const amountColumn = columns.find(column => ["amount", "amountKobo"].includes(field(column))), currencyColumn = columns.find(column => field(column) === "currency");
+    // As in the import, only a kind with a currency field (payment evidence) reads a row's currency.
+    const ownCurrency = importFieldsOf(batch.data.kind).includes("currency");
+    const amountColumn = columns.find(column => ["amount", "amountKobo"].includes(field(column))), currencyColumn = ownCurrency ? columns.find(column => field(column) === "currency") : undefined;
     // As in the import, a customer row's amount is optional: a blank one counts for nothing, and a row's amount is read in its own currency's units.
-    if (amountColumn) quality.sourceAmountKobo = safeSum(rows.map(row => batch.data.kind === "customers" && !row[amountColumn]?.trim() ? 0 : csvAmountToKobo(row[amountColumn] || "", batch.data.amountUnit, currencyColumn ? row[currencyColumn] : undefined, batch.data.kind)));
+    if (amountColumn) {
+      const source = byCurrency(rows.map(row => {
+        const currency = currencyColumn ? row[currencyColumn] : undefined;
+        return { currency, amount: batch.data.kind === "customers" && !row[amountColumn]?.trim() ? 0 : csvAmountToKobo(row[amountColumn] || "", batch.data.amountUnit, currency, batch.data.kind) };
+      }));
+      quality.sourceAmountKobo = source.kobo;
+      if (source.other) quality.sourceOtherCurrencies = source.other;
+    }
     else if (batch.data.kind === "customers") quality.sourceAmountKobo = 0;
     else issues.push("Map an amount column to compare source and imported totals.");
     const imported = state.records.filter(r => r.kind === batch.data.kind && r.data.importIdentity?.batchId === batch.id);
     quality.importedRows = imported.length;
-    quality.importedAmountKobo = safeSum(imported.map(r => r.amountKobo));
+    const saved = byCurrency(imported.map(r => ({ currency: ownCurrency ? r.data.currency : undefined, amount: r.amountKobo })));
+    quality.importedAmountKobo = saved.kobo;
+    if (saved.other) quality.importedOtherCurrencies = saved.other;
     if (profile) {
       if (profile.data.expectedRows != null && profile.data.expectedRows !== rows.length) issues.push(`Expected ${counted(profile.data.expectedRows, "source row")}; this batch contains ${rows.length}.`);
       if (profile.data.expectedAmountKobo != null && profile.data.expectedAmountKobo !== quality.sourceAmountKobo) issues.push("The source total does not match the expected amount in the source profile.");
+      // The expected amount is in naira: rows in another currency are compared with nothing, so the batch says so.
+      if (profile.data.expectedAmountKobo != null && quality.sourceOtherCurrencies) issues.push(`The source profile's expected amount is in naira, so it is compared with the naira rows only; this batch also has ${elsewhereText(quality.sourceOtherCurrencies)}, which it does not cover.`);
       if (profile.data.identityColumn !== batch.data.identityColumn || profile.data.amountUnit !== batch.data.amountUnit || JSON.stringify(Object.entries(profile.data.mapping || {}).sort()) !== JSON.stringify(Object.entries(batch.data.mapping || {}).filter(([key, value]) => !(key === batch.data.identityColumn && value === "" && !Object.hasOwn(profile.data.mapping || {}, key))).sort())) issues.push("This batch uses different mapping, row identity or amount units from its active source profile. Review the mapping or update the profile first.");
     }
   } catch (error) { quality.status = "unavailable"; issues.push(error instanceof Error ? error.message : "The source totals could not be checked."); }
