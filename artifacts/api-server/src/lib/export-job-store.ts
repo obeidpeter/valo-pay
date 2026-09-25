@@ -95,9 +95,11 @@ function highest(entries: ReadonlyArray<{ data: Record<string, any> }>): { seque
  * lib/valopay-store.ts), which this worker's own entries do not move. When
  * that head is further on than any entry, an entry has gone missing: the next
  * entry follows the stored head, as a request's does, so the missing sequence
- * is never issued again. The gap then stays in the chain, and the overview
- * reports it once a check has found it, until verify_audit finds the chain
- * valid again: the lender keeps the break it found.
+ * is never issued again. The gap then stays in the chain: the overview
+ * reports it whenever its check reaches it, and once a completed write,
+ * verify_audit or the daily check has recorded the break, the lender keeps it
+ * until a walk of the whole chain (verify_audit or the daily check) finds the
+ * chain valid again.
  */
 async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<{ sequence: number; hash: string } | undefined> {
   let head: { sequence: number; hash: string } | undefined;
