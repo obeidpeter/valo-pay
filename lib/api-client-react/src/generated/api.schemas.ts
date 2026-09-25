@@ -547,7 +547,7 @@ export const ExportResultStage = {
 } as const;
 
 /**
- * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
+ * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. expiredAt appears only after an approved retention run deleted the job's file, and is the time of that deletion, not a scheduled expiry: the download and the retry then answer 410, and a ready job keeps its checksum. No answer gives a ready file an expiry date, because a file is removed only by an approved retention run, and a hold or an evidence link can keep it for longer than the lender's retention period. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
   id: string;
@@ -4224,7 +4224,7 @@ merchantId: string;
  */
 search?: string;
 /**
- * Only records in this status; omitted or "all" for every status.
+ * Only records in this status; omitted or "all" for every status. Saved exports (kind exports) also take "expired", which is derived rather than stored: the exports whose file an approved retention run removed (fileDeletedAt), whatever their job's status. "ready" and "failed" then list only the exports whose file remains.
  */
 status?: string;
 /**

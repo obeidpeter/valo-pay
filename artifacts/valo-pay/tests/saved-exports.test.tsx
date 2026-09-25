@@ -58,3 +58,21 @@ it.each(['wrong identity','missing status','malformed checksum','foreign downloa
   expect(screen.queryByRole('link',{name:'Open saved export'})).toBeNull();
   await waitFor(()=>expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST')).toHaveLength(0));
 });
+it('lists removed files under File expired, never under Completed or Needs retry',async()=>{
+  const user=userEvent.setup();
+  const saved=(state:Parameters<Parameters<FakeApi['mutate']>[0]>[0],minute:number,status:string,removed:boolean)=>makeRecord(state,'exports',{status,name:`Synthetic ${minute}`,createdAt:`2026-09-19T0${minute}:00:00.000Z`,data:{kind:'customers',format:'json',...(status==='ready'?{checksum:'a'.repeat(64),generatedAt:api.now}:{lastError:'Generation could not finish.'}),...(removed?{fileDeletedAt:'2026-09-19T09:30:00.000Z'}:{})}});
+  api.mutate(state=>{saved(state,1,'ready',false);saved(state,2,'ready',true);saved(state,3,'failed',false);saved(state,4,'failed',true);});
+  const rows=()=>screen.getAllByText(/^\d.* · (Completed|Needs retry|File expired)$/).map(row=>row.textContent!.replace(/^.* · /,''));
+  renderApp('/exports?status=expired');
+  const filter=await screen.findByRole('combobox',{name:'Export status'});
+  expect([...filter.querySelectorAll('option')].map(option=>[option.value,option.textContent])).toEqual([['all','All exports'],['queued','Waiting'],['running','Preparing'],['ready','Completed'],['failed','Needs retry'],['expired','File expired']]);
+  expect((filter as HTMLSelectElement).value).toBe('expired');
+  await waitFor(()=>expect(rows()).toEqual(['File expired','File expired']));
+  expect(api.calls.some(call=>call.path==='/v1/records/exports'&&call.query.status==='expired')).toBe(true);
+  await user.selectOptions(filter,'ready');
+  await waitFor(()=>expect(rows()).toEqual(['Completed']));
+  await user.selectOptions(filter,'failed');
+  await waitFor(()=>expect(rows()).toEqual(['Needs retry']));
+  await user.selectOptions(filter,'all');
+  await waitFor(()=>expect(rows()).toEqual(['File expired','Needs retry','File expired','Completed']));
+});

@@ -21,7 +21,7 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { allocatableOnly, allocationChoices, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocatableOnly, allocationChoices, EXPIRED_EXPORT_STATUS, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
 import { allocationPayer } from "../domain/reconciliation";
 import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
@@ -1433,7 +1433,13 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   const params: unknown[] = [merchantId, session.workspace.id, session.principal, kind];
   let where = `${scopedRecordsWhere} AND r.kind=$4`;
   const filter = (column: string, value: unknown) => { params.push(value); where += ` AND ${column}=$${params.length}`; };
-  if (query.status && query.status !== "all") filter("r.status", query.status);
+  if (query.status && query.status !== "all") {
+    // inListStatus: a saved export whose file retention removed is listed as expired, never under its job's status.
+    const removed = "coalesce(r.data->>'fileDeletedAt','') <> ''";
+    if (kind !== "exports") filter("r.status", query.status);
+    else if (query.status === EXPIRED_EXPORT_STATUS) where += ` AND ${removed}`;
+    else { filter("r.status", query.status); where += ` AND NOT ${removed}`; }
+  }
   if (query.customerId) filter("r.customer_id", query.customerId);
   if (query.id) filter("r.id", query.id);
   // canTakeAllocation in SQL: something still owed (the outstanding balance when it is a whole number, else the amount) and a status that takes one.

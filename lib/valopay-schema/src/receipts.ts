@@ -47,7 +47,7 @@ export const settingsViewSchema = z.object({
   closeSchedule: effectiveCloseScheduleSchema.optional(), revision: z.string().optional(),
 }).strict();
 
-/** A saved export job's identity, status and retry details; checksum, generation time and size once it is ready (ExportResult). */
+/** A saved export job's identity, status and retry details; checksum, generation time and size once it is ready; expiredAt, the time an approved retention run deleted its file, once one has, never a scheduled expiry (ExportResult). */
 export const exportResultSchema = z.object({
   id: z.string(), downloadUrl: z.string(),
   status: z.enum(["queued", "running", "ready", "failed"]).optional(),

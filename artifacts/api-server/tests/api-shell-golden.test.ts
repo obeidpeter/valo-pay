@@ -52,6 +52,19 @@ const records = Array.from({ length: 1200 }, (_, i) => record(i, i % 3 ? "open" 
 }
 
 {
+  // Saved exports: a file an approved retention run removed is listed as expired (derived from fileDeletedAt), never as completed or needing a retry.
+  const job = (i: number, status: string, removed = false): ValopayRecord => ({ ...record(i, status), kind: "exports", data: removed ? { fileDeletedAt: "2027-02-01T00:00:00.000Z" } : {} });
+  const jobs = [job(1, "ready"), job(2, "ready", true), job(3, "failed"), job(4, "failed", true), job(5, "queued"), job(6, "running")];
+  const listed = (status: string) => pageRecords(jobs, { status }, "exports").items.map((item) => item.id);
+  assert.deepEqual(listed("ready"), ["r001"], "Completed lists only exports whose file remains");
+  assert.deepEqual(listed("failed"), ["r003"], "Needs retry lists only failed exports whose file remains");
+  assert.deepEqual(listed("expired"), ["r004", "r002"], "expired lists ready and failed exports whose file was removed");
+  assert.deepEqual([listed("queued"), listed("running"), listed("all").length], [["r005"], ["r006"], 6]);
+  assert.deepEqual(pageRecords([record(1, "expired")], { status: "expired" }).items.map((item) => item.id), ["r001"], "another kind's status named expired is its own status");
+  checks += 5;
+}
+
+{
   const limiter = createCreationLimiter(3, 1000);
   assert.equal(limiter.take("a", 0), true); assert.equal(limiter.take("a", 10), true); assert.equal(limiter.take("a", 20), true);
   assert.equal(limiter.take("a", 30), false, "the fourth creation inside the window is refused");
@@ -62,4 +75,4 @@ const records = Array.from({ length: 1200 }, (_, i) => record(i, i % 3 ? "open" 
   checks += 8;
 }
 
-console.log(`API shell tests passed (${checks} checks): paging, watermark, ceiling, filtered totals, creation limiter.`);
+console.log(`API shell tests passed (${checks} checks): paging, watermark, ceiling, filtered totals, expired exports, creation limiter.`);
