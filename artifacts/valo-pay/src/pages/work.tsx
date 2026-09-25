@@ -63,7 +63,7 @@ function WorkQueue() {
       <p className="text-sm"><span className="font-medium">{data?.lenderName || 'Selected lender'}</span><span className="block text-xs text-muted-foreground">Sample records only · Times shown in WAT{data ? ` · Checked ${formatDate(data.asOf)}` : ''}</span></p>
       <Button variant="outline" onClick={() => { void query.refetch(); }} busy={query.isFetching} busyLabel="Refreshing work…"><RefreshCw className="size-4" />Refresh work</Button>
     </div>
-    <PilotError error={query.error} retry={() => { void query.refetch(); }} />
+    <PilotError error={query.error} pager="work" retry={() => { void query.refetch(); }} />
     {query.isLoading && <p role="status">Loading your current assignments…</p>}
     <RecoveryNotice mutation={mutation} />
     {feedback && <p role="status" className="rounded-lg border border-success-border bg-success/10 p-4 text-sm">{feedback}</p>}

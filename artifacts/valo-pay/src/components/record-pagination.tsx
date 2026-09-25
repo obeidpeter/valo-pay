@@ -56,11 +56,11 @@ const fallbacks: Record<Control, Control[]> = { previous: ['previous', 'next', '
  * does something else; `gone` while that pager is off the page, as when a notice that the page failed took its place.
  */
 let pressed: { label: string; control: Control; until: number; gone: boolean; release: () => void } | null = null;
-function press(label: string, control: Control) {
+function press(label: string, control: Control, gone = false) {
   pressed?.release();
   // A key or a pointer press after this one is the person moving on; the one that pressed the control came before it.
   const events = ['keydown', 'pointerdown'] as const;
-  const held = { label, control, until: Date.now() + 30_000, gone: false, release: () => {
+  const held = { label, control, until: Date.now() + 30_000, gone, release: () => {
     for (const event of events) document.removeEventListener(event, held.release, true);
     if (pressed === held) pressed = null;
   } };
@@ -94,13 +94,20 @@ function usePagerFocus(label: string, busy: boolean) {
 /**
  * A list's problem notice that took the place of its pager after a page press (the page asked for failed to load) takes
  * the focus the pager control had, rather than leaving it on the page body, the main region or the top of a dialog: its
- * Try again, or the notice itself when it has none. Until the person's next key or pointer press, the notice takes it
- * again whenever it returns, as when the list is fetched again and fails again.
+ * Try again, or the notice itself when it has none. `pager` is the label of the pager (or pagers) it replaces; a notice
+ * of another list, or one that replaces no pager (a change's problem, a first load's), never takes it. Until the
+ * person's next key or pointer press, the notice takes it again whenever it returns, as when the list is fetched again
+ * and fails again. Returns what its Try again calls before fetching again: the pager's press made again, so the pager
+ * takes the focus back when the page arrives, or the notice when the page fails again, rather than the page body.
  */
-export function usePageProblemFocus(notice: RefObject<HTMLElement | null>) {
+export function usePageProblemFocus(notice: RefObject<HTMLElement | null>, pager?: string | readonly string[]): () => void {
+  // The press whose page this notice took the place of, while the notice is shown.
+  const replaced = useRef<{ label: string; control: Control } | null>(null);
   useLayoutEffect(() => {
     const held = pressed, element = notice.current;
-    if (!held?.gone || !element?.isConnected || Date.now() > held.until) return;
+    if (!element?.isConnected) { replaced.current = null; return; }
+    if (!held?.gone || Date.now() > held.until || !(typeof pager === 'string' ? pager === held.label : pager?.includes(held.label))) return;
+    replaced.current = { label: held.label, control: held.control };
     const active = document.activeElement;
     if (!(focusLost() || active === document.getElementById('main') || (active?.getAttribute('role') === 'dialog' && active.contains(element)))) return;
     const target = element.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? element;
@@ -108,6 +115,8 @@ export function usePageProblemFocus(notice: RefObject<HTMLElement | null>) {
     if (target === element && !element.hasAttribute('tabindex')) element.tabIndex = -1;
     target.focus();
   });
+  // Fetching again takes the notice away (the page loads with nothing to show) and its pager is still off the page.
+  return () => { if (replaced.current) press(replaced.current.label, replaced.current.control, true); };
 }
 
 /**

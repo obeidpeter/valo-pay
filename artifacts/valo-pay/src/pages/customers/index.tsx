@@ -107,7 +107,7 @@ export default function CustomersPage() {
         {isLoading || searchPending ? (
           <Loading what={searchPending ? 'search results' : 'customers'} />
         ) : error && !data ? (
-          <LoadProblem what="customers" error={error} retry={() => { void refetch(); }} busy={isFetching} />
+          <LoadProblem what="customers" pager="customers" error={error} retry={() => { void refetch(); }} busy={isFetching} />
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No customers match “${search.trim()}”`}>Check the spelling, or search by the reference or the masked phone number.</EmptyState>

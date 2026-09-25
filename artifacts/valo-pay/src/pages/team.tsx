@@ -243,14 +243,20 @@ function Member({ member, editable, shared, lenders }: { member: any; editable: 
   const change = usePilotMutation(), grant = usePilotMutation();
   useUnsavedChanges([change, grant].some((mutation) => mutation.isPending || mutation.hasUnconfirmedOutcome));
   // The button that made a change goes with that form, so focus then goes to what the change did; and a change the
-  // service refused, or whose answer was lost, sends it to the problem notice that says so.
-  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null);
-  useFocusWhenLost(changed, change.data);
-  useFocusWhenLost(problem, change.error);
-  useFocusWhenLost(granted, grant.data);
+  // service refused, or whose answer was lost, sends it to the problem notice that says so, as does lender access,
+  // whose form waits disabled for the answer.
+  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null), grantProblem = useRef<HTMLDivElement>(null);
+  // A watch lasts until the focus reaches its message, which it does not when the answer finds the person on another
+  // control. So only the card's latest request is watched, until the focus is found outside the card: what one request
+  // said never takes the focus from a later one, on this card or elsewhere on the page.
+  const card = useRef<HTMLElement>(null), granting = grant.submittedAt > change.submittedAt;
+  useFocusWhenLost(changed, granting ? undefined : change.data, card);
+  useFocusWhenLost(problem, granting ? undefined : change.error, card);
+  useFocusWhenLost(granted, granting ? grant.data : undefined, card);
+  useFocusWhenLost(grantProblem, granting ? grant.error : undefined, card);
   const count = member.lenderIds?.length || 0;
   return (
-    <article className="space-y-3 rounded-lg border p-4">
+    <article ref={card} className="space-y-3 rounded-lg border p-4">
       <div>
         <h3 className="text-sm font-semibold">{member.name}</h3>
         <p className="text-xs text-muted-foreground">
@@ -264,7 +270,7 @@ function Member({ member, editable, shared, lenders }: { member: any; editable: 
       <RecoveryNotice mutation={change} persistent={false} noticeRef={problem} />
       {change.data?.message && <p ref={changed} role="status" className="text-sm">{change.data.message}</p>}
       {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={`lenders:${member.updatedAt}`} member={member} lenders={lenders} mutation={grant} />}
-      <RecoveryNotice mutation={grant} persistent={false} />
+      <RecoveryNotice mutation={grant} persistent={false} noticeRef={grantProblem} />
       {grant.isSuccess && <p ref={granted} role="status" className="text-sm">Lender access saved.</p>}
     </article>
   );

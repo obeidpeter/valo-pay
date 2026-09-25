@@ -29,7 +29,7 @@ export function resolutionEffect(exception: ValopayRecord, code: unknown): strin
   const type = resolveExceptionType(exception.data?.type), chosen = String(code || '');
   if (waitingReversal(exception)) {
     // No code keeps it open for Finance to check (escalated_to_provider is not offered), so the box says to leave it open.
-    if (!chosen) return 'Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile, the reversal applies to it and this exception closes. Once the provider has answered, choose the outcome, and this box says what the next reconciliation does with it.';
+    if (!chosen) return 'Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile through the same connection and agrees with it, the reversal applies to it; if the payment comes through another connection, or names another payer, currency or amount, the reversal is held for you with an exception of its own. Either way this exception closes. Once the provider has answered, choose the outcome, and this box says what the next reconciliation does with it.';
     return chosen === unseenReversalCodes.adopted
       ? 'The reversal keeps waiting for its payment, with no new exception: the reconciliation that records that payment reverses it, or holds it for you if the payment names another payer, currency or amount. No money moves.'
       : 'The next reconciliation sets the reversal aside for good: it reverses nothing, even if its payment arrives later. No money moves.';

@@ -69,6 +69,7 @@ export default function OperationsPage() {
       </div>
       <PilotError
         error={list.error}
+        pager="operations"
         retry={() => {
           void list.refetch();
         }}

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
 // Focus, headings and the presentation guide in a real browser (audit of 23
@@ -430,4 +430,125 @@ test("confirming Revoke access moves focus to what the revocation did once it is
   await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
   await expect(card.getByText(/^Operations · revoked/)).toBeVisible();
   await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
+});
+
+// Fourth review of the audit fixes, findings 1 and 2: a failed page sent focus to whichever problem notice rendered first,
+// here the proposed matches' behind the allocation dialog, and Try again on a failed page dropped focus to the page body.
+const badGateway = { status: 502, contentType: "text/html", body: "<html>Bad gateway</html>" };
+/**
+ * With the second page's answer failing, pages by keyboard and presses the notice's Try again twice: while the service
+ * still fails, the notice goes as the page loads and then takes the focus back; once it answers, the page arrives and
+ * the pager control pressed takes the focus back. A 5xx is tried three times, over about three seconds, before it shows.
+ */
+async function tryAgainKeepsFocus(page: Page, scope: Page | Locator, label: string, answer: { failing: boolean }) {
+  await scope.getByRole("button", { name: `Next page of ${label}` }).focus();
+  await page.keyboard.press("Enter");
+  const retry = scope.getByRole("alert").filter({ hasText: `Unable to load ${label}` }).getByRole("button", { name: "Try again" });
+  await expect(retry).toBeFocused({ timeout: 15_000 });
+  await page.keyboard.press("Enter");
+  await expect(retry).toHaveCount(0);
+  await expect(retry).toBeFocused({ timeout: 15_000 });
+  answer.failing = false;
+  await page.keyboard.press("Enter");
+  await expect(scope.getByText(new RegExp(`^26–50 of [\\d,]+ ${label}$`))).toBeVisible();
+  await expect(scope.getByRole("button", { name: `Next page of ${label}` })).toBeFocused();
+}
+
+test("a failed page of the allocation picker moves focus to its own notice, inside its dialog, and Try again keeps it", async ({ page }) => {
+  // The proposed matches cannot be read at all, so their table behind the dialog shows its problem notice.
+  await page.route(/\/api\/v1\/reconciliation\/proposals\?/, (route) => route.fulfill(badGateway));
+  const answer = { failing: true };
+  await page.route(/\/api\/v1\/records\/due-items\?.*allocatable=true/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("offset") !== "25") return route.fallback();
+    return answer.failing ? route.fulfill(badGateway) : route.fallback();
+  });
+  await page.goto("/reconciliation");
+  await expect(page.getByText(/^Proposed matches could not be loaded/)).toBeVisible();
+  await page.getByRole("row").filter({ hasText: "SBX-UNIDENTIFIED-001" }).getByRole("button", { name: "Allocate", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Allocate payment" });
+  await expect(dialog.getByText(/^1–25 of [\d,]+ instalment choices$/)).toBeVisible();
+  await tryAgainKeepsFocus(page, dialog, "instalment choices", answer);
+  expect(await dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+});
+
+test("Try again on a page of Customers that failed keeps the focus, whether the page fails again or arrives", async ({ page, request }) => {
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const rows = Array.from({ length: 60 }, (_, i) => `Pager customer ${String(i).padStart(2, "0")},E2E-RETRY-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  const answer = { failing: true };
+  await page.route(/\/api\/v1\/records\/customers\?/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("offset") !== "25") return route.fallback();
+    return answer.failing ? route.fulfill(badGateway) : route.fallback();
+  });
+  await page.goto("/customers");
+  await expect(page.getByText(/^1–25 of [\d,]+ customers$/)).toBeVisible();
+  await tryAgainKeepsFocus(page, page, "customers", answer);
+});
+
+// Fourth review of the audit fixes, finding 3: a refused or lost Save lender access left focus on the page body, while its
+// notice sat unfocused in the member's card.
+for (const how of ["refused", "lost"] as const) test(`a ${how} Save lender access moves focus to the member's notice`, async ({ page, request }) => {
+  await staffAdministrator(page);
+  const lenders = (await (await request.get("/api/v1/workspace")).json()).merchants;
+  const person = (id: string, name: string, role: string) => ({ id, actor: `Clerk:user_${id}`, name, role, status: "active", expiresAt: inDays(60), updatedAt: inDays(-1), lenderIds: role === "Admin" ? [] : [lenders[0].id], allLenders: role === "Admin" });
+  const members = [person("admin_a", "Ada Admin", "Admin"), person("admin_b", "Bola Admin", "Admin"), person("ops", "Chidi Ops", "Operations")];
+  await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members, lenders, invitations: [], changes: [], events: [], message: "Verified staff access." } }) : route.fallback());
+  await page.route(/\/api\/v1\/team\/members\/ops\/lenders$/, async (route) => {
+    await slowly();
+    if (how === "lost") return route.abort("connectionreset");
+    return route.fulfill({ status: 409, json: { error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" } });
+  });
+  await page.goto("/team");
+  const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "Chidi Ops" }) });
+  await card.getByRole("checkbox", { checked: false }).first().check();
+  await card.getByLabel("Reason for lender access change for Chidi Ops").fill("Needs the second lender for cover");
+  const save = card.getByRole("button", { name: "Save lender access" });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  // The form waits disabled for the answer. Chromium then moves the focus to the page body; a browser that leaves it on
+  // the disabled button is made to do the same, so every browser checks where it goes from there.
+  await expect(save).toBeDisabled();
+  await page.evaluate(() => { const active = document.activeElement as HTMLElement | null; if (active?.matches(":disabled")) active.blur(); });
+  const notice = card.getByRole("alert").filter({ hasText: how === "refused" ? "This membership changed after you opened it." : "Outcome not confirmed" }).first();
+  await expect(notice).toBeVisible();
+  await expect(notice).toBeFocused();
+});
+
+// Review of the fourth review's console fixes: the card kept watching a refused Save lender access whose answer found the
+// person in the invitation form, so creating an invitation there sent the focus back to the card's old notice.
+test("an invitation's answer takes the focus, not a member's Save lender access refused while the person was in the invitation form", async ({ page, request }) => {
+  await staffAdministrator(page);
+  const lenders = (await (await request.get("/api/v1/workspace")).json()).merchants;
+  const person = (id: string, name: string, role: string) => ({ id, actor: `Clerk:user_${id}`, name, role, status: "active", expiresAt: inDays(60), updatedAt: inDays(-1), lenderIds: role === "Admin" ? [] : [lenders[0].id], allLenders: role === "Admin" });
+  const members = [person("admin_a", "Ada Admin", "Admin"), person("admin_b", "Bola Admin", "Admin"), person("ops", "Chidi Ops", "Operations")];
+  await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members, lenders, invitations: [], changes: [], events: [], message: "Verified staff access." } }) : route.fallback());
+  await page.route(/\/api\/v1\/team\/members\/ops\/lenders$/, async (route) => {
+    await pause(1500);
+    return route.fulfill({ status: 409, json: { error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" } });
+  });
+  await page.route(/\/api\/v1\/team\/invitations$/, async (route) => {
+    await slowly();
+    return route.fulfill({ status: 201, json: { id: "inv-1", token: "a".repeat(64), approval: "not_required", message: "Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days." } });
+  });
+  await page.goto("/team");
+  const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "Chidi Ops" }) });
+  await card.getByRole("checkbox", { checked: false }).first().check();
+  await card.getByLabel("Reason for lender access change for Chidi Ops").fill("Needs the second lender for cover");
+  const save = card.getByRole("button", { name: "Save lender access" });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  await expect(save).toBeDisabled();
+  // While it waits, the person moves on to the invitation form, where the refusal finds them.
+  const email = page.getByLabel("Verified email");
+  await email.focus();
+  await expect(card.getByRole("alert").filter({ hasText: "This membership changed after you opened it." }).first()).toBeVisible();
+  await expect(email).toBeFocused();
+  await email.fill("new.colleague@example.test");
+  const create = page.getByRole("button", { name: "Create invitation" });
+  await create.focus();
+  await page.keyboard.press("Enter");
+  // The button waits disabled for the answer; a browser that leaves the focus on it is made to drop it to the page body.
+  await expect(create).toBeDisabled();
+  await page.evaluate(() => { const active = document.activeElement as HTMLElement | null; if (active?.matches(":disabled")) active.blur(); });
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Invitation created\. Share the link directly/) });
 });

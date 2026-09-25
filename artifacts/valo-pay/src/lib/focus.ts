@@ -88,14 +88,21 @@ export function focusLost(): boolean {
  * has focus or is replaced, each update that finds focus fallen, or resting on
  * the main region, moves it to the message, so reading continues from there
  * rather than from the top of the page. Focus still on a field or another
- * control is left where it is.
+ * control is left where it is. With `scope`, the part of the page that sent
+ * the request (one member's card, say), an update that finds focus on
+ * something outside it ends the watch: the person has moved on to other work,
+ * whose own messages take the focus when its buttons go.
  */
-export function useFocusWhenLost(message: RefObject<HTMLElement | null>, shown: unknown): void {
+export function useFocusWhenLost(message: RefObject<HTMLElement | null>, shown: unknown, scope?: RefObject<HTMLElement | null>): void {
   const watching = useRef(false);
   useEffect(() => { watching.current = Boolean(shown); }, [shown]);
   useEffect(() => {
-    const target = message.current;
-    if (!watching.current || !target?.isConnected || !(focusLost() || document.activeElement === document.getElementById('main'))) return;
+    const target = message.current, active = document.activeElement;
+    if (!watching.current || !target?.isConnected) return;
+    if (!(focusLost() || active === document.getElementById('main'))) {
+      if (scope && !scope.current?.contains(active)) watching.current = false;
+      return;
+    }
     watching.current = false;
     // A message is not a keyboard stop, but it can hold focus so reading continues from it.
     if (!target.hasAttribute('tabindex')) target.tabIndex = -1;

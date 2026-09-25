@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { useState } from 'react';
+import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
+import { PageButtons } from '@/components/record-pagination';
+import { LoadProblem } from '@/components/load-problem';
+import { PilotError, RecoveryNotice } from '@/components/pilot-ui';
 import { makeRecord } from '../../api-server/src/domain/records';
 import { queueExport } from '../../api-server/src/lib/export-jobs';
 import { saveImportBatch } from '../../api-server/src/domain/pilot-workflow';
@@ -411,4 +416,131 @@ describe('a page that fails to load', () => {
     await failingNext(user, within(dialog).getByRole('button', { name: 'Next page of instalment choices' }), /^\/v1\/records\/due-items$/, /^Unable to load instalment choices/);
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
+});
+
+// Fourth review of the audit fixes, findings 1 and 2: a failed page sent focus to whichever problem notice rendered first,
+// another table's or a change's, even one behind the allocation dialog; and Try again on the failed page dropped focus to
+// the page body, whether the page then loaded or failed again.
+describe('the notice of the list whose page failed', () => {
+  const press = async (user: ReturnType<typeof userEvent.setup>, control: HTMLElement) => { control.focus(); await user.keyboard('{Enter}'); };
+  const unavailable = { status: 503, error: 'The service is unavailable for a moment.' };
+
+  it('takes the focus alone: another list\'s notice, a change\'s and a first load\'s never do', async () => {
+    const refused = { status: 409, data: { error: 'This change was refused.' } };
+    const change = { hasUnconfirmedOutcome: false, isPending: false, error: refused, retryUnconfirmed: async () => undefined, abandonUnconfirmed: () => undefined };
+    function Lists() {
+      const [failed, setFailed] = useState(false);
+      // In tree order before the list's own notice: each of these would find the focus lost first.
+      return <main>
+        <RecoveryNotice mutation={{ ...change, hasUnconfirmedOutcome: true, error: new TypeError('Failed to fetch') }} persistent={false} />
+        <RecoveryNotice mutation={change} persistent={false} />
+        <PilotError error={refused} />
+        <LoadProblem what="the first load" error={unavailable} retry={() => undefined} />
+        <LoadProblem what="other things" pager="other things" error={unavailable} retry={() => undefined} />
+        <PilotError error={unavailable} pager="other things" retry={() => undefined} />
+        {failed ? <LoadProblem what="things" pager="things" error={unavailable} retry={() => undefined} />
+          : <PageButtons label="things" atStart atEnd={false} onPrevious={() => undefined} onNext={() => setFailed(true)} />}
+      </main>;
+    }
+    const user = userEvent.setup();
+    render(<Lists />);
+    await press(user, screen.getByRole('button', { name: 'Next' }));
+    const notice = (await screen.findByText('Unable to load things')).parentElement!;
+    await waitFor(() => expect(document.activeElement).toBe(within(notice).getByRole('button', { name: 'Try again' })));
+  });
+
+  it('keeps focus inside the allocation dialog when its picker page fails while a table behind it shows a problem', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      const sample = state.records.find(record => record.kind === 'due-items' && record.status === 'scheduled')!;
+      state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...structuredClone(sample), id: randomUUID(), reference: `PAGER-due-${index}` })));
+    });
+    // The proposed matches cannot be read when the page opens, so their table shows its problem notice.
+    api.failNext(/^\/v1\/reconciliation\/proposals$/, unavailable);
+    renderApp('/reconciliation');
+    await screen.findByText(/Proposed matches could not be loaded/, undefined, { timeout: 10_000 });
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('SBX-UNIDENTIFIED-001')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    await within(dialog).findByText(/^1–25 of \d+ instalment choices$/);
+    api.failNext(/^\/v1\/records\/due-items$/, unavailable);
+    await press(user, within(dialog).getByRole('button', { name: 'Next page of instalment choices' }));
+    const notice = (await within(dialog).findByText('Unable to load instalment choices')).parentElement!;
+    await waitFor(() => expect(document.activeElement).toBe(within(notice).getByRole('button', { name: 'Try again' })));
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  }, 30_000);
+
+  it('moves focus to the notice of the table whose page failed, not to another table\'s above it', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      for (let index = 0; index < 30; index++) makeRecord(state, 'observations', { name: `Evidence ${index}`, status: 'unresolved', reference: `PAGER-OBS-${index}`, amountKobo: 100_000 + index, customerId: '', data: { source: 'statement', narration: 'unmatched transfer' } });
+    });
+    api.failNext(/^\/v1\/reconciliation\/proposals$/, unavailable);
+    renderApp('/reconciliation');
+    await screen.findByText(/Proposed matches could not be loaded/, undefined, { timeout: 10_000 });
+    api.failNext(/^\/v1\/reconciliation\/observations$/, unavailable);
+    await press(user, await screen.findByRole('button', { name: 'Next page of payment evidence' }, { timeout: 10_000 }));
+    const notice = await screen.findByText(/^Payment evidence could not be loaded/);
+    await waitFor(() => expect(document.activeElement).toBe(notice));
+  }, 30_000);
+
+  /**
+   * Pages to a page that fails, then presses its notice's Try again twice: while the service still fails, the notice goes
+   * while the page loads (the query shows it loading, having no data) and, when it fails again, takes the focus back; once
+   * the service answers, the page arrives and its pager takes the focus back, on the control pressed.
+   */
+  async function tryAgain(user: ReturnType<typeof userEvent.setup>, next: HTMLElement, request: RegExp, notice: RegExp, arrived: () => Promise<unknown>) {
+    const nextName = next.getAttribute('aria-label') || next.textContent!;
+    const retry = async () => {
+      const alert = await waitFor(() => screen.getAllByRole('alert').find(element => notice.test(element.textContent || ''))!);
+      const button = within(alert).getByRole('button', { name: 'Try again' });
+      await waitFor(() => expect(document.activeElement).toBe(button));
+      return button;
+    };
+    /** Presses Try again with the page's request held until its notice has gone, as it goes in a browser. */
+    const pressRetry = async (button: HTMLElement) => {
+      const release = api.hold(request);
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(button.isConnected).toBe(false));
+      release();
+    };
+    api.failNext(request, unavailable);
+    await press(user, next);
+    const first = await retry();
+    api.failNext(request, unavailable);
+    await pressRetry(first);
+    await pressRetry(await retry());
+    await arrived();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: nextName })));
+  }
+
+  it('keeps the focus through Try again on Customers, whether the page fails again or arrives', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      const sample = state.records.find(record => record.kind === 'customers')!;
+      state.records = state.records.filter(record => record.kind !== 'customers');
+      state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...sample, id: randomUUID(), name: `Pager customer ${String(index).padStart(2, '0')}`, reference: `PAGER-${index}`, createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString() })));
+    });
+    renderApp('/customers');
+    await screen.findByText('Pager customer 59');
+    await tryAgain(user, screen.getByRole('button', { name: 'Next page of customers' }), /^\/v1\/records\/customers$/, /^Unable to load customers/, () => screen.findByText('Pager customer 34'));
+  }, 30_000);
+
+  it('keeps the focus through Try again on the Exceptions queue', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      const sample = state.records.find(record => record.kind === 'exceptions' && record.status === 'open')!;
+      state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...structuredClone(sample), id: randomUUID(), reference: `PAGER-exceptions-${index}` })));
+    });
+    renderApp('/exceptions');
+    await tryAgain(user, await screen.findByRole('button', { name: 'Next page of exceptions' }), /^\/v1\/queues\/exceptions$/, /^Exceptions could not be loaded/, () => screen.findByText(/^26–50 of \d+ exceptions$/));
+  }, 30_000);
+
+  it('keeps the focus through Try again on Saved exports', async () => {
+    api.mutate((state, ctx) => { for (let index = 0; index < 60; index++) { const { id } = queueExport(state, ctx, { kind: 'customers', format: 'csv' }, 'sample/private'); const job = state.records.find(record => record.id === id)!; job.status = 'failed'; job.data.error = 'Sample failure.'; } });
+    const user = userEvent.setup();
+    renderApp('/exports');
+    await tryAgain(user, await screen.findByRole('button', { name: 'Next exports' }, { timeout: 10_000 }), /^\/v1\/records\/exports$/, /^The service is unavailable for a moment\./, () => screen.findByText(/^26–50 of \d+$/));
+  }, 30_000);
 });

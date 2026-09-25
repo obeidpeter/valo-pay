@@ -106,6 +106,10 @@ function liveTeam() {
       state.invitations = state.invitations.map((item) => ({ ...item, approval: "approved", approvedBy: "Clerk:user_admin" }));
       return { message: "Invitation approved: finance.new@example.test can now accept it as Finance." };
     }
+    if (path === "/team/invitations" && method === "POST") {
+      state.invitations = [...state.invitations, { id: "i-2", email: body.email, role: body.role, status: "pending", expiresAt: at(7), invitedBy: "Clerk:user_admin", approval: "not_required", approvedBy: null }];
+      return { id: "i-2", token: "a".repeat(64), approval: "not_required", message: "Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days." };
+    }
     const decided = /^\/team\/changes\/([^/]+)\/(approve|decline)$/.exec(path);
     if (decided) {
       const request = state.changes.find((item) => item.id === decided[1])!;
@@ -183,6 +187,171 @@ for (const how of ["refused", "lost"] as const) it(`moves focus to the member's 
   const notice = (await within(card("Chidi Ops")).findAllByRole("alert"))[0]!;
   expect(notice.textContent).toContain(how === "refused" ? "This membership changed after you opened it." : "Outcome not confirmed");
   await waitFor(() => expect(document.activeElement).toBe(notice));
+});
+
+// Fourth review of the audit fixes, finding 3: a refused or lost Save lender access still left focus on the page body, as
+// its fieldset waits disabled, while its notice sat unfocused in the member's card.
+for (const how of ["refused", "lost"] as const) it(`moves focus to the member's lender access notice when Save lender access is ${how}`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const send = globalThis.fetch;
+  let answer = () => { /* replaced by the gate's resolver */ };
+  const gate = new Promise<void>((resolve) => { answer = resolve; });
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    if (new URL(url, "http://localhost").pathname !== "/api/v1/team/members/m-ops/lenders" || options?.method !== "PATCH") return send(input, options);
+    await gate;
+    if (how === "lost") throw new TypeError("Failed to fetch");
+    return new Response(JSON.stringify({ error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" }), { status: 409, headers: { "Content-Type": "application/json" } });
+  };
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  const form = within(within(card("Chidi Ops")).getByRole("group", { name: "Lenders available to Chidi Ops" }));
+  await user.click(form.getAllByRole("checkbox").find((box) => !(box as HTMLInputElement).checked)!);
+  await user.type(form.getByLabelText("Reason for lender access change for Chidi Ops"), "Needs the second lender for cover");
+  const save = form.getByRole("button", { name: "Save lender access" }) as HTMLButtonElement;
+  save.focus();
+  await user.keyboard("{Enter}");
+  // The form waits disabled for the answer. A browser then moves the focus from the button to the page body, where jsdom
+  // leaves it on the button (and will not blur a disabled one): move it there as the browser does.
+  await waitFor(() => expect(save.disabled).toBe(true));
+  const stand = document.body.appendChild(document.createElement("span"));
+  stand.tabIndex = -1;
+  stand.focus();
+  stand.remove();
+  expect(document.activeElement).toBe(document.body);
+  answer();
+  const notice = (await within(card("Chidi Ops")).findAllByRole("alert"))[0]!;
+  expect(notice.textContent).toContain(how === "refused" ? "This membership changed after you opened it." : "Outcome not confirmed");
+  await waitFor(() => expect(document.activeElement).toBe(notice));
+});
+
+/**
+ * Holds the team route's `method` request to `path` until the returned function answers it: `refused` with a 409, `lost`
+ * with no answer at all, `applied` as the service does.
+ */
+function hold(method: "PATCH" | "POST", path: string) {
+  const send = globalThis.fetch;
+  let release: (how: "refused" | "lost" | "applied") => void = () => { /* replaced by the gate's resolver */ };
+  const gate = new Promise<"refused" | "lost" | "applied">((resolve) => { release = resolve; });
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    if (new URL(url, "http://localhost").pathname !== `/api/v1${path}` || options?.method !== method) return send(input, options);
+    const how = await gate;
+    if (how === "lost") throw new TypeError("Failed to fetch");
+    if (how === "refused") return new Response(JSON.stringify({ error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" }), { status: 409, headers: { "Content-Type": "application/json" } });
+    return send(input, options);
+  };
+  return (how: "refused" | "lost" | "applied") => release(how);
+}
+/** Moves the focus to the page body, as a browser does from a button its form disables while it waits (jsdom leaves it there, and will not blur a disabled one). */
+function dropFocus() {
+  const stand = document.body.appendChild(document.createElement("span"));
+  stand.tabIndex = -1;
+  stand.focus();
+  stand.remove();
+  expect(document.activeElement).toBe(document.body);
+}
+
+// Review of the fourth review's console fixes: a card watched what each of its two requests said until the focus reached
+// it, so a request whose answer found the person on another field kept its watch. A Save lender access refused or lost
+// then sent the focus of a later revocation on the card to its old notice, an access change refused or applied did the
+// same to a later Save lender access, and either took the focus from a later invitation. Only the card's latest request
+// is watched now, and only until the focus is found outside the card.
+for (const how of ["refused", "lost"] as const) it(`moves a revocation's focus to what it did, not to a Save lender access ${how} while the person was on another field`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const answerGrant = hold("PATCH", "/team/members/m-ops/lenders"), answerChange = hold("PATCH", "/team/members/m-ops");
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  const form = within(within(card("Chidi Ops")).getByRole("group", { name: "Lenders available to Chidi Ops" }));
+  await user.click(form.getAllByRole("checkbox").find((box) => !(box as HTMLInputElement).checked)!);
+  await user.type(form.getByLabelText("Reason for lender access change for Chidi Ops"), "Needs the second lender for cover");
+  const save = form.getByRole("button", { name: "Save lender access" }) as HTMLButtonElement;
+  save.focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(save.disabled).toBe(true));
+  // While it waits, the person moves on to the card's access form, where the answer finds them.
+  const reason = within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops");
+  reason.focus();
+  answerGrant(how);
+  const old = (await within(card("Chidi Ops")).findAllByRole("alert"))[0]!;
+  expect(document.activeElement).toBe(reason);
+  await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Access for Chidi Ops"), "revoked");
+  await user.type(reason, "Left the pilot team this week");
+  within(card("Chidi Ops")).getByRole("button", { name: "Save access change" }).focus();
+  await user.keyboard("{Enter}");
+  within(await screen.findByRole("dialog")).getByRole("button", { name: "Revoke access" }).focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  answerChange("applied");
+  const said = await within(card("Chidi Ops")).findByText("Chidi Ops’s access is revoked. Their lender access and pending invitations are removed.");
+  expect(old.isConnected).toBe(true);
+  await waitFor(() => expect(document.activeElement).toBe(said));
+});
+
+for (const first of ["refused", "applied"] as const) it(`moves a Save lender access's focus to what it did, not to an access change ${first} while the person was on another card`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const answerChange = hold("PATCH", "/team/members/m-ops"), answerGrant = hold("PATCH", "/team/members/m-ops/lenders");
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Role for Chidi Ops"), "Finance");
+  await user.type(within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops"), "Needs to review closes");
+  await user.click(within(card("Chidi Ops")).getByRole("button", { name: "Save access change" }));
+  // While it waits, the person moves on to another member's card, where the answer finds them.
+  const elsewhere = within(card("Funmi Ọbi")).getByLabelText("Reason for changing Funmi Ọbi");
+  elsewhere.focus();
+  answerChange(first);
+  const old = first === "refused" ? (await within(card("Chidi Ops")).findAllByRole("alert"))[0]! : await within(card("Chidi Ops")).findByText("Chidi Ops is now Finance (active).");
+  if (first === "applied") await waitFor(() => expect(within(card("Chidi Ops")).getByText(/^Finance · active/)).toBeTruthy());
+  expect(document.activeElement).toBe(elsewhere);
+  const form = within(within(card("Chidi Ops")).getByRole("group", { name: "Lenders available to Chidi Ops" }));
+  await user.click(form.getAllByRole("checkbox").find((box) => !(box as HTMLInputElement).checked)!);
+  await user.type(form.getByLabelText("Reason for lender access change for Chidi Ops"), "Needs the second lender for cover");
+  const save = form.getByRole("button", { name: "Save lender access" }) as HTMLButtonElement;
+  save.focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(save.disabled).toBe(true));
+  dropFocus();
+  answerGrant("applied");
+  await waitFor(() => expect(card("Chidi Ops").textContent).toContain("2 permitted lenders"));
+  const saved = within(card("Chidi Ops")).getByText("Lender access saved.");
+  expect(old.isConnected).toBe(true);
+  await waitFor(() => expect(document.activeElement).toBe(saved));
+});
+
+for (const first of ["Save lender access", "Save access change"] as const) it(`moves an invitation's focus to what it did, not to a member's ${first} refused while the person was in the invitation form`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const answerCard = hold("PATCH", first === "Save lender access" ? "/team/members/m-ops/lenders" : "/team/members/m-ops"), answerInvitation = hold("POST", "/team/invitations");
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  if (first === "Save lender access") {
+    const form = within(within(card("Chidi Ops")).getByRole("group", { name: "Lenders available to Chidi Ops" }));
+    await user.click(form.getAllByRole("checkbox").find((box) => !(box as HTMLInputElement).checked)!);
+    await user.type(form.getByLabelText("Reason for lender access change for Chidi Ops"), "Needs the second lender for cover");
+  } else {
+    await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Role for Chidi Ops"), "Finance");
+    await user.type(within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops"), "Needs to review closes");
+  }
+  await user.click(within(card("Chidi Ops")).getByRole("button", { name: first }));
+  // While it waits, the person moves on to the invitation form, where the refusal finds them.
+  const email = screen.getByLabelText("Verified email");
+  email.focus();
+  answerCard("refused");
+  const old = (await within(card("Chidi Ops")).findAllByRole("alert"))[0]!;
+  expect(document.activeElement).toBe(email);
+  await user.type(email, "new.colleague@example.test");
+  const create = screen.getByRole("button", { name: "Create invitation" }) as HTMLButtonElement;
+  create.focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(create.disabled).toBe(true));
+  dropFocus();
+  answerInvitation("applied");
+  const said = await screen.findByText(/^Invitation created\. Share the link directly/);
+  expect(old.isConnected).toBe(true);
+  await waitFor(() => expect(document.activeElement).toBe(said));
 });
 
 it("keeps the confirmation of saved lender access, which gives the membership a new version", async () => {
