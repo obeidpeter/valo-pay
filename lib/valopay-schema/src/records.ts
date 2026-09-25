@@ -404,6 +404,8 @@ export const recordDataSchemas = {
      * about (a payment or payment evidence in another currency), whose minor units amountKobo then holds. Absent for naira.
      */
     currency: z.string().optional(),
+    /** On a settlement_variance: the conditions of the reports of a collection counted in two batches it carries beside its own; its resolution settles them too. */
+    countedTwice: z.array(z.string()).optional(),
   }).passthrough(),
   policies: z.object({
     ...common,

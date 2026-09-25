@@ -1,7 +1,7 @@
 import { Link, useSearch } from 'wouter';
 import type { ValopayRecord } from '@workspace/api-client-react';
 import { heldEvidenceCodes, heldEvidenceOf, resolveExceptionType, unseenReversalCodes, unseenReversalOf } from '@workspace/valopay-schema';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, formatNumber } from '@/lib/formatters';
 import { formatRecordMoney } from '@/lib/currencies';
 import { readableLabel } from '@/components/record-label';
 
@@ -45,6 +45,19 @@ export function resolutionEffect(exception: ValopayRecord, code: unknown): strin
   return `The next reconciliation records this evidence as a payment of its own${chosen === 'confirmed_duplicate_refund' ? ', held until its refund is recorded' : ''}. Evidence of a reversal is set aside instead, since no payment is made only to be reversed. No money moves.`;
 }
 
+/**
+ * What any resolution also does to an exception that carries reports of a collection the provider counts in two
+ * settlement batches (data.countedTwice, reports the service added to it while it was open for their batch): it settles
+ * them, so none is raised again. Undefined for an exception that carries none.
+ */
+export function countedTwiceEffect(exception: ValopayRecord): string | undefined {
+  const reports = Array.isArray(exception.data?.countedTwice) ? exception.data.countedTwice.length : 0;
+  if (!reports) return undefined;
+  return reports === 1
+    ? 'This exception also carries the provider\'s report of a collection counted in two settlement batches. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check both payouts with the provider first.'
+    : `This exception also carries ${formatNumber(reports)} of the provider's reports of collections counted in two settlement batches. Resolving it settles those reports too, whichever outcome you record: they are not raised again, so check both payouts of each with the provider first.`;
+}
+
 export function ExceptionContext({ exception, customer, resolutionCode, resolving }: { exception: ValopayRecord; customer?: ValopayRecord; resolutionCode?: unknown; resolving: boolean }) {
   const type = resolveExceptionType(exception.data?.type);
   const lender = new URLSearchParams({ lender: exception.merchantId });
@@ -65,12 +78,13 @@ export function ExceptionContext({ exception, customer, resolutionCode, resolvin
     : type === 'customer_dispute'
       ? 'Not upheld takes the instalment out of dispute: its status then follows its balance, and collection and allocation resume. Upheld or mandate cancelled keeps it in dispute until Finance releases it from dispute on the Collections page. No money moves.'
       : resolutionEffect(exception, resolutionCode) ?? 'Resolving this exception records your outcome and reason. It does not allocate a payment, issue a refund, reissue a mandate or move money. Complete any required action in its workflow and include its evidence reference in your reason.';
+  const carried = countedTwiceEffect(exception);
   return <section aria-label="Exception context" className="space-y-3 rounded-lg border bg-secondary/10 p-4 text-sm">
     <div><h3 className="font-semibold">{readableLabel(exception.data?.type)}</h3><p className="mt-1 font-mono text-xs">{exception.reference || exception.id}</p></div>
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt className="text-muted-foreground">Customer</dt><dd className="min-w-0 break-words">{customer ? `${customer.name} · ${customer.reference}` : exception.customerId ? `Customer ${exception.customerId} (name unavailable)` : 'No customer linked'}</dd><dt className="text-muted-foreground">Amount</dt><dd className="font-semibold">{formatRecordMoney(exception, exception.amountKobo)}</dd><dt className="text-muted-foreground">Owner</dt><dd>{String(exception.data?.owner || 'Unassigned')}</dd>{Boolean(exception.data?.dueBy) && <><dt className="text-muted-foreground">Deadline</dt><dd>{formatDate(String(exception.data.dueBy))}</dd></>}</dl>
     <div className="rounded-md border bg-background p-3"><p className="font-medium">Recorded issue</p><p className="mt-1 whitespace-pre-wrap break-words">{String(exception.data?.notes || 'No notes have been recorded. Review the linked evidence before choosing an outcome.')}</p></div>
     {linkedId && <p className="break-all text-xs text-muted-foreground">Linked record: {linkedId}</p>}
     <div className="flex flex-wrap gap-x-4 gap-y-2">{exception.customerId && <Link className="min-h-6 text-primary underline" href={`/customers/${encodeURIComponent(exception.customerId)}?${customerParams}${linkedId ? `#record-${encodeURIComponent(linkedId)}` : ''}`}>Review customer history</Link>}{financial && <Link className="min-h-6 text-primary underline" href={`/reconciliation?${lender}`}>Review reconciliation</Link>}{mandate && <Link className="min-h-6 text-primary underline" href={`/mandates?${lender}`}>Review mandates</Link>}{checkout && <Link className="min-h-6 text-primary underline" href={`/pay-by-bank?${lender}`}>Review the pay-by-bank checkout</Link>}{!financial && !mandate && !checkout && <Link className="min-h-6 text-primary underline" href={`/collections?${lender}`}>Review collections</Link>}</div>
-    {resolving && <div className="rounded-md border bg-background p-3"><p className="font-medium">{resolutionCode ? `Record outcome: ${resolutionLabel(exception, resolutionCode)}` : 'Record an outcome after reviewing the evidence.'}</p><p className="mt-1">{effect}</p></div>}
+    {resolving && <div className="rounded-md border bg-background p-3"><p className="font-medium">{resolutionCode ? `Record outcome: ${resolutionLabel(exception, resolutionCode)}` : 'Record an outcome after reviewing the evidence.'}</p><p className="mt-1">{effect}</p>{carried && <p className="mt-1">{carried}</p>}</div>}
   </section>;
 }
