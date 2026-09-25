@@ -11,7 +11,9 @@
 // offered as they stand now, counted-twice reports kept, a batch an earlier
 // build counted, amounts in their own currency, other currencies beside a
 // customer's position, a payer the payment's evidence names and exceptions that
-// name the currency of the money they are about. Every request runs as the
+// name the currency of the money they are about, and what the fourth review
+// found: a counted-twice report an earlier build carried in its notes and a
+// waiting reversal an earlier build resolved. Every request runs as the
 // store runs it: on a copy, with the repository's final-state check, and rolled
 // back when it is refused.
 import assert from "node:assert/strict";
@@ -858,6 +860,50 @@ section("a waiting reversal Finance resolved before its payment arrived", () => 
   check(/Resolve it as platform state confirmed if .*: the next reconciliation sets the reversal aside, and it reverses nothing, even if its payment arrives later/.test(notes) && /Resolve it as provider state adopted if .*: it keeps waiting for its payment with no new exception, and the reconciliation that records that payment reverses it/.test(notes) && /Leave this exception open while you check/.test(notes), `the exception says what each resolution does (${notes})`);
 });
 
+// ---------- Fourth review finding 2: a waiting reversal's resolution keeps the meaning Finance was shown ----------
+section("a waiting reversal Finance resolved under an earlier build", () => {
+  const run = (code: string) => {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `unseen-earlier-${code}` });
+    addAttempt(state, due, { status: "succeeded", occurredAt: wat("2027-07-01T06:30:00"), providerReference: "PSK-UNSEEN-1" });
+    const reversal = addObservation(state, { reference: "PSK-UNSEEN-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "rev-1", reversed: true, occurredAt: wat("2027-07-01T07:00:00"), provider: "Sandbox Rail" } as any);
+    close(state, "2027-07-02T08:00:00");
+    const [unseen] = exceptionsFor(state, reversal.id, "provider_status_mismatch");
+    // The earlier build's resolve_exception accepted every code of the type, recorded no rule version, and answered that
+    // the reversal is set aside at the next reconciliation.
+    accepted(request(state, () => {
+      Object.assign(unseen!, { status: "resolved", updatedAt: wat("2027-07-02T09:00:00") });
+      Object.assign(unseen!.data, { resolutionCode: code, notes: "Checked with the provider.", resolvedBy: "finance@example.test", resolvedAt: wat("2027-07-02T09:00:00") });
+    }), "the earlier build's resolution");
+    const upgraded = closeAnswer(state, "2027-07-02T10:00:00");
+    addObservation(state, { reference: "PSK-UNSEEN-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "debit-1", occurredAt: wat("2027-07-01T06:30:00"), provider: "Sandbox Rail" } as any);
+    const later = closeAnswer(state, "2027-07-03T08:00:00");
+    const [debit] = payment(state, "PSK-UNSEEN-1"), after = live(state, reversal), instalment = live(state, due);
+    return {
+      upgraded, later, reversal: [after.status, after.data.resolutionKey ?? null, after.data.resolvedTo === `exception:${unseen!.id}`],
+      debit: [debit?.status, debit?.data.reversalStatus], due: [instalment.status, outstandingOf(instalment)],
+      raised: exceptionsFor(state, reversal.id).filter((item) => item.id !== unseen!.id).map((item) => item.data.type),
+    };
+  };
+  for (const code of ["escalated_to_provider", "provider_state_adopted", "platform_state_confirmed"]) {
+    const outcome = run(code);
+    equal([outcome.reversal, outcome.debit, outcome.due, outcome.raised], [["resolved", "reversal_set_aside_after_review", true], ["allocated", "none"], ["paid", 0], []], `${code}: the first reconciliation after the upgrade sets the reversal aside, as the earlier build said, and the debit stands`);
+    const noted = code !== "platform_state_confirmed";
+    equal([outcome.upgraded.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence PSK-UNSEEN-1 .*as the earlier build that recorded Finance's resolution said it would/.test(String(outcome.upgraded.data.auditNote))], [noted ? 1 : 0, noted], `${code}: the close's audit entry says so where the code now means otherwise (${outcome.upgraded.data.auditNote})`);
+    equal([outcome.later.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence/.test(String(outcome.later.data.auditNote ?? ""))], [0, false], `${code}: once`);
+  }
+  // A resolution this build records carries its rule version, and follows the codes as they are now.
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "unseen-marked" });
+  const reversal = addObservation(state, { reference: "PSK-UNSEEN-2", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "rev-2", reversed: true, occurredAt: wat("2027-07-01T07:00:00"), provider: "Sandbox Rail" } as any);
+  close(state, "2027-07-02T08:00:00");
+  const [unseen] = exceptionsFor(state, reversal.id, "provider_status_mismatch");
+  accepted(request(state, () => executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "resolve_exception", recordId: unseen!.id, reason: "The provider confirmed the reversal.", data: { resolutionCode: "provider_state_adopted" } })), "this build's resolution");
+  equal(live(state, unseen!).data.resolutionRuleVersion, 1, "resolve_exception records the rules the resolution follows");
+  close(state, "2027-07-02T10:00:00");
+  equal([live(state, reversal).status, exceptionsFor(state, reversal.id).filter(isOpen).length], ["unresolved", 0], "and an adopted reversal keeps waiting for its payment");
+  const edit = request(state, () => { const input: any = structuredClone(live(state, unseen!)); input.data.resolutionRuleVersion = null; validateRecord(state, finance(wat("2027-07-02T11:00:00")), "exceptions", { ...input, data: { ...input.data, resolutionRuleVersion: undefined } }, true); });
+  check(!edit.ok && /rule version/.test(edit.message), `the record API cannot remove it (${!edit.ok && edit.message})`);
+});
+
 section("held evidence Finance resolved in one sitting", () => {
   const run = (label: string, chargebackCode: string, closeBetween: boolean) => {
     const { state, due } = liveFixture({ withFailure: false, merchantId: `one-sitting-${label}` });
@@ -952,34 +998,46 @@ section("the same payment offered as the hold stands now", () => {
 });
 
 // ---------- Third review finding 2: a collection counted in two batches stays reported until Finance resolves it ----------
+/**
+ * Two batches whose statement credit or fees put B2 in variance, then a line of collection X1, which B1 counts, again in
+ * B2, reported on B2's open exception (the carrier).
+ */
+function carriedReport(label: string, clearBy: "second credit" | "fee corrected") {
+  const { state } = liveFixture({ withFailure: false, merchantId: `counted-twice-${label}` });
+  const [d1, d2] = recordsOf(state, "due-items").filter((item) => item.status === "scheduled");
+  const fee = (gross: number) => Math.min(100_000, Math.floor((gross * 50) / 10_000));
+  for (const [d, ref] of [[d1!, "PSK-X1"], [d2!, "PSK-X2"]] as const) {
+    addAttempt(state, d, { status: "succeeded", occurredAt: wat("2027-07-01T06:00:00"), providerReference: ref });
+    addObservation(state, { reference: ref, amountKobo: d.amountKobo, source: "webhook", customerId: d.customerId, eventId: `w-${ref}`, occurredAt: wat("2027-07-01T06:00:00") });
+  }
+  addObservation(state, { reference: "PSK-X1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), grossAmountKobo: d1!.amountKobo, feeKobo: fee(d1!.amountKobo), batchReference: "B1", source: "settlement", customerId: d1!.customerId, eventId: "s-x1", occurredAt: wat("2027-07-01T07:00:00") });
+  const statedFee = clearBy === "fee corrected" ? fee(d2!.amountKobo) + 50_000 : fee(d2!.amountKobo), net2 = d2!.amountKobo - statedFee;
+  addObservation(state, { reference: "PSK-X2", amountKobo: net2, grossAmountKobo: d2!.amountKobo, feeKobo: statedFee, batchReference: "B2", source: "settlement", customerId: d2!.customerId, eventId: "s-x2", occurredAt: wat("2027-07-01T07:00:00") });
+  addObservation(state, { reference: "STMT-B1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), batchReference: "B1", source: "statement", eventId: "st-b1", occurredAt: wat("2027-07-01T09:00:00") });
+  // B2's statement credit arrives in two parts, or B2's fee differs from the schedule: either way B2 is in variance.
+  if (clearBy === "second credit") addObservation(state, { reference: "STMT-B2-PART1", amountKobo: net2 - 1_000_000, batchReference: "B2", source: "statement", eventId: "st-b2-1", occurredAt: wat("2027-07-01T09:00:00") });
+  close(state, "2027-07-01T10:00:00");
+  const b2 = recordsOf(state, "settlement-batches").find((item) => item.reference === "B2")!;
+  // The provider's next file lists collection X1, which B1 counts, again in B2: reported on B2's open exception.
+  const again = addObservation(state, { reference: "PSK-X1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), grossAmountKobo: d1!.amountKobo, feeKobo: fee(d1!.amountKobo), batchReference: "B2", source: "settlement", customerId: d1!.customerId, eventId: "s-x1-again", occurredAt: wat("2027-07-02T07:00:00") });
+  close(state, "2027-07-02T08:00:00");
+  const [carrier] = exceptionsFor(state, b2.id, "settlement_variance");
+  check(carrier?.status === "open" && String(carrier.data.notes).includes("Settlement line PSK-X1 (NGN 18,000.00) is already counted in settlement batch B1") && ((carrier.data.countedTwice ?? []) as string[]).includes(`settlement_variance:${b2.id}:line:${again.id}`), `${label}: B2's open exception carries the report (${carrier?.data.notes})`);
+  return { state, b2, carrier: carrier!, again };
+}
+/** B2 leaves variance: the rest of its credit arrives, or Finance corrects the fee it typed. */
+function leaveVariance(state: DomainState, b2: ValopayRecord, clearBy: "second credit" | "fee corrected") {
+  if (clearBy === "second credit") addObservation(state, { reference: "STMT-B2-PART2", amountKobo: 1_000_000, batchReference: "B2", source: "statement", eventId: "st-b2-2", occurredAt: wat("2027-07-02T09:00:00") });
+  else accepted(request(state, () => { b2.data.feeKobo = Number(b2.data.expectedFeeKobo); b2.data.netKobo = Number(b2.data.grossKobo) - Number(b2.data.feeKobo); }), "Finance correcting B2's fee");
+}
+
 section("a collection in two batches stays reported when its batch leaves variance", () => {
   const run = (label: string, clearBy: "second credit" | "fee corrected") => {
-    const { state } = liveFixture({ withFailure: false, merchantId: `counted-twice-${label}` });
-    const [d1, d2] = recordsOf(state, "due-items").filter((item) => item.status === "scheduled");
-    const fee = (gross: number) => Math.min(100_000, Math.floor((gross * 50) / 10_000));
-    for (const [d, ref] of [[d1!, "PSK-X1"], [d2!, "PSK-X2"]] as const) {
-      addAttempt(state, d, { status: "succeeded", occurredAt: wat("2027-07-01T06:00:00"), providerReference: ref });
-      addObservation(state, { reference: ref, amountKobo: d.amountKobo, source: "webhook", customerId: d.customerId, eventId: `w-${ref}`, occurredAt: wat("2027-07-01T06:00:00") });
-    }
-    addObservation(state, { reference: "PSK-X1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), grossAmountKobo: d1!.amountKobo, feeKobo: fee(d1!.amountKobo), batchReference: "B1", source: "settlement", customerId: d1!.customerId, eventId: "s-x1", occurredAt: wat("2027-07-01T07:00:00") });
-    const statedFee = clearBy === "fee corrected" ? fee(d2!.amountKobo) + 50_000 : fee(d2!.amountKobo), net2 = d2!.amountKobo - statedFee;
-    addObservation(state, { reference: "PSK-X2", amountKobo: net2, grossAmountKobo: d2!.amountKobo, feeKobo: statedFee, batchReference: "B2", source: "settlement", customerId: d2!.customerId, eventId: "s-x2", occurredAt: wat("2027-07-01T07:00:00") });
-    addObservation(state, { reference: "STMT-B1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), batchReference: "B1", source: "statement", eventId: "st-b1", occurredAt: wat("2027-07-01T09:00:00") });
-    // B2's statement credit arrives in two parts, or B2's fee differs from the schedule: either way B2 is in variance.
-    if (clearBy === "second credit") addObservation(state, { reference: "STMT-B2-PART1", amountKobo: net2 - 1_000_000, batchReference: "B2", source: "statement", eventId: "st-b2-1", occurredAt: wat("2027-07-01T09:00:00") });
-    close(state, "2027-07-01T10:00:00");
-    const b2 = recordsOf(state, "settlement-batches").find((item) => item.reference === "B2")!;
-    // The provider's next file lists collection X1, which B1 counts, again in B2: reported on B2's open exception.
-    const again = addObservation(state, { reference: "PSK-X1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), grossAmountKobo: d1!.amountKobo, feeKobo: fee(d1!.amountKobo), batchReference: "B2", source: "settlement", customerId: d1!.customerId, eventId: "s-x1-again", occurredAt: wat("2027-07-02T07:00:00") });
-    close(state, "2027-07-02T08:00:00");
-    const [carrier] = exceptionsFor(state, b2.id, "settlement_variance");
-    check(carrier?.status === "open" && String(carrier.data.notes).includes("Settlement line PSK-X1 (NGN 18,000.00) is already counted in settlement batch B1") && ((carrier.data.countedTwice ?? []) as string[]).includes(`settlement_variance:${b2.id}:line:${again.id}`), `${label}: B2's open exception carries the report (${carrier?.data.notes})`);
-    // B2 then leaves variance: the rest of its credit arrives, or Finance corrects the fee it typed.
-    if (clearBy === "second credit") addObservation(state, { reference: "STMT-B2-PART2", amountKobo: 1_000_000, batchReference: "B2", source: "statement", eventId: "st-b2-2", occurredAt: wat("2027-07-02T09:00:00") });
-    else accepted(request(state, () => { b2.data.feeKobo = Number(b2.data.expectedFeeKobo); b2.data.netKobo = Number(b2.data.grossKobo) - Number(b2.data.feeKobo); }), "Finance correcting B2's fee");
+    const { state, b2, carrier } = carriedReport(label, clearBy);
+    leaveVariance(state, b2, clearBy);
     close(state, "2027-07-03T08:00:00");
     close(state, "2027-07-04T08:00:00");
-    return { state, b2, carrier: live(state, carrier!) };
+    return { state, b2, carrier: live(state, carrier) };
   };
   for (const [label, clearBy, status] of [["second-credit", "second credit", "reconciled"], ["fee-corrected", "fee corrected", "pending"]] as const) {
     const { state, b2, carrier } = run(label, clearBy);
@@ -998,6 +1056,35 @@ section("a collection in two batches stays reported when its batch leaves varian
   equal(raised.map((item) => item.data.condition), [`settlement_variance:${b2.id}:line:${again.id}`], "the report the earlier build closed is raised again, once");
   close(state, "2027-07-06T08:00:00");
   equal(exceptionsFor(state, b2.id, "settlement_variance").filter(isOpen).length, 1, "and not again at the next close");
+});
+
+// ---------- Fourth review finding 1: a report an earlier build carried only in its notes ----------
+section("a counted-twice report an earlier build carried only in its notes", () => {
+  // What the earlier build left: the report added to B2's open exception as a dated line, with no countedTwice.
+  const earlier = (label: string) => {
+    const carried = carriedReport(label, "second credit");
+    delete carried.carrier.data.countedTwice;
+    return { ...carried, condition: `settlement_variance:${carried.b2.id}:line:${carried.again.id}` };
+  };
+  // Finance resolved it on the earlier build, whose resolution replaced its notes with Finance's reason: that settles the report.
+  const resolved = earlier("notes-resolved");
+  accepted(request(resolved.state, () => executeAction(resolved.state, finance(wat("2027-07-02T09:00:00")), { action: "resolve_exception", recordId: resolved.carrier.id, reason: "Checked both payouts with the provider: the second listing is a reporting error.", data: { resolutionCode: "provider_corrected" } })), "Finance's resolution");
+  delete live(resolved.state, resolved.carrier).data.resolutionRuleVersion;
+  close(resolved.state, "2027-07-03T08:00:00");
+  close(resolved.state, "2027-07-04T08:00:00");
+  equal(exceptionsFor(resolved.state, resolved.b2.id, "settlement_variance").map((item) => [item.status, item.data.condition]), [["resolved", live(resolved.state, resolved.carrier).data.condition]], "a report Finance resolved with the exception that carried it is not raised again after the upgrade");
+  // Still open at the upgrade: the first reconciliation lists the report in countedTwice, as this build carries one.
+  const open = earlier("notes-open");
+  close(open.state, "2027-07-02T10:00:00");
+  equal([live(open.state, open.carrier).status, live(open.state, open.carrier).data.countedTwice], ["open", [open.condition]], "the first reconciliation lists the report its notes carry");
+  leaveVariance(open.state, open.b2, "second credit");
+  close(open.state, "2027-07-03T08:00:00");
+  const kept = live(open.state, open.carrier);
+  equal([live(open.state, open.b2).status, kept.status, exceptionsFor(open.state, open.b2.id, "settlement_variance").length], ["reconciled", "open", 1], "so it stays open for Finance once B2 leaves variance, and nothing else is raised");
+  check(/It stays open for the collection the provider reports in two batches/.test(String(kept.data.notes)), `its notes say why it stays open (${kept.data.notes})`);
+  accepted(request(open.state, () => executeAction(open.state, finance(wat("2027-07-03T09:00:00")), { action: "resolve_exception", recordId: kept.id, reason: "The provider recovered the second payout.", data: { resolutionCode: "provider_corrected" } })), "Finance's resolution after the upgrade");
+  close(open.state, "2027-07-04T08:00:00");
+  equal(exceptionsFor(open.state, open.b2.id, "settlement_variance").map((item) => item.status), ["resolved"], "and Finance's resolution settles it");
 });
 
 // ---------- Third review finding 3: a batch an earlier build counted wrongly is corrected ----------
@@ -1282,4 +1369,4 @@ if (failures.length) {
   console.error(failures.join("\n"));
   assert.fail(`${failures.length} payment evidence section(s) failed`);
 }
-console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, Finance's resolutions deciding first, holds offered as they stand now, counted-twice reports kept, a batch an earlier build counted, amounts in their own currency, other currencies beside a customer's position, a payer its evidence names, exceptions in their money's currency, a close that contains a conflict and the conservation property run (${propertyRuns}).`);
+console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, Finance's resolutions deciding first, holds offered as they stand now, counted-twice reports kept, a batch an earlier build counted, amounts in their own currency, other currencies beside a customer's position, a payer its evidence names, exceptions in their money's currency, counted-twice reports and waiting reversals an earlier build resolved, a close that contains a conflict and the conservation property run (${propertyRuns}).`);

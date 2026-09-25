@@ -494,7 +494,14 @@ function reportLineCountedTwice(state: DomainState, ctx: Context, batch: TypedRe
  * A report that a settlement line's collection is counted in another batch
  * stays with Finance until Finance resolves it: one an earlier build closed
  * with its batch's statement or fee variance, as its condition cleared, is
- * raised again at the next reconciliation.
+ * raised again at the next reconciliation. An earlier build carried the
+ * report on the batch's open exception as a dated line only: while that
+ * exception is open, it lists the report in countedTwice from now on, so it
+ * stays open and its resolution settles the report (carryCountedTwice). Once
+ * Finance resolved it, the resolution replaced those notes: a report that no
+ * exception carries any more was settled by it, since every build raised the
+ * report as it marked the line (countedInBatchId), and the platform's own
+ * closing keeps the notes.
  */
 function keepLinesCountedTwiceReported(state: DomainState, ctx: Context): void {
   for (const line of recordsOfKind(state, "observations")) {
@@ -503,7 +510,9 @@ function keepLinesCountedTwiceReported(state: DomainState, ctx: Context): void {
     const condition = lineCountedTwiceCondition(batchId, line.id);
     const reports = recordsWhere(state, "exceptions", "data.linkedRecordId", batchId).filter((item) => resolveExceptionType(item.data.type) === "settlement_variance"
       && (item.data.condition === condition || countedTwiceReports(item).includes(condition) || String(item.data.notes ?? "").includes(`Settlement line ${line.reference} (`)));
-    if (reports.some((item) => isOpenException(item.status) || item.data.resolutionCode !== conditionClearedCode)) continue;
+    const carrier = reports.find((item) => isOpenException(item.status) && item.data.condition !== condition && !countedTwiceReports(item).includes(condition));
+    if (carrier) { carrier.data.countedTwice = [...countedTwiceReports(carrier), condition]; touch(carrier, ctx.now); }
+    if (!reports.length || reports.some((item) => isOpenException(item.status) || item.data.resolutionCode !== conditionClearedCode)) continue;
     const batch = recordsWhere(state, "settlement-batches", "id", batchId)[0], counted = recordsWhere(state, "settlement-batches", "id", countedIn)[0];
     const payment = recordsWhere(state, "payments", "id", String(line.data.paymentId ?? ""))[0];
     if (batch && counted && payment) reportLineCountedTwice(state, ctx, batch, line, counted, payment);
@@ -1284,6 +1293,9 @@ interface FinanceDecision {
   adopted?: boolean;
 }
 
+/** A resolution an earlier build recorded: it records no rule version (resolutionRuleVersion). */
+const earlierResolution = (exception: TypedRecord<"exceptions">): boolean => exception.data.resolutionRuleVersion === undefined;
+
 /**
  * What one resolved exception of a piece of evidence decides for it (see
  * financeDecision). `other` is the payment a hold names when its exception
@@ -1291,7 +1303,7 @@ interface FinanceDecision {
  */
 function decisionOf(exception: TypedRecord<"exceptions">, observation: TypedRecord<"observations">, payments: CanonicalPaymentIndex, other?: TypedRecord<"payments">): FinanceDecision {
   const code = String(exception.data.resolutionCode);
-  if (resolveExceptionType(exception.data.type) === "provider_status_mismatch") return code === unseenReversalCodes.setAside ? { exception, setAside: true } : { exception, adopted: code === unseenReversalCodes.adopted };
+  if (resolveExceptionType(exception.data.type) === "provider_status_mismatch") return code === unseenReversalCodes.setAside || earlierResolution(exception) ? { exception, setAside: true } : { exception, adopted: code === unseenReversalCodes.adopted };
   const paymentId = heldEvidenceOf(exception.data.condition)?.paymentId ?? other?.id ?? "", named = payments.payment(paymentId);
   if (code === heldEvidenceCodes.samePayment) return { exception, join: named && !evidenceConflict(named, observation, payments) ? named : undefined };
   if (reportsReversal(observation) || code === heldEvidenceCodes.notMoney) return { exception, setAside: true };
@@ -1312,9 +1324,10 @@ function decisionOf(exception: TypedRecord<"exceptions">, observation: TypedReco
  * waiting reversal resolved as platform state confirmed is set aside for good;
  * resolved as provider state adopted it keeps waiting, with no new exception,
  * and reverses its payment when that arrives, through any spelling of the
- * connection. One an earlier build resolved as escalated to the provider keeps
- * waiting, and when its payment arrives it reverses it through its own
- * connection or is held for another, as a waiting reversal is. Undefined when
+ * connection. A resolution keeps the meaning Finance was shown when it was
+ * recorded: the earlier build that recorded one with no rule version
+ * (resolutionRuleVersion) said any resolution sets the waiting reversal aside,
+ * so it does, whatever its code (reversalsSetAsideAsResolved). Undefined when
  * Finance has resolved neither.
  */
 function financeDecision(state: DomainState, observation: TypedRecord<"observations">, payments: CanonicalPaymentIndex): FinanceDecision | undefined {
@@ -1725,6 +1738,7 @@ function reconcileRecords(state: DomainState, ctx: Context): { message: string; 
   // import or close, is recorded first whatever order the evidence arrived in.
   const ordered = [...observations.filter((item) => !reportsReversal(item)), ...observations.filter(reportsReversal)];
   const resolved = ordered.map((item) => canonicalPayment(state, ctx, item, canonicalPayments, settlementLines)).filter(Boolean) as TypedRecord<"payments">[];
+  const earlierResolutions = reversalsSetAsideAsResolved(state, observations);
   recountEarlierLines(state, ctx);
   const statements = linkSettlementStatements(state, ctx);
   const batchVariances = evaluateSettlementBatches(state, ctx, statements.credits);
@@ -1801,9 +1815,31 @@ function reconcileRecords(state: DomainState, ctx: Context): { message: string; 
       agedUnallocated: aged.length, finalAttemptExceptions: giveUps.finalFailures, disputesFrozen: giveUps.disputes, noticesNotEvidenced: giveUps.deferred, retryDecisionsRecorded: giveUps.decisionsRecorded, unknownOutcomes: unknownOutcomes.length,
       checkoutOutcomesUnknown: checkoutsUnknown, exceptionsOpened: recordsOf(state, "exceptions").length - exceptionsBefore, exceptionsCleared: cleared.length,
       ...(currenciesRecorded ? { exceptionCurrenciesRecorded: currenciesRecorded } : {}),
-      ...(cleared.length ? { auditNote: clearedExceptionsNote(cleared) } : {}),
+      ...(earlierResolutions.length ? { reversalsSetAsideAsResolved: earlierResolutions.length } : {}),
+      ...(cleared.length || earlierResolutions.length ? { auditNote: [clearedExceptionsNote(cleared), earlierResolutionsNote(earlierResolutions)].filter(Boolean).join(" ") } : {}),
     },
   };
+}
+
+/**
+ * The waiting reversals this pass set aside for a resolution an earlier build
+ * recorded whose code now means otherwise (financeDecision), each with that
+ * resolution: of `observations`, the evidence the pass read.
+ */
+function reversalsSetAsideAsResolved(state: DomainState, observations: readonly TypedRecord<"observations">[]): { reversal: TypedRecord<"observations">; exception: TypedRecord<"exceptions"> }[] {
+  return observations.flatMap((reversal) => {
+    if (reversal.status !== "resolved" || reversal.data.resolutionKey !== "reversal_set_aside_after_review") return [];
+    const exception = recordsWhere(state, "exceptions", "id", String(reversal.data.resolvedTo ?? "").slice("exception:".length))[0];
+    return exception && resolveExceptionType(exception.data.type) === "provider_status_mismatch" && earlierResolution(exception) && exception.data.resolutionCode !== unseenReversalCodes.setAside ? [{ reversal, exception }] : [];
+  });
+}
+
+/** What the audit entry adds for them: each reversal, the code Finance chose and why it was set aside. */
+function earlierResolutionsNote(kept: readonly { reversal: TypedRecord<"observations">; exception: TypedRecord<"exceptions"> }[]): string | undefined {
+  if (!kept.length) return undefined;
+  const named = kept.slice(0, 3).map(({ reversal, exception }) => `${reversal.reference} (${moneyText(reversal.amountKobo, currencyOf(reversal))}, resolved as ${exception.data.resolutionCode})`);
+  const more = kept.length > 3 ? `; and ${counted(kept.length - 3, "more", "more")}` : "";
+  return `Set aside reversal evidence ${named.join("; ")}${more}, as the earlier build that recorded Finance's resolution said it would: it reverses nothing, even if its payment arrives later.`;
 }
 
 /** When a pay-by-bank checkout's outcome became unknown: its first unknown event, else its last change. */

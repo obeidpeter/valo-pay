@@ -134,6 +134,8 @@ export function validateRecord(
   for (const field of ['case', 'importIdentity']) {
     if (JSON.stringify(data[field]) !== JSON.stringify(existing?.data[field])) throw new Error(`Use the dedicated workflow to change ${field === 'case' ? 'case coordination' : 'import provenance'}.`);
   }
+  // The rules a resolution follows are resolve_exception's to record (resolutionRuleVersion).
+  if (kind === "exceptions" && data.resolutionRuleVersion !== existing?.data.resolutionRuleVersion) throw new Error("An exception's resolution rule version is recorded by Resolve exception and cannot be changed here.");
   if (isUpdate && !existing) throw new Error("An update requires the existing record id.");
   if (existing?.status === "approved" && (kind === "policies" || kind === "templates")) {
     throw new Error("Approved versions cannot be edited. Create a new draft version instead.");

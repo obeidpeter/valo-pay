@@ -406,6 +406,8 @@ export const recordDataSchemas = {
     currency: z.string().optional(),
     /** On a settlement_variance: the conditions of the reports of a collection counted in two batches it carries beside its own; its resolution settles them too. */
     countedTwice: z.array(z.string()).optional(),
+    /** The rules the resolution was recorded under (resolutionRuleVersion), which resolve_exception records; absent on one an earlier build recorded. */
+    resolutionRuleVersion: z.number().int().optional(),
   }).passthrough(),
   policies: z.object({
     ...common,
