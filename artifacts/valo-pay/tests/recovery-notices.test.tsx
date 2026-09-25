@@ -4,19 +4,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
+import { queueExport } from "../../api-server/src/lib/export-jobs";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
 afterEach(() => api.uninstall());
 
 const KEPT = "If the service received the request, it stays in Operations after you close this form or reload the page, where you can check it.";
-/** The notice holding `text`, which says the request stays in Operations and links there. */
-function pointsToOperations(text: string | RegExp) {
-  const notice = screen.getByText(text).closest('[role="alert"]') as HTMLElement;
+/** Whether `notice` says the request stays in Operations and links there. */
+function keptInOperations(notice: HTMLElement) {
   expect(notice.textContent).toContain(KEPT);
   expect(within(notice).getByRole("link", { name: "Open Operations" }).getAttribute("href")).toBe("/operations");
   return notice;
 }
+/** The export control's notice about a request whose outcome is unconfirmed. */
+const exportNotice = () => screen.getByText(/^Other export requests are paused until this result is confirmed/).parentElement as HTMLElement;
+/** The alert holding `text`, which says the request stays in Operations and links there. */
+const pointsToOperations = (text: string | RegExp) => keptInOperations(screen.getByText(text).closest('[role="alert"]') as HTMLElement);
 
 describe("unconfirmed changes the journal records point to Operations", () => {
   it("in the record dialog, whose close confirmation says so too", async () => {
@@ -69,6 +73,46 @@ describe("unconfirmed changes the journal records point to Operations", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create mandate" }));
     await screen.findByText("Mandate creation outcome unconfirmed");
     pointsToOperations("Mandate creation outcome unconfirmed");
+  });
+
+  it("in the export control, for a new export", async () => {
+    const user = userEvent.setup();
+    renderApp("/reports?view=billing");
+    api.failNext(/^\/v1\/exports$/, "offline", "POST");
+    await user.click(await screen.findByRole("button", { name: "Export billing CSV" }));
+    await screen.findByRole("button", { name: "Retry original request" });
+    keptInOperations(exportNotice());
+  });
+
+  it("in the export control, for a retry of a saved export", async () => {
+    const user = userEvent.setup();
+    const id = api.mutate((state, ctx) => {
+      const job = queueExport(state, ctx, { kind: "gate-pack", format: "pdf" }, "sample/private");
+      const record = state.records.find((candidate) => candidate.id === job.id)!;
+      record.status = "failed";
+      record.data.lastError = "Generation could not finish.";
+      return job.id;
+    });
+    renderApp(`/exports?job=${id}`);
+    api.failNext(new RegExp(`^/v1/exports/${id}/retry$`), "offline", "POST");
+    await user.click(await screen.findByRole("button", { name: "Retry export" }));
+    await screen.findByRole("button", { name: "Retry original request" });
+    keptInOperations(exportNotice());
+  });
+
+  it("in the quick import", async () => {
+    const user = userEvent.setup();
+    renderApp("/collections");
+    await user.click(await screen.findByRole("button", { name: "Import sample data" }));
+    await user.selectOptions(screen.getByLabelText("Import as"), "customers");
+    await user.click(screen.getByLabelText("CSV content"));
+    await user.paste("row_id,name,consentProvenance\nr1,Lost answer import,Synthetic");
+    await user.click(screen.getByRole("button", { name: "Check data" }));
+    await screen.findByRole("heading", { name: "Check results" });
+    api.failNext(/^\/v1\/imports$/, "offline", "POST");
+    await user.click(screen.getByRole("button", { name: "Import data" }));
+    await screen.findByText("Import outcome not confirmed");
+    pointsToOperations("Import outcome not confirmed");
   });
 
   it("in the settings notices for journaled actions, but not the demo role switch", async () => {
