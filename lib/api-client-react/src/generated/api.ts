@@ -910,7 +910,7 @@ export const getImportRecordsUrl = (params: ImportRecordsParams,) => {
 }
 
 /**
- * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.
+ * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data. Every row needs a source row ID from the identityColumn column; a row already imported with the same data is skipped, and one with different data is refused. An invalid row reports every failing rule, naming the operator's column, with the record API's words in detail.
  * @summary Preview or commit a synthetic CSV import
  */
 export const importRecords = async (importInput: ImportInput,

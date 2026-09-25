@@ -35,7 +35,7 @@ import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
 import { allocatableOnly, allocationChoices, pageRecords } from "../../api-server/src/lib/valopay-list";
 import { pageQueue } from '../../api-server/src/lib/valopay-queues';
-import { importCsv } from "../../api-server/src/lib/valopay-import";
+import { importCsv, withRowIdColumn } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
 import type { CloseRuntime } from "../../api-server/src/domain/effective-close-schedule";
@@ -285,7 +285,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       return S.PerformActionResponse.parse(withState(merchantId, (state, ctx) => executeAction(state, ctx, body), { action: body.action, objectId: body.recordId || "workspace", summary: body.reason || "Synthetic workspace operation" }));
     }],
     ["POST", /^\/v1\/imports$/, (_p, query, raw) => {
-      const body = S.ImportRecordsBody.parse(raw);
+      const body = S.ImportRecordsBody.parse(withRowIdColumn(raw));
       return S.ImportRecordsResponse.parse(withState(merchantOf(query), (state, ctx) => importCsv(state, ctx, body), body.commit ? { action: 'post.imports', objectId: 'workspace', summary: 'Synthetic CSV import' } : undefined));
     }],
     ["GET", /^\/v1\/customers\/(?<id>[^/]+)\/timeline$/, (params, query) => S.GetCustomerTimelineResponse.parse(withState(merchantOf(query), (state) => customerTimeline(state, params.id!)))],

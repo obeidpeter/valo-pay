@@ -266,7 +266,7 @@ async function pageToTheEnd(page: Page, path: string, label: string) {
 test("paging Customers and the Audit log by keyboard keeps focus on the pager control pressed, never on the page", async ({ page, request }) => {
   const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
   const rows = Array.from({ length: 60 }, (_, i) => `Pager customer ${String(i).padStart(2, "0")},E2E-PAGER-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
-  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, identityColumn: "reference", syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
   // Every audited write adds an entry: enough for three pages of the log.
   for (let i = 0; i < 60; i++) expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
   await page.route(/\/api\/v1\/records\/(customers|audit)\?/, async (route) => { await pause(1000); await route.fallback(); });
@@ -309,7 +309,7 @@ test("paging a pilot page's list by keyboard keeps focus on the page button pres
 test("paging either picker by keyboard keeps the focus on the pager control pressed while the page loads", async ({ page, request }) => {
   const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
   const rows = Array.from({ length: 60 }, (_, i) => `Picker customer ${String(i).padStart(2, "0")},E2E-PICKER-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
-  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, identityColumn: "reference", syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
   await page.route(/\/api\/v1\/records\/(customers|due-items)\?/, async (route) => { await pause(700); await route.fallback(); });
   for (const { path, open, dialog: name, label } of [
     { path: "/mandates", open: () => page.getByRole("button", { name: "Create synthetic mandate" }).first().click(), dialog: "Create synthetic mandate", label: "customer choices" },
@@ -337,7 +337,7 @@ test("paging either picker with its form complete, or pressing Enter in its sear
   // a complete form sent the allocation or created the mandate.
   const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
   const rows = Array.from({ length: 60 }, (_, i) => `Picker customer ${String(i).padStart(2, "0")},E2E-PICKER-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
-  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, identityColumn: "reference", syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
   const writes: string[] = [];
   page.on("request", (sent) => { if (sent.method() !== "GET" && sent.url().includes("/api/v1/")) writes.push(`${sent.method()} ${new URL(sent.url()).pathname}`); });
   /** Next by keyboard and Previous by pointer, then Enter in the search: the page of choices changes and nothing is sent. */

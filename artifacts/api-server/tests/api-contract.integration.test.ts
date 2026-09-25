@@ -213,7 +213,7 @@ try {
   assert.equal(cleared.name, "Contract customer, renamed");
   ok(await call(q(`/v1/customers/${record.id}/timeline`)));
   ok(await call(q(`/v1/customers/${record.id}/history`)));
-  ok(await call(q("/v1/imports"), "POST", { kind: "customers", csv: "name,reference,consentProvenance\nImported contract customer,CONTRACT-I001,Synthetic consent", syntheticOnly: true, commit: false, amountUnit: "kobo" }));
+  ok(await call(q("/v1/imports"), "POST", { kind: "customers", csv: "name,reference,consentProvenance\nImported contract customer,CONTRACT-I001,Synthetic consent", identityColumn: "reference", syntheticOnly: true, commit: false, amountUnit: "kobo" }));
   const settings = ok(await call(q("/v1/settings")));
   ok(await call(q("/v1/settings"), "PATCH", { closeTime: "07:00", expectedRevision: settings.revision }, { key: key() }));
   const job = ok(await call(q("/v1/exports"), "POST", { kind: "customers", format: "json" }, { key: key() }));

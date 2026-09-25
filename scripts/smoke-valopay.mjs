@@ -30,7 +30,9 @@ const due=(await list("due-items")).find(d=>d.status==="scheduled"&&d.amountKobo
 assert(due);
 await call("records/due-items",{method:"POST",expected:400,body:{name:"Floor refusal",customerId:due.customerId,amountKobo:499999,reference:"SMOKE-FLOOR",data:{dueDate:"2027-01-10",owner:"lms",mandateId:due.data.mandateId}}});
 await call("actions",{method:"POST",expected:400,body:{action:"request_instruction",reason:"Must remain blocked"}});
-await call("imports",{method:"POST",expected:403,body:{kind:"customers",csv:"name\nSynthetic",syntheticOnly:false,commit:true}});
+await call("imports",{method:"POST",expected:403,body:{kind:"customers",csv:"row_id,name\nr1,Synthetic",identityColumn:"row_id",syntheticOnly:false,commit:true}});
+// Every quick-import row needs a source row ID: a file without its row ID column is refused, naming what to map.
+await call("imports",{method:"POST",expected:400,body:{kind:"customers",csv:"name,consentProvenance\nSynthetic,Synthetic consent",identityColumn:"row_id",syntheticOnly:true,commit:false}});
 await call("records/customers",{expected:404,foreign:true});
 const customers=await list("customers");
 await call(`customers/${customers[0].id}/timeline`);

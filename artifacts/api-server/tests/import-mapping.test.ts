@@ -44,24 +44,24 @@ const nameWarning = "No column is mapped to Name, so each record's name is taken
   assert.deepEqual(skipped.data.check.warnings, [nameWarning]); checks += 1;
 }
 {
-  // The record import's check (POST /v1/imports) reports it too, and every fallback it sees.
+  // The record import's check (POST /v1/imports) reports it too, and every fallback it sees; its row ID column is not an unused column.
   const state = empty("mapping-records");
-  const file = "full_name,consentProvenance,extra\nFirst person,Synthetic consent,x\nSecond person,Synthetic consent,y";
-  const result = importCsv(state, ctx, { kind: "customers", csv: file, syntheticOnly: true, commit: false });
+  const file = "row_id,full_name,consentProvenance,extra\nr1,First person,Synthetic consent,x\nr2,Second person,Synthetic consent,y";
+  const result = importCsv(state, ctx, { kind: "customers", csv: file, syntheticOnly: true, commit: false, identityColumn: "row_id" });
   assert.deepEqual(result.warnings, [
     "No column is mapped to Name, so each record's name is taken from its reference (or its row number without one). Not mapped to a field: full_name, which looks like the name; extra. Map the column that holds the name, or commit knowing the fallback is saved.",
     "No column is mapped to Reference, so each record gets a generated reference. Not mapped to a field: full_name; extra. Map the column that holds the reference, or commit knowing the fallback is saved.",
   ]); checks += 1;
   // A name column blank on one row names that row from its reference.
-  const blank = importCsv(state, ctx, { kind: "customers", csv: "name,reference,consentProvenance,extra\nNamed,REF-1,Synthetic consent,x\n,REF-2,Synthetic consent,y", syntheticOnly: true, commit: false });
+  const blank = importCsv(state, ctx, { kind: "customers", csv: "row_id,name,reference,consentProvenance,extra\nr1,Named,REF-1,Synthetic consent,x\nr2,,REF-2,Synthetic consent,y", syntheticOnly: true, commit: false, identityColumn: "row_id" });
   assert.deepEqual(blank.warnings, ["Name is blank on 1 row, so its name is taken from its reference (or its row number without one). Not mapped to a field: extra. Map the column that holds the name, or commit knowing the fallback is saved."]); checks += 1;
 }
 {
   // No warning without an unused column: a source with no names, or one whose every column is used, is taken as it is.
   const state = empty("mapping-quiet");
-  check(importCsv(state, ctx, { kind: "customers", csv: "reference,consentProvenance\nREF-1,Synthetic consent", syntheticOnly: true, commit: false }).warnings === undefined, "every column is used");
+  check(importCsv(state, ctx, { kind: "customers", csv: "reference,consentProvenance\nREF-1,Synthetic consent", syntheticOnly: true, commit: false, identityColumn: "reference" }).warnings === undefined, "every column is used");
   check(saveImportBatch(state, ctx, batchInput({}, "source_row_id,reference,consentProvenance\nrow-1,REF-9,Synthetic consent")).data.check.warnings === undefined, "the row identity column is not an unused column");
-  check(importCsv(state, ctx, { kind: "customers", csv: "name,reference,consentProvenance,extra\nNamed,REF-1,Synthetic consent,x", syntheticOnly: true, commit: false }).warnings === undefined, "an unused column warns only while a value falls back");
+  check(importCsv(state, ctx, { kind: "customers", csv: "row_id,name,reference,consentProvenance,extra\nr1,Named,REF-1,Synthetic consent,x", syntheticOnly: true, commit: false, identityColumn: "row_id" }).warnings === undefined, "an unused column warns only while a value falls back");
 }
 {
   // Suggestions: a column that folds to a field's name, and the common spellings of a name and of links.

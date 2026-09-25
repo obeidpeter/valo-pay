@@ -156,7 +156,7 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
     const at = eventTime(record);
     const { event, detail } = describe(record);
     return {
-      at, kind: record.kind, event, status: record.status, reference: record.reference, amountKobo: record.amountKobo, currency: currencyFor(record), detail: detail + (record.data.importIdentity ? ` Imported from ${text(record.data.importIdentity.source)}; source row ${text(record.data.importIdentity.rowId)}; batch ${text(record.data.importIdentity.batchId)}.` : ''),
+      at, kind: record.kind, event, status: record.status, reference: record.reference, amountKobo: record.amountKobo, currency: currencyFor(record), detail: detail + (record.data.importIdentity ? ` Imported from ${text(record.data.importIdentity.source)}; source row ${text(record.data.importIdentity.rowId)}${record.data.importIdentity.batchId ? `; batch ${text(record.data.importIdentity.batchId)}` : ''}.` : ''),
       actor: ['audit', 'case-events'].includes(record.kind) ? text(record.data.actor) || null : record.data.confirmedBy || record.data.reviewedBy || record.data.resolvedBy || null,
       policyVersion: governing(documents, "policies", at)?.version ?? null,
       templateVersion: governing(documents, "templates", at)?.version ?? null,

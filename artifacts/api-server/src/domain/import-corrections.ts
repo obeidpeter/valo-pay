@@ -7,6 +7,7 @@ import {
   type ImportCorrectionPreviewInput,
   type ImportCorrectionProposalInput,
   type ImportCorrectionDecisionInput,
+  fromImportBatch,
   legacyCollatedCompare,
   sameJson,
 } from "@workspace/valopay-schema";
@@ -477,14 +478,14 @@ export function decideImportCorrection(
   return importCorrectionView(state, ctx, proposal);
 }
 
-/** Only a newly appended independent approval permits a controlled imported-field change. */
+/** Only a newly appended independent approval permits a controlled imported-field change to a batch-imported record. */
 export function assertImportedCorrectionChange(
   before: ValopayRecord,
   after: ValopayRecord,
   snapshot: DomainState,
   state: DomainState,
 ) {
-  if (!before.data.importIdentity) return;
+  if (!fromImportBatch(before)) return;
   const changed =
     before.kind === "customers"
       ? before.name !== after.name ||
@@ -542,12 +543,12 @@ export function assertImportedCorrectionChange(
   )
     refuse("Correction dependencies changed; prepare a fresh proposal.");
 }
-/** Generic record editing cannot bypass the source amendment review. */
+/** Generic record editing cannot bypass the source amendment review of a batch-imported record (fromImportBatch). */
 export function assertNoDirectImportedCorrection(
   before: ValopayRecord,
   after: ValopayRecord,
 ) {
-  if (!before.data.importIdentity) return;
+  if (!fromImportBatch(before)) return;
   // PATCH adds these envelope values itself; neither is a requested source amendment.
   const normalised = {
     ...after,

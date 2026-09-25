@@ -89,7 +89,7 @@ section("a settlement line with no customer", () => {
   addAttempt(state, fixtureDue, { status: "sent", occurredAt: wat("2027-07-01T06:15:00"), providerReference: "PSK-NOCUST-1" });
   // The provider's settlement report as the importer receives it: no lender customer column.
   const csv = "reference,amount,grossAmountKobo,feeKobo,batchReference,source,eventId,occurredAt\nPSK-NOCUST-1,24875.00,25000.00,125.00,B-0702,settlement,line-1,2027-07-02T06:00:00Z";
-  accepted(request(state, () => importCsv(state, ctxAt(wat("2027-07-02T08:00:00"), "Operations"), { kind: "observations", csv, syntheticOnly: true, commit: true, amountUnit: "naira" })), "the settlement file");
+  accepted(request(state, () => importCsv(state, ctxAt(wat("2027-07-02T08:00:00"), "Operations"), { kind: "observations", csv, syntheticOnly: true, commit: true, identityColumn: "eventId", amountUnit: "naira" })), "the settlement file");
   // A committed import replaces the lender's records with its checked copy.
   const due = recordsOf(state, "due-items").find((item) => item.id === fixtureDue.id)!;
   const first = close(state, "2027-07-02T09:00:00");
@@ -524,7 +524,7 @@ section("a net-only line applied before the debit's gross", () => {
 section("a zero or understated gross", () => {
   const { state, due } = liveFixture({ withFailure: false, merchantId: "zero-gross" });
   const csv = "reference,amount,grossAmountKobo,batchReference,source,eventId,occurredAt\nPSK-ZERO-1,1.00,0.00,B-Z,settlement,z-1,2027-07-01T06:00:00Z";
-  const imported = importCsv(state, ctxAt(wat("2027-07-01T08:00:00"), "Finance"), { kind: "observations", csv, syntheticOnly: true, commit: true, amountUnit: "naira" });
+  const imported = importCsv(state, ctxAt(wat("2027-07-01T08:00:00"), "Finance"), { kind: "observations", csv, syntheticOnly: true, commit: true, identityColumn: "eventId", amountUnit: "naira" });
   equal([imported.valid, imported.invalid, imported.imported], [0, 1, 0], "a settlement line whose gross is below its amount is refused");
   check(/gross amount cannot be less than the amount received/.test(imported.rows[0]!.message), `with the reason (${imported.rows[0]!.message})`);
   const low = request(state, () => postObservation(state, wat("2027-07-01T08:00:00"), { reference: "PSK-LOW-1", amountKobo: 2_487_500, data: { source: "settlement", grossAmountKobo: 2_487_499, batchReference: "B-Z", eventId: "low-1" } }));
@@ -591,7 +591,7 @@ section("a line an earlier build counted in two batches", () => {
 section("a reversal reported before its payment", () => {
   const { state, due: fixtureDue } = liveFixture({ withFailure: false, merchantId: "reversal-before-payment" });
   addAttempt(state, fixtureDue, { status: "succeeded", occurredAt: wat("2027-07-01T06:30:00"), providerReference: "PSK-REV-7" });
-  const importAt = (csv: string, at: string) => accepted(request(state, () => importCsv(state, finance(wat(at)), { kind: "observations", csv, syntheticOnly: true, commit: true })), `the file imported at ${at} WAT`);
+  const importAt = (csv: string, at: string) => accepted(request(state, () => importCsv(state, finance(wat(at)), { kind: "observations", csv, syntheticOnly: true, commit: true, identityColumn: "eventId" })), `the file imported at ${at} WAT`);
   // The provider's disputes file spells the connection its own way, and is imported and closed before the debit's settlement file.
   importAt(`reference,amountKobo,source,provider,customerId,eventId,reversed\nPSK-REV-7,2500000,webhook,Sandbox Rail Disputes,${fixtureDue.customerId},disp-1,true`, "2027-07-02T06:00:00");
   // A committed import replaces the lender's records with its checked copy, so records are read again after each import.

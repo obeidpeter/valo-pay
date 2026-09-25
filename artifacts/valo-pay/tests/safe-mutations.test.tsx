@@ -94,7 +94,7 @@ describe('safe mutation intentions', () => {
     globalThis.fetch = async () => { throw new TypeError('Offline'); };
     const wrapper = ({children}:{children:React.ReactNode}) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
     const {result} = renderHook(()=>useSafeImportRecords(),{wrapper});
-    const variables = {params:{merchantId:api.merchantIds[0]!},data:{kind:'customers',csv:'reference,name\nSAMPLE-1,Sample',syntheticOnly:true,commit:false}};
+    const variables = {params:{merchantId:api.merchantIds[0]!},data:{kind:'customers',csv:'reference,name\nSAMPLE-1,Sample',identityColumn:'reference',syntheticOnly:true,commit:false}};
     await act(async()=>{await result.current.mutateAsync(variables).catch(()=>{});});
     await waitFor(()=>expect(result.current.isError).toBe(true));
     expect(result.current.hasUnconfirmedOutcome).toBe(false);

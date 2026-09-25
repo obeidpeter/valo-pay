@@ -157,7 +157,7 @@ await expectFailure(contextB, "actions", { method: "POST", body: { action: "run_
 await expectFailure(contextB, "settings", { method: "PATCH", body: { executionStart: 7 }, merchantId: contextA.merchantId });
 await expectFailure(contextB, "imports", {
   method: "POST",
-  body: { kind: "customers", csv: "name,consentProvenance\nForeign,Synthetic", syntheticOnly: true, commit: false },
+  body: { kind: "customers", csv: "row_id,name,consentProvenance\nr1,Foreign,Synthetic", identityColumn: "row_id", syntheticOnly: true, commit: false },
   merchantId: contextA.merchantId,
 });
 await expectFailure(contextB, "exports", {
@@ -237,7 +237,7 @@ await expectFailure(contextA, "records/experiments", {
 });
 const foreignImportPreview = await expectStatus(contextA, "imports", {
   method: "POST",
-  body: { kind: "due-items", csv: `name,reference,customerId,amountKobo,owner,dueDate\nForeign,SEC-FOREIGN-IMPORT,${customerB.id},1200000,lms,2099-01-01`, syntheticOnly: true, commit: false },
+  body: { kind: "due-items", csv: `name,reference,customerId,amountKobo,owner,dueDate\nForeign,SEC-FOREIGN-IMPORT,${customerB.id},1200000,lms,2099-01-01`, identityColumn: "reference", syntheticOnly: true, commit: false },
   merchantId: contextA.merchantId,
 });
 assert.equal(foreignImportPreview.invalid, 1);
@@ -275,7 +275,7 @@ await expectFailure(contextA, "actions", {
 });
 const readOnlyImport = await expectStatus(contextA, "imports", {
   method: "POST",
-  body: { kind: "customers", csv: "name,reference,consentProvenance\nRead Only,SEC-READONLY-IMPORT,Synthetic", syntheticOnly: true, commit: true },
+  body: { kind: "customers", csv: "name,reference,consentProvenance\nRead Only,SEC-READONLY-IMPORT,Synthetic", identityColumn: "reference", syntheticOnly: true, commit: true },
 });
 assert.equal(readOnlyImport.imported, 0);
 assert.equal((await list(contextA, "customers")).length, readOnlyCount);
@@ -363,14 +363,14 @@ assert.equal(auditAfterRacesAgain.data.valid, true);
 const businessBeforePreview = countBusiness((await list(contextA, "customers")).concat(await list(contextA, "due-items")));
 const preview = await expectStatus(contextA, "imports", {
   method: "POST",
-  body: { kind: "customers", csv: "name,reference,consentProvenance\nPreview,SEC-PREVIEW,Synthetic", syntheticOnly: true, commit: false },
+  body: { kind: "customers", csv: "name,reference,consentProvenance\nPreview,SEC-PREVIEW,Synthetic", identityColumn: "reference", syntheticOnly: true, commit: false },
 });
 assert.equal(preview.imported, 0);
 assert.equal(countBusiness((await list(contextA, "customers")).concat(await list(contextA, "due-items"))), businessBeforePreview);
 const failedImportBefore = countBusiness((await list(contextA, "customers")).concat(await list(contextA, "due-items")));
 const failedImport = await expectStatus(contextA, "imports", {
   method: "POST",
-  body: { kind: "customers", csv: "name,reference\nMissing consent,SEC-FAILED", syntheticOnly: true, commit: true },
+  body: { kind: "customers", csv: "name,reference\nMissing consent,SEC-FAILED", identityColumn: "reference", syntheticOnly: true, commit: true },
 });
 assert.equal(failedImport.imported, 0);
 assert.equal(failedImport.invalid, 1);
@@ -378,8 +378,8 @@ assert.equal(countBusiness((await list(contextA, "customers")).concat(await list
 const duplicateImportReference = `SEC-IMPORT-DUP-${randomBytes(5).toString("hex")}`;
 const duplicateCsv = `name,reference,consentProvenance,phoneMasked\nConcurrent import,${duplicateImportReference},Synthetic,•••• 83`;
 const duplicateImports = await Promise.all([
-  request(contextA, "imports", { method: "POST", body: { kind: "customers", csv: duplicateCsv, syntheticOnly: true, commit: true } }),
-  request(contextA, "imports", { method: "POST", body: { kind: "customers", csv: duplicateCsv, syntheticOnly: true, commit: true } }),
+  request(contextA, "imports", { method: "POST", body: { kind: "customers", csv: duplicateCsv, identityColumn: "reference", syntheticOnly: true, commit: true } }),
+  request(contextA, "imports", { method: "POST", body: { kind: "customers", csv: duplicateCsv, identityColumn: "reference", syntheticOnly: true, commit: true } }),
 ]);
 duplicateImports.forEach((result) => assert.equal(result.status, 200, detail(result)));
 assert.equal((await list(contextA, "customers")).filter((item) => item.reference === duplicateImportReference).length, 1);

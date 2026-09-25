@@ -141,7 +141,7 @@ test("a close's money in another currency is listed in that currency beside its 
   // Second review of the audit fixes, console finding 1: a USD card payment held for Finance.
   const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
   const customer = (await (await request.get(`/api/v1/records/customers?merchantId=${lender}&limit=1`)).json()).items[0];
-  const imported = await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "observations", csv: `name,reference,customerId,amount,source,currency,channel\nUSD card payment,E2E-USD-1,${customer.reference},1000.00,card,USD,card`, mapping: {}, amountUnit: "naira", syntheticOnly: true, commit: true } });
+  const imported = await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "observations", csv: `name,reference,customerId,amount,source,currency,channel\nUSD card payment,E2E-USD-1,${customer.reference},1000.00,card,USD,card`, mapping: {}, identityColumn: "reference", amountUnit: "naira", syntheticOnly: true, commit: true } });
   expect(imported.ok(), await imported.text()).toBeTruthy();
   expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
   await page.goto("/reports");
@@ -160,7 +160,7 @@ test("the API and the browser print a close's money in another currency with the
   const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
   const customer = (await (await request.get(`/api/v1/records/customers?merchantId=${lender}&limit=1`)).json()).items[0];
   const csv = ["name,reference,customerId,amount,source,currency,channel", `COP card,E2E-COP-1,${customer.reference},100000,card,COP,card`, `HUF card,E2E-HUF-1,${customer.reference},123456,card,HUF,card`, `RSD card,E2E-RSD-1,${customer.reference},5000,card,RSD,card`].join("\n");
-  const imported = await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "observations", csv, mapping: {}, amountUnit: "kobo", syntheticOnly: true, commit: true } });
+  const imported = await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "observations", csv, mapping: {}, identityColumn: "reference", amountUnit: "kobo", syntheticOnly: true, commit: true } });
   expect(imported.ok(), await imported.text()).toBeTruthy();
   expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
   await page.goto("/reports");
