@@ -4,7 +4,8 @@ import { retentionPolicySchema, lifecycleRunViewSchema, type LifecycleCandidate,
 import { seedMerchant } from '../src/lib/valopay-seed';
 import { makeRecord } from '../src/domain/records';
 import { ResponseContractError } from '../src/lib/contract';
-import { lifecycleView, lifecycleRunView, lifecyclePolicy, lifecycleHolds, lifecyclePreview, approveLifecycleRun, saveLifecyclePolicy, setLifecycleHold, assertLifecycleCandidate, lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../src/domain/lifecycle';
+import { createHash } from 'node:crypto';
+import { lifecycleView, lifecycleRunView, lifecyclePolicy, lifecycleHolds, lifecyclePreview, approveLifecycleRun, saveLifecyclePolicy, setLifecycleHold, assertLifecycleCandidate, lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt, journalPayloadRule } from '../src/domain/lifecycle';
 import type { DomainState } from '../src/domain/types';
 
 const ctx = { actor: 'Clerk:admin', role: 'Admin', now: '2026-09-25T10:00:00.000Z' };
@@ -178,6 +179,37 @@ function counted(state: DomainState) {
   check(approved.status === 'approved' && probe.reads() <= bound, `an approval reads the lender a fixed number of times (${probe.reads()} reads)`);
   probe.reset(); const executorCheck = lifecycleCandidateCheck(probe.state, ctx, approved.id, external);
   check(approved.candidates.every(candidate => executorCheck(candidate)) && probe.reads() <= bound, `the executor's check of a whole run reads the lender a fixed number of times (${probe.reads()} reads)`);
+}
+{
+  // The store lists a window of a lender's journal payloads and counts the rest (lifecycleInventory; the third review of
+  // the audit fixes, edge finding 1), so a retention request costs the same however many requests the lender's people
+  // have made. Every page of the view, its counts and a preview are exactly what the whole journal gives. The store's
+  // window starts at the page less the lender's import batches and exports, which bound the other sources, and holds
+  // that many and 100; a preview's holds the first 100 and one more for each held request.
+  const { state } = fixture('window'); enable(state);
+  const at = (minute: number) => new Date(Date.parse('2026-07-01T00:00:00.000Z') + minute * 60_000).toISOString();
+  // Other sources among the journal's, some retained at the same instant as a request.
+  for (let i = 0; i < 6; i++) makeRecord(state, 'import-batches', { name: `Window batch ${i}`, status: 'committed', createdAt: at(i * 37), data: { csv: 'reference,name\nROW-1,Synthetic person', committedAt: at(i * 37), check: { valid: 1, invalid: 0, imported: 1 } } });
+  for (let i = 0; i < 5; i++) makeRecord(state, 'exports', { name: `Window export ${i}`, status: 'ready', createdAt: at(i * 41 + 3), data: {} });
+  const files: LifecycleExternalCandidate[] = Array.from({ length: 5 }, (_, i) => ({ kind: 'export_file', merchantId: state.merchant.id, sourceId: `window-file-${i}`, version: 'generation-1', createdAt: at(i * 41 + 3), label: 'Private export file', digest: 'b'.repeat(64), status: 'ready' }));
+  // 700 requests, three a minute; the last 100 are too recent to delete.
+  const journal: LifecycleExternalCandidate[] = Array.from({ length: 700 }, (_, i) => ({ kind: 'journal_payload', merchantId: state.merchant.id, sourceId: createHash('sha256').update(`window-${i}`).digest('hex'), version: at(i), createdAt: i < 600 ? at(Math.floor(i / 3)) : '2026-09-20T00:00:00.000Z', label: 'Terminal operation payload', digest: 'a'.repeat(64), status: i % 4 ? 'completed' : 'cancelled' }));
+  for (const index of [2, 5, 150]) setLifecycleHold(state, ctx, { kind: 'journal_payload', sourceId: journal[index]!.sourceId, held: true, expectedHoldRevision: lifecycleHolds(state).revision, reason: 'Keep this request for a sample dispute.' }, journal);
+  const order = [...journal].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.sourceId.localeCompare(b.sourceId));
+  const rule = journalPayloadRule(state, ctx), held = new Set(rule.held);
+  check(rule.oldEnough === '2026-08-26T10:00:00.000Z' && held.size === 3, 'the rule is the policy\'s age and the held requests');
+  const counts = { total: journal.length, eligible: journal.filter(candidate => rule.oldEnough !== null && candidate.createdAt <= rule.oldEnough && !held.has(candidate.sourceId)).length };
+  const others = state.records.filter(record => record.kind === 'import-batches' || record.kind === 'exports').length;
+  for (const offset of [0, 1, 99, 100, 237, 500, 599, 600, 650, 700, 711, 800]) {
+    const skipped = Math.max(0, offset - others), window = order.slice(skipped, skipped + others + 100);
+    assert.deepEqual(lifecycleView(state, ctx, [...window, ...files], offset, { ...counts, skipped }), lifecycleView(state, ctx, [...journal, ...files], offset), `the page at ${offset}`); checks += 1;
+  }
+  const whole = lifecycleView(state, ctx, [...journal, ...files]);
+  check(whole.targetTotal === 712 && whole.eligibleCount === 597 + 12, 'the whole journal: 700 requests and 12 other sources, of which 597 requests and all 12 others are old enough and not held');
+  const prepared = (lender: DomainState, external: LifecycleExternalCandidate[], journalWindow?: { total: number; eligible: number; skipped: number }) => lifecyclePreview(lender, ctx, { expectedPolicyRevision: lifecyclePolicy(lender).revision }, external, journalWindow);
+  const expected = prepared(structuredClone(state), [...journal, ...files]), windowed = prepared(structuredClone(state), [...order.slice(0, 100 + rule.held.length), ...files], { ...counts, skipped: 0 });
+  assert.deepEqual([windowed.candidates, windowed.moreEligible, windowed.previewDigest], [expected.candidates, expected.moreEligible, expected.previewDigest], 'a preview from the first requests is the whole journal\'s'); checks += 1;
+  check(expected.moreEligible === 509, 'and it counts the eligible sources it leaves for a later preview');
 }
 {
   // Export files the lender relies on as evidence are never offered for deletion, and the view says why: one linked to
