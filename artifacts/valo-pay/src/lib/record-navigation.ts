@@ -37,3 +37,30 @@ export function recordDestination(path: string, recordId: string, returnTo: stri
   const params = new URLSearchParams({ [parameter]: recordId, lender: merchantId, returnTo });
   return `${path}?${params}#record-${encodeURIComponent(recordId)}`;
 }
+
+/** Kinds whose page opens one record of theirs. */
+const recordPages: Record<string, (id: string, lender: string) => string> = {
+  customers: (id) => `/customers/${encodeURIComponent(id)}`,
+  exceptions: (id) => `/cases/${encodeURIComponent(id)}`,
+  mandates: (id, lender) => `/mandates?${new URLSearchParams({ record: id, lender })}#record-${encodeURIComponent(id)}`,
+  'due-items': (id, lender) => `/reconciliation?${new URLSearchParams({ dueItem: id, lender })}#record-${encodeURIComponent(id)}`,
+  'import-batches': (id) => `/imports?${new URLSearchParams({ batch: id })}`,
+};
+/** Kinds whose page lists them, without opening one. */
+const listPages: Record<string, string> = {
+  'import-corrections': '/imports', exports: '/exports', closes: '/reports?view=operations#daily-closes', 'close-reviews': '/close-review',
+  payments: '/reconciliation', allocations: '/reconciliation', 'settlement-batches': '/reconciliation', observations: '/reconciliation',
+  attempts: '/collections', policies: '/policies', templates: '/policies', reviews: '/evidence', evidence: '/evidence', commercial: '/evidence',
+  experiments: '/reports', invoices: '/reports', cutovers: '/settings', 'work-events': '/work',
+  'source-profiles': '/sources', 'source-manifests': '/sources', 'provider-events': '/sources',
+  'retention-policies': '/lifecycle', 'retention-holds': '/lifecycle', 'retention-runs': '/lifecycle',
+  'connected-consents': '/connections', 'connected-intents': '/pay-by-bank', 'connected-credit-assessments': '/credit-desk', 'connected-credit-reviews': '/credit-desk',
+  'connected-cash-workspace': '/cash-desk', 'connected-cash-forecasts': '/cash-desk', 'connected-cash-erp': '/cash-desk', 'connected-cash-vat': '/cash-desk', 'connected-cash-payroll': '/cash-desk',
+};
+/** Where a record of this kind is shown for this lender: the record itself where its page can open one, else the
+ * page that lists its kind; null for a kind no page shows. */
+export function recordPage(kind: string | null | undefined, id: string, merchantId: string): string | null {
+  if (!kind) return null;
+  if (Object.hasOwn(recordPages, kind)) return recordPages[kind]!(id, merchantId);
+  return Object.hasOwn(listPages, kind) ? listPages[kind]! : null;
+}

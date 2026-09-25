@@ -88,6 +88,21 @@ export function PilotError({
     </div>
   ) : null;
 }
+/** Said on a notice about a change Operations records whose outcome is unconfirmed: a request the service received
+ * outlives the form, so after closing or reloading it is found in Operations. */
+export const KEPT_IN_OPERATIONS =
+  "If the service received the request, it stays in Operations after you close this form or reload the page, where you can check it.";
+/** The way from such a notice to Operations. */
+export function OpenOperations() {
+  return (
+    <Link
+      href="/operations"
+      className="inline-flex min-h-11 items-center text-primary underline"
+    >
+      Open Operations
+    </Link>
+  );
+}
 /**
  * A change whose answer was lost: Check original request, Operations for a
  * change it records, and Discard original request, which moves focus to `next`,
@@ -122,7 +137,7 @@ export function RecoveryNotice({
       <p>
         {persistent
           ? "Check the original request before making a different change. Requests received by the server remain in Operations after you leave or reload. If it cannot be recovered, check Operations, then discard it to start again."
-          : "Check the original request, or refresh this page to inspect the saved result before making another change. If it cannot be recovered, check the saved result, then discard it to start again."}
+          : "Check the original request before making another change. This page cannot check it again once you leave or reload, so it asks before you go. If it cannot be recovered, discard it, then refresh this page to see whether it was saved."}
       </p>
       <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} />
       <div className="flex flex-wrap gap-3">
@@ -135,14 +150,7 @@ export function RecoveryNotice({
         >
           Check original request
         </Button>
-        {persistent && (
-          <Link
-            href="/operations"
-            className="inline-flex min-h-11 items-center text-primary underline"
-          >
-            Open Operations
-          </Link>
-        )}
+        {persistent && <OpenOperations />}
         <DiscardOriginalRequest
           disabled={mutation.isPending}
           onDiscard={mutation.abandonUnconfirmed}

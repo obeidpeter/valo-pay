@@ -32,6 +32,7 @@ import { allocationClosedStatuses, measurementRules } from '@workspace/valopay-s
 import { protectStored, revealStored, protectRecordData, revealRecordsData, payloadEncryptionKey, isProtectedPayload, PROTECTED_IMPORT_FIELDS, type ProtectedImportField } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
 import { markOperationClosed, markOperationState, type OperationState } from './refused-operations';
+import { summariseRequest } from './operation-summary';
 import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLimitError, type Checkout } from './database-limits';
 import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
@@ -174,22 +175,49 @@ type OperationRow = { id: string; merchant_id: string; owner: string; actor: str
 // An entry's request is the keyed write as it was sent, up to the 2 MB body limit, and an entry an earlier build
 // completed keeps its whole answer as its receipt. Only what needs them selects them (a retry, the payload protection
 // batch, a retention run an earlier build prepared): every other read of the journal names the columns it uses, so
-// none parses or digests a body, and none costs more because a lender's entries hold large ones.
+// none parses or digests a body, and none costs more because a lender's entries hold large ones, but for the
+// operations list, which opens its page of requests in the database for their summaries' few fields.
 /** Whether retention purged an entry's payload, read without opening its request: the purge leaves a marker of about
  * 100 bytes in its place, so only a request that small is opened to look for it. */
 const PURGED_REQUEST = "CASE WHEN pg_column_size(request)>1024 THEN false ELSE request ? 'purged' END";
+/** A body field the operations summary reads, by jsonb operators: a string of 1 to 100 characters, else nothing. */
+const shortField = (field: string) => `CASE WHEN jsonb_typeof(q#>'{body,${field}}')='string' AND length(q#>>'{body,${field}}') BETWEEN 1 AND 100 THEN q#>>'{body,${field}}' END`;
 /** What Operations lists of an entry: its identity and outcome and, by jsonb operators, the refusal a cancelled request
- * was given and the saved record's ID and kind. */
-const OPERATION_LIST_COLUMNS = "id,label,actor,role,status,created_at,updated_at,receipt->'rejected' AS rejected,receipt->'record'->'id' AS record_id,receipt->'record'->'kind' AS record_kind,receipt->'id' AS receipt_id,receipt->'kind' AS receipt_kind";
-type OperationListRow = Pick<OperationRow, 'id' | 'label' | 'actor' | 'role' | 'status' | 'created_at' | 'updated_at'> & { rejected: any; record_id: unknown; record_kind: unknown; receipt_id: unknown; receipt_kind: unknown };
-const operationView = (row: OperationListRow) => ({ id: row.id, label: row.label, actor: row.actor, role: row.role, status: row.status,
-  createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
-  message: row.status === 'completed' ? 'The service saved this request.'
-    : row.status === 'cancelled' ? (row.rejected ? `The service refused this request: ${row.rejected.message} Correct it and submit it again.` : 'Cancelled before completion. This request cannot run again.')
-    : 'Completion has not been confirmed. Check the original request.',
-  // Only a compact result reference. Original payloads and export locations stay private.
-  recordId: textOrNull(row.record_id) ?? textOrNull(row.receipt_id),
-  recordKind: textOrNull(row.record_kind) ?? textOrNull(row.receipt_kind) });
+ * was given, the saved record's ID and kind, and the facts its summary is made from (summariseRequest): the request's
+ * method and path and a few short body fields, read only from a request stored as JSON, never a sealed or purged one.
+ * The body itself is never selected, so a lender whose entries hold large bodies costs one page of them, opened in
+ * the database, and the API parses none. The record the body names, and the one the answer names, are looked up for
+ * their kind alone. */
+const OPERATION_LIST = `SELECT o.id,o.label,o.actor,o.role,o.status,o.created_at,o.updated_at,o.receipt->'rejected' AS rejected,
+    o.receipt->'record'->'id' AS record_id,o.receipt->'record'->'kind' AS record_kind,o.receipt->'id' AS receipt_id,o.receipt->'kind' AS receipt_kind,
+    (SELECT r.kind FROM valopay_records r WHERE r.id=o.receipt->>'id' AND r.merchant_id=o.merchant_id) AS answered_kind,
+    f.method,f.path,f.action,f.decision,f.status AS body_status,f.kind,f.format,f.target,(SELECT r.kind FROM valopay_records r WHERE r.id=f.target AND r.merchant_id=o.merchant_id) AS target_kind
+  FROM (SELECT id,merchant_id,label,actor,role,status,created_at,updated_at,receipt,request FROM valopay_operations
+    WHERE merchant_id=$1 AND owner=$2 ORDER BY created_at DESC,id DESC LIMIT 25 OFFSET $3) o
+  LEFT JOIN LATERAL (SELECT CASE WHEN jsonb_typeof(q->'method')='string' AND length(q->>'method')<=10 THEN q->>'method' END AS method,
+      CASE WHEN jsonb_typeof(q->'path')='string' AND length(q->>'path')<=1000 THEN q->>'path' END AS path,
+      ${shortField('action')} AS action,${shortField('decision')} AS decision,${shortField('status')} AS status,${shortField('kind')} AS kind,${shortField('format')} AS format,
+      COALESCE(${['recordId', 'targetId', 'closeId', 'batchId'].map(shortField).join(',')}) AS target
+    FROM (SELECT o.request || '{}'::jsonb AS q OFFSET 0) opened WHERE NOT (q ? 'protectedPayload' OR q ? 'purged')) f ON true
+  ORDER BY o.created_at DESC,o.id DESC`;
+type OperationListRow = Pick<OperationRow, 'id' | 'label' | 'actor' | 'role' | 'status' | 'created_at' | 'updated_at'> & { rejected: any; record_id: unknown; record_kind: unknown; receipt_id: unknown; receipt_kind: unknown; answered_kind: string | null }
+  & { method: string | null; path: string | null; action: string | null; decision: string | null; body_status: string | null; kind: string | null; format: string | null; target: string | null; target_kind: string | null };
+const operationView = (row: OperationListRow) => {
+  const described = summariseRequest({ method: row.method, path: row.path, action: row.action, decision: row.decision, status: row.body_status, kind: row.kind, format: row.format, target: row.target, targetKind: row.target_kind });
+  const record = textOrNull(row.record_id), answered = textOrNull(row.receipt_id);
+  return { id: row.id, label: row.label, actor: row.actor, role: row.role, status: row.status,
+    createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
+    message: row.status === 'completed' ? 'The service saved this request.'
+      : row.status === 'cancelled' ? (row.rejected ? `The service refused this request: ${row.rejected.message} Correct it and submit it again.` : 'Cancelled before completion. This request cannot run again.')
+      : 'Completion has not been confirmed. Check the original request.',
+    // Only a compact result reference. Original payloads and export locations stay private. The saved record's kind is
+    // the lender's record's, else the answer's own, else its route's: an export's answer named the kind it exports
+    // before the journal recorded the export itself, a sealed request names no route, and some answers name no kind.
+    recordId: record ?? answered,
+    recordKind: record ? textOrNull(row.record_kind) : !answered ? null
+      : textOrNull(row.answered_kind) ?? (described?.resultOverrides ? described.resultKind : textOrNull(row.receipt_kind) ?? described?.resultKind ?? null),
+    summary: described?.summary ?? null };
+};
 /** A receipt field as the journal names it: text, or null for anything else (a sealed receipt, a count, nothing). */
 function textOrNull(value: unknown): string | null { return typeof value === 'string' && value ? value : null; }
 
@@ -272,8 +300,15 @@ export async function listOperations(ctx: StoreContext, merchantId: string, offs
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'none');
   const scope = [merchantId, session.owner || session.principal];
   const total = Number((await session.client.query<{ count: string }>('SELECT count(*) FROM valopay_operations WHERE merchant_id=$1 AND owner=$2', scope)).rows[0]!.count);
-  const items = (await session.client.query<OperationListRow>(`SELECT ${OPERATION_LIST_COLUMNS} FROM valopay_operations WHERE merchant_id=$1 AND owner=$2 ORDER BY created_at DESC,id DESC LIMIT 25 OFFSET $3`, [...scope, offset])).rows.map(operationView);
+  const items = (await session.client.query<OperationListRow>(OPERATION_LIST, [...scope, offset])).rows.map(operationView);
   return { items, total, offset };
+}
+/** How many of the caller's requests in the lender wait for confirmation: the console shows it where a person who
+ * reloads sees it. Counted on the journal's pending index; no request is read. */
+export async function countPendingOperations(ctx: StoreContext, merchantId: string) {
+  const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'none');
+  const pending = Number((await session.client.query<{ count: string }>("SELECT count(*) FROM valopay_operations WHERE merchant_id=$1 AND owner=$2 AND status='pending'", [merchantId, session.owner || session.principal])).rows[0]!.count);
+  return { pending };
 }
 type EntryRow = Pick<OperationRow, 'id' | 'actor' | 'role' | 'status' | 'request_key'> & { purged: boolean; request?: unknown };
 /** The caller's own entry in the lender, as its current role may act on it. Its receipt is not read, and its request
@@ -392,8 +427,10 @@ export function journalReceipt(response: unknown): { id?: string; kind?: string;
     const { id, kind } = value as { id?: unknown; kind?: unknown };
     return typeof id === "string" ? { id, ...(typeof kind === "string" ? { kind } : {}) } : undefined;
   };
-  const record = reference((response as { record?: unknown } | null | undefined)?.record);
-  return { ...(record ? { record } : {}), ...reference(response) };
+  const record = reference((response as { record?: unknown } | null | undefined)?.record), own = reference(response);
+  // An export job's answer names the kind of record it exports: the record it saved is the export.
+  const exported = own && typeof (response as { downloadUrl?: unknown }).downloadUrl === "string";
+  return { ...(record ? { record } : {}), ...(exported ? { ...own, kind: "exports" } : own) };
 }
 /** Receipt and domain writes commit together. A process crash cannot leave a
  * completed journal entry without the corresponding business write.
@@ -756,6 +793,12 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = requestFingerprint(input);
   const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
   if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return { lender: found.info, repeated: true }; }
+  // The journal does not record lender creation, so a creation whose answer was lost and is sent again after a reload
+  // has a new key: a name already in the workspace, ignoring case and surrounding or repeated spaces, is refused
+  // naming that lender, in every mode, rather than making a second one.
+  const same = (await session.client.query<{ name: string }>(`SELECT info->>'name' AS name FROM valopay_merchants WHERE workspace_id=$1
+    AND lower(btrim(regexp_replace(info->>'name','\\s+',' ','g')))=lower(btrim(regexp_replace($2,'\\s+',' ','g'))) ORDER BY id LIMIT 1`, [session.workspace.id, input.name])).rows[0];
+  if (same) fail(`A lender named "${same.name}" already exists in this workspace. Select it in the lender list, or choose another name.`, 409);
   // 'team' access holds the workspace lock exclusively (lockWorkspace), so two creations at once are counted one after the other.
   if (ctx.accessMode !== 'staff') {
     const held = (await session.client.query<{ count: number }>('SELECT count(*)::int AS count FROM valopay_merchants WHERE workspace_id=$1', [session.workspace.id])).rows[0]!.count;

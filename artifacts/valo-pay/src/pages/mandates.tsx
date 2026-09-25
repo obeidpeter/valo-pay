@@ -26,6 +26,7 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
 import { DiscardOriginalRequest } from '@/components/discard-original-request';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { LoadProblem } from '@/components/load-problem';
 
@@ -304,7 +305,7 @@ export default function MandatesPage() {
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-muted-foreground">Use synthetic details only. This records a mandate in the sandbox; it sends no instruction to a bank.</Dialog.Description>
             <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
-              {createMandate.hasUnconfirmedOutcome && <FormAlert title="Mandate creation outcome unconfirmed"><p>The response was lost or unavailable. This mandate may already exist. Keep these details unchanged and retry the original request to recover its result without creating a second mandate.</p><div className="mt-2"><DiscardOriginalRequest disabled={createMandate.isPending} onDiscard={() => { createMandate.abandonUnconfirmed(); setFormErrors([]); setFieldErrors({}); }} /></div></FormAlert>}
+              {createMandate.hasUnconfirmedOutcome && <FormAlert title="Mandate creation outcome unconfirmed"><p>The response was lost or unavailable. This mandate may already exist. Keep these details unchanged and retry the original request to recover its result without creating a second mandate. {KEPT_IN_OPERATIONS}</p><div className="mt-2 flex flex-wrap items-center gap-3"><OpenOperations /><DiscardOriginalRequest disabled={createMandate.isPending} onDiscard={() => { createMandate.abandonUnconfirmed(); setFormErrors([]); setFieldErrors({}); }} /></div></FormAlert>}
               <fieldset disabled={createMandate.isPending || createMandate.hasUnconfirmedOutcome} className="contents">
               {!createMandate.hasUnconfirmedOutcome && (formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>

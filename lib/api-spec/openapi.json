@@ -4879,6 +4879,139 @@
         "description": "Every keyed, recoverable request the caller made in this lender, with its confirmation state. Read-only; private to the person who made the requests."
       }
     },
+    "/v1/operations/pending": {
+      "get": {
+        "operationId": "countPendingOperations",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingOperations"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required: a staff host answers only a signed-in pilot staff session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The service could not prepare this answer; a read changes nothing, so it can be tried again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), the same request is still running (operation running), or a service it needs is unavailable or not configured: the key service, or private storage or the identity provider out of reach. committed false says nothing was saved (for a request with an Idempotency-Key, nothing sent with the key); operation completed says a request with the key was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again: sent when a database limit turned the request away, the same request is still running, or private storage or the identity provider could not be reached or said it is unavailable; absent when a service it needs is not configured, or the key service cannot open protected data.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "summary": "Count the caller's unconfirmed requests",
+        "description": "How many of the caller's journal entries in this lender are pending: requests the service received whose outcome was never confirmed. Read-only; the console shows it on the Operations link."
+      }
+    },
     "/v1/operations/{id}/retry": {
       "post": {
         "operationId": "retryOperation",
@@ -5597,7 +5730,7 @@
           }
         },
         "summary": "Create a synthetic lender",
-        "description": "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused."
+        "description": "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused. A name that matches a lender already in the workspace, ignoring letter case and surrounding or repeated spaces, is refused (409) with an error naming that lender, in the sandbox and on a staff host alike, so a creation whose answer was lost and is sent again with a new key cannot make a second lender."
       }
     },
     "/v1/pilot/batches": {
@@ -18636,6 +18769,54 @@
         "additionalProperties": false,
         "description": "A confirmation in plain words; nothing else changed that the caller needs to read back."
       },
+      "OperationSummary": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "targetKind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "action",
+          "targetKind",
+          "targetId",
+          "details"
+        ],
+        "additionalProperties": false,
+        "description": "What an entry asked, safe to show: the action or route in plain words, the kind and ID of the record it names, and at most three short fields the request named (an action, a decision, a status, a kind or a format). Read from the stored request by field, never whole; it never holds a name, reference, reason, amount or file."
+      },
       "OperationView": {
         "type": "object",
         "properties": {
@@ -18679,6 +18860,16 @@
               "string",
               "null"
             ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -18691,10 +18882,11 @@
           "updatedAt",
           "message",
           "recordId",
-          "recordKind"
+          "recordKind",
+          "summary"
         ],
         "additionalProperties": false,
-        "description": "One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why."
+        "description": "One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; `summary` says what the request asked, and is null when payload encryption sealed the request or retention removed its payload. A completed entry names the record it produced (`recordId` and `recordKind`, the kind of that record: `exports` for an export, whatever kind it exports). A refused entry is cancelled and its message says why."
       },
       "OperationList": {
         "type": "object",
@@ -18722,6 +18914,20 @@
         ],
         "additionalProperties": false,
         "description": "The caller's journal for one lender, newest first, 25 rows a page."
+      },
+      "PendingOperations": {
+        "type": "object",
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "additionalProperties": false,
+        "description": "How many of the caller's requests in the lender wait for confirmation."
       },
       "OperationReplayResult": {
         "type": "object",

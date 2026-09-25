@@ -514,6 +514,26 @@ try {
     ok(await call(`/v1/records/customers?merchantId=${empty.id}`)).total,
     0,
   );
+  // A creation whose answer was lost, sent again after a reload with a new key, finds the lender it made: a name that
+  // matches one already in the workspace, whatever its case and spaces, is refused naming that lender.
+  for (const name of ["Empty pilot lender", "  empty   PILOT lender "]) {
+    const again = await call(
+      "/v1/pilot/lenders",
+      "POST",
+      { name, segment: "Cooperative" },
+      randomUUID(),
+    );
+    assert.equal(again.status, 409, JSON.stringify(again.data));
+    assert.equal(
+      again.data.error,
+      'A lender named "Empty pilot lender" already exists in this workspace. Select it in the lender list, or choose another name.',
+    );
+  }
+  assert.equal(
+    ok(await call("/v1/workspace")).merchants.filter((lender: any) => /empty\s+pilot\s+lender/i.test(lender.name)).length,
+    1,
+    "no second lender was made",
+  );
   // A sandbox holds at most five lenders, the two samples included. Creation
   // takes the workspace lock exclusively, so creations at once are counted one
   // after another and never pass the limit together.
@@ -821,6 +841,23 @@ try {
         "admin",
       ),
     );
+  assert.equal(
+    ok(await call("/v1/workspace", "GET", undefined, undefined, "admin"))
+      .merchants.length,
+    6,
+  );
+  // Staff mode has no lender limit, so the name alone stops a lost creation sent again with a new key from making a second.
+  const repeatedStaff = await call(
+    "/v1/pilot/lenders",
+    "POST",
+    { name: "STAFF  pilot 6", segment: "Cooperative" },
+    randomUUID(),
+    "admin",
+  );
+  assert.deepEqual(
+    [repeatedStaff.status, repeatedStaff.data.error],
+    [409, 'A lender named "Staff pilot 6" already exists in this workspace. Select it in the lender list, or choose another name.'],
+  );
   assert.equal(
     ok(await call("/v1/workspace", "GET", undefined, undefined, "admin"))
       .merchants.length,

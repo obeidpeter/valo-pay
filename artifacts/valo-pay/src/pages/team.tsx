@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { focusLost, focusMain, useDialogFocusReturn, useFocusWhenLost } from "@/lib/focus";
 import { formatCount, formatDate } from "@/lib/formatters";
+import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { AccessReadiness } from '@/components/access-readiness';
 
 const roles = [
@@ -43,6 +44,8 @@ export default function TeamPage() {
   const decide = usePilotMutation((result) => setDecision(result.message));
   // A decision clears the last one's message as it starts, so the next takes focus even when worded the same.
   const choose = (path: string) => { setDecision(""); decide.mutate({ path, lender: false }); };
+  // Operations does not record team changes: while one is unanswered, leaving or reloading would lose the only check.
+  useUnsavedChanges([invite, revoke, decide].some((mutation) => mutation.isPending || mutation.hasUnconfirmedOutcome));
   // Revoking an invitation removes its button, and creating one holds its button disabled until the answer, so focus
   // then goes to what happened rather than to the page.
   const said = useRef<HTMLParagraphElement>(null);
@@ -238,6 +241,7 @@ export default function TeamPage() {
  */
 function Member({ member, editable, shared, lenders }: { member: any; editable: boolean; shared: boolean; lenders: any[] }) {
   const change = usePilotMutation(), grant = usePilotMutation();
+  useUnsavedChanges([change, grant].some((mutation) => mutation.isPending || mutation.hasUnconfirmedOutcome));
   // The button that made a change goes with that form, so focus then goes to what the change did; and a change the
   // service refused, or whose answer was lost, sends it to the problem notice that says so.
   const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null);

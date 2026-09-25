@@ -14,6 +14,7 @@ import { SandboxGuide } from './sandbox-guide';
 import { PresentationGuide, usePresentation } from './presentation-guide';
 import { useQueuePosition } from '@/lib/queue-position';
 import { WorkspaceRefreshProblem } from './workspace-unavailable';
+import { getCountPendingOperationsQueryKey, useCountPendingOperations } from '@workspace/api-client-react';
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 /**
@@ -81,7 +82,7 @@ const SIDEBAR_QUERY = '(min-width: 768px)';
  * learnt once and looks the same on every screen. The drawer's rows are taller
  * because they are pressed with a thumb, not a pointer.
  */
-function NavLinks({ location, spacious = false, onNavigate }: { location: string; spacious?: boolean; onNavigate?: () => void }) {
+function NavLinks({ location, spacious = false, onNavigate, pending = 0 }: { location: string; spacious?: boolean; onNavigate?: () => void; pending?: number }) {
   // The sidebar and the drawer each render the list, so their group names need ids of their own.
   const id = useId();
   return (
@@ -95,6 +96,7 @@ function NavLinks({ location, spacious = false, onNavigate }: { location: string
               <Link key={item.href} href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-1.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
                 <item.icon className="h-4 w-4" aria-hidden="true" />
                 {item.label}
+                {item.href === '/operations' && pending > 0 && <><span aria-hidden="true" className="ml-auto rounded-full bg-warning px-2 text-[11px] font-semibold text-warning-foreground">{pending}</span><span className="sr-only">, {pending} unconfirmed {pending === 1 ? 'request' : 'requests'}</span></>}
               </Link>
             );
           })}
@@ -118,6 +120,18 @@ function AdministratorExpiryWarning() {
     return () => { current = false; };
   }, []);
   return Warning ? <Warning /> : null;
+}
+
+/**
+ * How many of the viewer's requests in the selected lender wait for confirmation. A person who lost a form's answer
+ * and reloaded sees the count on the Operations link, where the request can be checked (backlog decision UX-B02). Read
+ * through the generated client, as the workspace is, so the shell carries no schemas; a count that is not a number
+ * shows nothing.
+ */
+function usePendingOperations(merchantId: string | null, ready: boolean): number {
+  const params = { merchantId: merchantId || '' };
+  const pending = useCountPendingOperations(params, { query: { queryKey: getCountPendingOperationsQueryKey(params), enabled: ready && !!merchantId } }).data?.pending;
+  return typeof pending === 'number' && Number.isSafeInteger(pending) && pending > 0 ? pending : 0;
 }
 
 /** Sign in or sign out, the same block at the foot of the sidebar and of the drawer. */
@@ -150,6 +164,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const search = useSearch();
   const embedded = new URLSearchParams(search).get('embedded') === '1';
   const { workspace, merchantId, setMerchantId, isLoading, refreshFailure } = useWorkspace();
+  const pending = usePendingOperations(merchantId, !!workspace);
   const [location] = useLocation();
   const signOut = useSignOut();
   const { theme, setChoice } = useTheme();
@@ -237,7 +252,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <SheetTitle className="text-base">Menu</SheetTitle>
             </SheetHeader>
             <nav ref={drawerPages} aria-label="Pages" className="flex-1 overflow-y-auto p-3 space-y-1">
-              <NavLinks location={location} spacious onNavigate={() => setMenuOpen(false)} />
+              <NavLinks location={location} spacious onNavigate={() => setMenuOpen(false)} pending={pending} />
             </nav>
             <div className="border-t p-4">
               <AuthBlock role={workspace?.role} signOut={signOut} />
@@ -263,7 +278,7 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
 
           <nav ref={sidebarPages} aria-label="Pages" className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
-            <NavLinks location={location} />
+            <NavLinks location={location} pending={pending} />
           </nav>
 
           <div className="p-3 border-t mt-auto">

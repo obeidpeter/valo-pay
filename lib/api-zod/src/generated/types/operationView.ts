@@ -5,10 +5,11 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { OperationSummary } from './operationSummary';
 import type { OperationViewStatus } from './operationViewStatus';
 
 /**
- * One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.
+ * One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; `summary` says what the request asked, and is null when payload encryption sealed the request or retention removed its payload. A completed entry names the record it produced (`recordId` and `recordKind`, the kind of that record: `exports` for an export, whatever kind it exports). A refused entry is cancelled and its message says why.
  */
 export interface OperationView {
   id: string;
@@ -23,4 +24,5 @@ export interface OperationView {
   recordId: string | null;
   /** @nullable */
   recordKind: string | null;
+  summary: OperationSummary | null;
 }

@@ -115,7 +115,7 @@ try {
   }
 
   // ---- Reads the item named, each answered with its described shape ----
-  for (const path of ["/v1/pilot/journey", "/v1/pilot/progress", "/v1/pilot/close-reviews", "/v1/pilot/batches", "/v1/operations", "/v1/connected", "/v1/sources", "/v1/work", "/v1/lifecycle", "/v1/overview", "/v1/reports", "/v1/reports?includeCloses=false", "/v1/gates", "/v1/settings", "/v1/records/customers?limit=2", "/v1/queues/exceptions", "/v1/queues/mandates", "/v1/queues/collections", "/v1/reconciliation/proposals", "/v1/reconciliation/audit", "/v1/close-history"]) ok(await call(q(path)));
+  for (const path of ["/v1/pilot/journey", "/v1/pilot/progress", "/v1/pilot/close-reviews", "/v1/pilot/batches", "/v1/operations", "/v1/operations/pending", "/v1/connected", "/v1/sources", "/v1/work", "/v1/lifecycle", "/v1/overview", "/v1/reports", "/v1/reports?includeCloses=false", "/v1/gates", "/v1/settings", "/v1/records/customers?limit=2", "/v1/queues/exceptions", "/v1/queues/mandates", "/v1/queues/collections", "/v1/reconciliation/proposals", "/v1/reconciliation/audit", "/v1/close-history"]) ok(await call(q(path)));
   ok(await call("/v1/team/readiness"));
   ok(await call("/healthz"));
   ok(await call("/readyz"));

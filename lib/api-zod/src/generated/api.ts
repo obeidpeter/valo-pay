@@ -2217,6 +2217,8 @@ export const ListOperationsQueryParams = zod.object({
   "offset": zod.coerce.number().int().min(listOperationsQueryOffsetMin).max(listOperationsQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
 })
 
+export const listOperationsResponseItemsItemSummaryOneDetailsMax = 3;
+
 export const listOperationsResponseItemsMax = 25;
 
 export const listOperationsResponseTotalMin = 0;
@@ -2236,11 +2238,41 @@ export const ListOperationsResponse = zod.object({
   "updatedAt": zod.string(),
   "message": zod.string(),
   "recordId": zod.string().nullable(),
-  "recordKind": zod.string().nullable()
-}).describe('One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.')).max(listOperationsResponseItemsMax),
+  "recordKind": zod.string().nullable(),
+  "summary": zod.union([zod.object({
+  "action": zod.string(),
+  "targetKind": zod.string().nullable(),
+  "targetId": zod.string().nullable(),
+  "details": zod.array(zod.object({
+  "name": zod.string(),
+  "value": zod.string()
+})).max(listOperationsResponseItemsItemSummaryOneDetailsMax)
+}).describe('What an entry asked, safe to show: the action or route in plain words, the kind and ID of the record it names, and at most three short fields the request named (an action, a decision, a status, a kind or a format). Read from the stored request by field, never whole; it never holds a name, reference, reason, amount or file.'),zod.null()])
+}).describe('One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; `summary` says what the request asked, and is null when payload encryption sealed the request or retention removed its payload. A completed entry names the record it produced (`recordId` and `recordKind`, the kind of that record: `exports` for an export, whatever kind it exports). A refused entry is cancelled and its message says why.')).max(listOperationsResponseItemsMax),
   "total": zod.number().int().min(listOperationsResponseTotalMin),
   "offset": zod.number().int().min(listOperationsResponseOffsetMin)
 }).describe('The caller\'s journal for one lender, newest first, 25 rows a page.')
+
+
+/**
+ * How many of the caller's journal entries in this lender are pending: requests the service received whose outcome was never confirmed. Read-only; the console shows it on the Operations link.
+ * @summary Count the caller's unconfirmed requests
+ */
+export const countPendingOperationsQueryMerchantIdMax = 100;
+
+
+
+export const CountPendingOperationsQueryParams = zod.object({
+  "merchantId": zod.string().min(1).max(countPendingOperationsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const countPendingOperationsResponsePendingMin = 0;
+
+
+
+export const CountPendingOperationsResponse = zod.object({
+  "pending": zod.number().int().min(countPendingOperationsResponsePendingMin)
+}).describe('How many of the caller\'s requests in the lender wait for confirmation.')
 
 
 /**
@@ -2349,7 +2381,7 @@ export const GetPilotJourneyResponse = zod.object({
 
 
 /**
- * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.
+ * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused. A name that matches a lender already in the workspace, ignoring letter case and surrounding or repeated spaces, is refused (409) with an error naming that lender, in the sandbox and on a staff host alike, so a creation whose answer was lost and is sent again with a new key cannot make a second lender.
  * @summary Create a synthetic lender
  */
 export const createPilotLenderHeaderIdempotencyKeyMin = 8;

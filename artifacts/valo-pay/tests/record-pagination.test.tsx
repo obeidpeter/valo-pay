@@ -315,7 +315,7 @@ describe('paging a fixed-step list by keyboard', () => {
       if (url.pathname !== '/api/v1/operations') return send(input, init);
       await gate;
       const offset = Number(url.searchParams.get('offset') || 0);
-      const items = Array.from({ length: Math.min(25, 60 - offset) }, (_, index) => ({ id: `operation-${offset + index}`, label: `Saved request ${offset + index}`, actor: 'Sandbox Admin', role: 'Admin', status: 'completed', createdAt: api.now, updatedAt: api.now, message: 'The request completed.', recordId: null, recordKind: null }));
+      const items = Array.from({ length: Math.min(25, 60 - offset) }, (_, index) => ({ id: `operation-${offset + index}`, label: `Saved request ${offset + index}`, actor: 'Sandbox Admin', role: 'Admin', status: 'completed', createdAt: api.now, updatedAt: api.now, message: 'The request completed.', recordId: null, recordKind: null, summary: null }));
       return new Response(JSON.stringify({ items, total: 60, offset }), { status: 200, headers: { 'content-type': 'application/json' } });
     };
     const hold = () => { let open!: () => void; gate = new Promise<void>(resolve => { open = resolve; }); return () => { gate = null; open(); }; };
