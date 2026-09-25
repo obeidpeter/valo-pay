@@ -1170,9 +1170,16 @@ export function refreshHeldEvidence(state: DomainState, ctx: Context, only?: Typ
       const observation = recordsWhere(state, "observations", "id", String(exception.data.linkedRecordId))[0];
       if (!observation || observation.status !== "unresolved") continue;
       const candidates = payments.candidates(observation);
-      // Evidence that now agrees with a payment under its own key resolves to it at the next reconciliation.
-      if (candidates.some((item) => !evidenceConflict(item, observation, payments))) continue;
-      holdForReview(state, ctx, observation, candidates, payments, statedGross(observation).kobo);
+      const own = candidates.find((item) => !evidenceConflict(item, observation, payments));
+      if (!own) { holdForReview(state, ctx, observation, candidates, payments, statedGross(observation).kobo); continue; }
+      // Evidence that now agrees with a payment under its own key resolves to it at the next reconciliation; until then the
+      // join its exception offers stands only while it still agrees with the payment the exception names.
+      const held = heldEvidenceOf(exception.data.condition)!, named = payments.payment(held.paymentId);
+      const conflict = named ? evidenceConflict(named, observation, payments) : "that payment is no longer recorded";
+      if (!held.connectionOnly || !conflict) continue;
+      exception.data.condition = heldEvidenceCondition(observation.id, held.paymentId, false);
+      exception.data.notes = `${exception.data.notes ? `${exception.data.notes}\n` : ""}Update on ${watDate(Date.parse(ctx.now))} (WAT): the hold now stands as follows. Payment evidence ${observation.reference} no longer agrees with payment ${named?.reference ?? observation.reference}: ${conflict}, so it cannot be joined to it. The next reconciliation resolves it to payment ${own.reference}, which has its reference through ${connectionOf(state, own)}, unless you resolve this exception first.`;
+      touch(exception, ctx.now);
     }
   });
 }

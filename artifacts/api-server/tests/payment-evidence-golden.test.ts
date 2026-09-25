@@ -926,6 +926,25 @@ section("the same payment offered as the hold stands now", () => {
   accepted(request(payerless, () => executeAction(payerless, finance(wat("2027-07-01T09:00:00")), { action: "manual_allocate", recordId: transfer!.id, reason: "The narration names this customer.", data: { dueItemId: third.id, amountKobo: 1_000_000 } })), "Finance identifying another customer as the payer");
   const moved = live(payerless, hold!);
   equal([moved.data.condition, resolutionCodesForException(moved).includes("same_payment")], [`suspected_duplicate:${named.id}:${transfer!.id}`, false], "the allocation that identified another payer re-derives the hold, so the join is no longer offered");
+  // Evidence that also agrees with a payment Finance made from other evidence under its own spelling: the join to the payment
+  // its exception names is offered only while it still agrees with that payment.
+  const { state: beside, due: owner } = liveFixture({ withFailure: false, merchantId: "hold-beside-its-own-key" });
+  const another = recordsOf(beside, "due-items").find((item) => item.customerId !== owner.customerId && item.status === "scheduled")!;
+  addObservation(beside, { reference: "TRF-NOPAYER-6", amountKobo: 1_000_000, source: "transfer", eventId: "t1", occurredAt: wat("2027-07-01T07:00:00") });
+  const first = addObservation(beside, { reference: "TRF-NOPAYER-6", amountKobo: 1_000_000, source: "transfer", customerId: owner.customerId, eventId: "t2", occurredAt: wat("2027-07-01T07:30:00"), provider: "Bank Statement Feed" } as any);
+  const second = addObservation(beside, { reference: "TRF-NOPAYER-6", amountKobo: 1_000_000, source: "transfer", customerId: owner.customerId, eventId: "t3", occurredAt: wat("2027-07-01T07:40:00"), provider: "Bank Statement Feed" } as any);
+  accepted(request(beside, () => reconcile(beside, finance(wat("2027-07-01T08:00:00")))), "the transfer and the bank's two reports");
+  accepted(request(beside, () => executeAction(beside, finance(wat("2027-07-01T08:30:00")), { action: "resolve_exception", recordId: exceptionsFor(beside, second.id, "suspected_duplicate")[0]!.id, reason: "A second transfer of the customer's.", data: { resolutionCode: "distinct_payments" } })), "the second report as money of its own");
+  accepted(request(beside, () => reconcile(beside, finance(wat("2027-07-01T09:00:00")))), "the reconciliation that records it");
+  const [unnamed, ownKey] = payment(beside, "TRF-NOPAYER-6");
+  const [firstHold] = exceptionsFor(beside, first.id, "suspected_duplicate");
+  equal([first.status, ownKey?.data.providerConnection, resolutionCodesForException(live(beside, firstHold!)).includes("same_payment")], ["unresolved", "Bank Statement Feed", true], "the first report still offers the join while it agrees with the transfer");
+  accepted(request(beside, () => executeAction(beside, finance(wat("2027-07-01T09:30:00")), { action: "manual_allocate", recordId: unnamed!.id, reason: "The narration names this customer.", data: { dueItemId: another.id, amountKobo: 1_000_000 } })), "Finance identifying another customer as the transfer's payer");
+  const downgraded = live(beside, firstHold!);
+  equal([downgraded.data.condition, resolutionCodesForException(downgraded).includes("same_payment")], [`suspected_duplicate:${first.id}:${unnamed!.id}`, false], "once it no longer agrees with the transfer, the join is no longer offered");
+  check(/no longer agrees with payment TRF-NOPAYER-6: it names another payer, so it cannot be joined to it\. The next reconciliation resolves it to payment TRF-NOPAYER-6, which has its reference through Bank Statement Feed/.test(String(downgraded.data.notes)), `its notes say so (${downgraded.data.notes})`);
+  const joinCopy = structuredClone(beside);
+  check(!request(joinCopy, () => executeAction(joinCopy, finance(wat("2027-07-01T10:00:00")), { action: "resolve_exception", recordId: firstHold!.id, reason: "Same payment?", data: { resolutionCode: "same_payment" } })).ok, "and resolving it as the same payment is refused");
 });
 
 // ---------- Third review finding 2: a collection counted in two batches stays reported until Finance resolves it ----------
