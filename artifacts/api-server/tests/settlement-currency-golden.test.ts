@@ -5,7 +5,8 @@
 // its totals, and reported to Finance until Finance resolves it; fees are
 // checked only where a fee schedule exists for the batch's currency (naira), and
 // a statement credit in another currency never matches the batch; batches an
-// earlier build saved in several currencies are corrected once; and the close
+// earlier build saved in several currencies are corrected once, ending where this
+// build reading the same evidence from the start ends; and the close
 // lists each batch in its own currency, summing naira only. Every request runs as
 // the store runs it: on a copy, with the repository's final-state check, and
 // rolled back when it is refused.
@@ -271,6 +272,62 @@ section("a batch an earlier build saved in several currencies", () => {
   equal([ngn.data.currency, ngn.updatedAt], [undefined, stamp], "an earlier naira batch is not rewritten");
 });
 
+// ---------- A collection an earlier build counted in a batch of another currency, and listed again elsewhere ----------
+section("an earlier mixed batch whose collection the provider lists in other batches too", () => {
+  /**
+   * The provider misfiles a dollar collection's line in a naira batch (B-MIX), then lists the collection again in a
+   * naira batch that counts naira lines (B-NAIRA) and in two dollar batches (B-USD, which its dollar statement credit
+   * pays, and B-USD-2). With `earlier`, the dollar evidence is read as the earlier build read every line, in the batch
+   * its reference named first whatever its currency, and written back in dollars with no currency on any batch, as that
+   * build left it: PSK-U counted in B-MIX, and each later line of it reported as counted there.
+   */
+  const run = (label: string, earlier: boolean) => {
+    const { state, due } = lender(label);
+    const dollars = (item: TypedRecord<"observations">) => { if (earlier) item.data.currency = "NGN"; return item; };
+    nairaLine(state, due.customerId, "B-MIX", "n1"); dollars(dollarLine(state, due.customerId, "B-MIX", "u-mix"));
+    reconciled(state, "2027-07-01T08:00:00");
+    addObservation(state, { reference: "PSK-N2", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-NAIRA", source: "settlement", eventId: "n2", occurredAt: wat("2027-07-01T07:00:00") });
+    dollars(dollarLine(state, due.customerId, "B-NAIRA", "u-ngn")); dollars(dollarLine(state, due.customerId, "B-USD", "u-usd")); dollars(dollarLine(state, due.customerId, "B-USD-2", "u-usd2"));
+    dollars(addObservation(state, { reference: "STMT-USD", amountKobo: USD_NET, batchReference: "B-USD", source: "statement", eventId: "st-usd", occurredAt: wat("2027-07-01T10:00:00"), currency: "USD" } as any));
+    reconciled(state, "2027-07-01T11:00:00");
+    if (earlier) {
+      for (const item of recordsOf(state, "observations")) if (item.reference === "PSK-U" || item.reference === "STMT-USD") item.data.currency = "USD";
+      paymentOf(state, "PSK-U").data.currency = "USD";
+      for (const batch of recordsOf(state, "settlement-batches")) delete batch.data.currency;
+      for (const report of recordsOf(state, "exceptions")) if (String(report.data.notes).includes("PSK-U")) { report.data.notes = String(report.data.notes).replaceAll("NGN 1,000.00", "USD 1,000.00"); report.data.currency = "USD"; }
+    }
+    return state;
+  };
+  const state = run("earlier-moved", true), fresh = run("fresh-moved", false);
+  const counting = (at: DomainState) => recordsOf(at, "settlement-batches").filter((batch) => (batch.data.linePaymentIds as string[]).includes(paymentOf(at, "PSK-U").id)).map((batch) => batch.reference);
+  const mix = batchOf(state, "B-MIX");
+  equal([counting(state), lineOf(state, "u-usd").data.countedInBatchId, lineOf(state, "u-usd2").data.countedInBatchId, lineOf(state, "u-ngn").data.countedInBatchId], [["B-MIX"], mix.id, mix.id, mix.id], "the earlier build counted the collection in the naira batch, and reported its other lines as counted there");
+  const answer = reconciled(state, "2027-07-02T08:00:00");
+  const usd = batchOf(state, "B-USD"), usd2 = batchOf(state, "B-USD-2"), naira = batchOf(state, "B-NAIRA");
+  equal(counting(state), ["B-USD"], "once the dollar line leaves the naira batch, the dollar batch the provider also lists it in counts the collection");
+  equal([totals(usd), usd.status, usd.data.lineObservationIds], [["USD", USD_GROSS, USD_FEE, USD_NET, undefined, undefined], "reconciled", [lineOf(state, "u-usd").id]], "in dollars, so its dollar statement credit matches it");
+  equal(["duplicateSettlementLine" in lineOf(state, "u-usd").data, "countedInBatchId" in lineOf(state, "u-usd").data], [false, false], "its line there is no longer marked as counted elsewhere");
+  equal([usd2.data.currency, lineOf(state, "u-usd2").data.countedInBatchId, lineOf(state, "u-usd2").data.duplicateSettlementLine], ["USD", usd.id, true], "a later dollar batch that counts no line takes its first line's currency, and its line is counted twice with the batch that now counts the collection");
+  equal([naira.data.otherCurrencyLineIds, lineOf(state, "u-ngn").data.otherCurrencyLine, "countedInBatchId" in lineOf(state, "u-ngn").data, "duplicateSettlementLine" in lineOf(state, "u-ngn").data], [[lineOf(state, "u-ngn").id], true, false, false], "a line in a naira batch of naira lines is a line in another currency there");
+  const reports = (batch: ValopayRecord) => exceptionsOn(state, batch.id).filter(isOpen).map((item) => String(item.data.notes)).join("\n");
+  const moved = "settlement batch B-MIX no longer counts its collection, as its line there is in USD and the batch in NGN, so settlement line PSK-U";
+  check(reports(usd).includes(`(WAT): ${moved} is now counted in this batch.`), `the dollar batch's open report says the line is now counted there (${reports(usd)})`);
+  check(reports(usd2).includes(`(WAT): ${moved} is still not counted in this batch, as settlement batch B-USD now counts its collection.`), `the later dollar batch's report names the batch that now counts it (${reports(usd2)})`);
+  check(reports(naira).includes(`(WAT): ${moved} is reported as a line in another currency than this batch.`) && /is in USD, and settlement batch B-NAIRA is in NGN/.test(reports(naira)), `the naira batch's report says the line is now one in another currency (${reports(naira)})`);
+  check(reports(mix).includes("(WAT): its collection is now counted in settlement batch B-USD, where the provider lists it too."), `the report of the line taken out says where its collection is now counted (${reports(mix)})`);
+  check(String(answer.data.auditNote).includes("PSK-U (USD) from settlement batch B-MIX (NGN), now counted in settlement batch B-USD, where the provider lists it too."), `the audit entry names the batch that now counts it (${answer.data.auditNote})`);
+  // This build reading the same evidence from the start ends in the same place.
+  const shape = (at: DomainState) => ({
+    batches: recordsOf(at, "settlement-batches").map((batch) => [batch.reference, batch.status, ...totals(batch), (batch.data.lineObservationIds as string[]).length, ((batch.data.otherCurrencyLineIds ?? []) as string[]).length]),
+    lines: recordsOf(at, "observations").filter((item) => item.data.source === "settlement").map((item) => [item.data.eventId, item.data.duplicateSettlementLine ?? false, item.data.otherCurrencyLine ?? false, recordsOf(at, "settlement-batches").find((batch) => batch.id === item.data.countedInBatchId)?.reference ?? null]),
+  });
+  reconciled(fresh, "2027-07-02T08:00:00");
+  equal(shape(state), shape(fresh), "the correction ends where this build reading the evidence from the start ends");
+  const after = JSON.stringify(recordsOf(state, "settlement-batches").concat(recordsOf(state, "observations") as any, recordsOf(state, "exceptions") as any));
+  const again = reconciled(state, "2027-07-02T09:00:00");
+  equal(["settlementLinesSeparated" in again.data, JSON.stringify(recordsOf(state, "settlement-batches").concat(recordsOf(state, "observations") as any, recordsOf(state, "exceptions") as any))], [false, after], "once: a later reconciliation changes nothing");
+});
+
 // ---------- The close and its review show each batch in its own currency ----------
 section("the close's settlement differences", () => {
   const { state, due } = lender("close");
@@ -294,4 +351,4 @@ if (failures.length) {
   console.error(failures.join("\n"));
   assert.fail(`${failures.length} settlement currency section(s) failed`);
 }
-console.log(`Settlement currency golden tests passed (${checks} checks): a batch in its first line's currency with lines in another linked and reported, in either order, a dollar batch whose fees are not checked, a statement credit in another currency, a hand-entered batch's currency, batches an earlier build saved in several currencies corrected once, and the close's differences by currency.`);
+console.log(`Settlement currency golden tests passed (${checks} checks): a batch in its first line's currency with lines in another linked and reported, in either order, a dollar batch whose fees are not checked, a statement credit in another currency, a hand-entered batch's currency, batches an earlier build saved in several currencies corrected once, a collection such a batch counted read again in the other batches that list it, and the close's differences by currency.`);

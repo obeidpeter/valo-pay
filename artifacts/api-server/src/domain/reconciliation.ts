@@ -482,21 +482,32 @@ function recountEarlierLines(state: DomainState, ctx: Context): void {
  * Decision on batches an earlier build saved, which added lines in any currency
  * to one gross, fee and net and checked their fees against the naira schedule.
  * At each reconciliation a batch that names no currency takes its first counted
- * line's, and records it when that is not naira or its lines mix currencies (one
- * that names none is in naira). A counted line in another currency than its
- * batch is taken out of its lines and, while its totals are still the ones its
- * lines added (totalsFromLines), out of its totals, and is reported as a line in
- * another currency is (separateOtherCurrencyLine); a batch whose currency has no
- * fee schedule loses the expected fee and fee variance the naira schedule gave
- * it and its lines. It runs before the pass counts any line, so each batch is
- * corrected once. Returns the lines taken out, each with its batch.
+ * line's, else, counting none, the first line linked to it (as a batch this
+ * build makes takes the currency of the line that made it), and records it when
+ * that is not naira or its lines mix currencies (one that names none is in
+ * naira). A counted line in another currency than its batch is taken out of its
+ * lines and, while its totals are still the ones its lines added
+ * (totalsFromLines), out of its totals, and is reported as a line in another
+ * currency is (separateOtherCurrencyLine); a batch whose currency has no fee
+ * schedule loses the expected fee and fee variance the naira schedule gave it
+ * and its lines. The provider's other lines of a collection no batch counts any
+ * more are then read again (countDisplacedLines). It runs before the pass counts
+ * any line, so each batch is corrected once. Returns the lines taken out, each
+ * with its batch and the batch that now counts its collection instead.
  */
-function separateEarlierCurrencies(state: DomainState, ctx: Context): { line: TypedRecord<"observations">; batch: TypedRecord<"settlement-batches"> }[] {
+function separateEarlierCurrencies(state: DomainState, ctx: Context): SeparatedLine[] {
   const paymentOf: PaymentOf = (line) => recordsWhere(state, "payments", "id", String(line.data.paymentId ?? ""))[0];
-  const separated: { line: TypedRecord<"observations">; batch: TypedRecord<"settlement-batches"> }[] = [];
+  const separated: SeparatedLine[] = [], displaced: SeparatedLine[] = [];
+  let linked: Map<string, TypedRecord<"observations">> | undefined;
+  // The first settlement line linked to each batch, read once and only for an earlier batch that counts no line.
+  const firstLinked = (batchId: string) => (linked ??= recordsOfKind(state, "observations").reduce((map, item) => {
+    if (item.data.source === "settlement" && typeof item.data.settlementBatchId === "string" && !map.has(item.data.settlementBatchId)) map.set(item.data.settlementBatchId, item);
+    return map;
+  }, new Map<string, TypedRecord<"observations">>())).get(batchId);
   for (const batch of recordsOfKind(state, "settlement-batches")) {
     const lines = Array.isArray(batch.data.lineObservationIds) ? batch.data.lineObservationIds.map((id) => recordsWhere(state, "observations", "id", String(id))[0]) : [];
-    const first = lines.find(Boolean), currency = batch.data.currency || !first ? currencyOf(batch) : currencyOf(first);
+    const first = lines.find(Boolean) ?? (!batch.data.currency && Array.isArray(batch.data.lineObservationIds) ? firstLinked(batch.id) : undefined);
+    const currency = batch.data.currency || !first ? currencyOf(batch) : currencyOf(first);
     const other = lines.filter((line): line is TypedRecord<"observations"> => !!line && currencyOf(line) !== currency);
     if (!batch.data.currency && (currency !== "NGN" || other.length)) { batch.data.currency = currency; touch(batch, ctx.now); }
     if (other.length) {
@@ -516,6 +527,7 @@ function separateEarlierCurrencies(state: DomainState, ctx: Context): { line: Ty
           ? " An earlier build added it to the batch's totals; it is now taken out of them."
           : " An earlier build added it to the batch's totals, which no longer show what its lines added (Finance may have typed them by hand), so they are left as they are: check that they leave this line out.");
         separated.push({ line, batch });
+        if (!kept && payment) displaced.push(separated.at(-1)!);
       }
       if (fromLines) {
         batch.data.netKobo = Number(batch.data.grossKobo) - Number(batch.data.feeKobo);
@@ -528,7 +540,75 @@ function separateEarlierCurrencies(state: DomainState, ctx: Context): { line: Ty
       touch(batch, ctx.now);
     }
   }
+  // Every batch now names the currency it holds, so the lines of a collection no batch counts any more are read in it.
+  for (const entry of displaced) {
+    entry.countedIn = countDisplacedLines(state, ctx, entry.batch, entry.line, paymentOf(entry.line)!);
+    if (entry.countedIn) noteOpenReport(state, ctx, entry.batch, otherCurrencyLineCondition(entry.batch.id, entry.line.id), `its collection is now counted in settlement batch ${entry.countedIn.reference}, where the provider lists it too.`);
+  }
   return separated;
+}
+
+/** A line separateEarlierCurrencies took out of its batch, and the batch that now counts its collection instead, if one does. */
+interface SeparatedLine { line: TypedRecord<"observations">; batch: TypedRecord<"settlement-batches">; countedIn?: TypedRecord<"settlement-batches"> }
+
+/**
+ * Adds a dated line to the open settlement_variance exception of a batch that
+ * reports `condition`, as its own or carried, or, for an earlier build's
+ * carrier, by the dated line it added for `line`.
+ */
+function noteOpenReport(state: DomainState, ctx: Context, batch: ValopayRecord, condition: string, text: string, line?: ValopayRecord): void {
+  const open = recordsWhere(state, "exceptions", "data.linkedRecordId", batch.id).find((item) => isOpenException(item.status) && resolveExceptionType(item.data.type) === "settlement_variance"
+    && (item.data.condition === condition || carriedReports(item).includes(condition) || (!!line && String(item.data.notes ?? "").includes(`(WAT): Settlement line ${line.reference} (`))));
+  if (open) noteUpdate(open, ctx, text);
+}
+
+/**
+ * Decision on a collection an earlier build counted in a batch of another
+ * currency, whose line there separateEarlierCurrencies took out (`taken`, from
+ * batch `from`): that build reported the provider's other lines of it as
+ * counted in `from` (countedInBatchId), which no longer counts it. They are
+ * read again in order, as settlementBatch reads a line: one in a batch that
+ * counts the collection in another line repeats it there; one in a batch whose
+ * lines are in another currency is a line in another currency there; one whose
+ * collection another batch counts is counted twice with that batch; and the
+ * first left is counted in its batch, which takes its currency if it counts no
+ * line yet. Each report still open gains a dated line. Returns the batch that
+ * counts the collection now, when this counted it.
+ */
+function countDisplacedLines(state: DomainState, ctx: Context, from: TypedRecord<"settlement-batches">, taken: TypedRecord<"observations">, payment: TypedRecord<"payments">): TypedRecord<"settlement-batches"> | undefined {
+  const lines = recordsOfKind(state, "observations").filter((item) => item.data.source === "settlement" && item.data.countedInBatchId === from.id && item.data.paymentId === payment.id);
+  if (!lines.length) return undefined;
+  const why = `settlement batch ${from.reference} no longer counts its collection, as its line there is in ${currencyOf(taken)} and the batch in ${currencyOf(from)}`;
+  let counting = recordsOfKind(state, "settlement-batches").find((batch) => Array.isArray(batch.data.linePaymentIds) && batch.data.linePaymentIds.map(String).includes(payment.id));
+  let countedNow: TypedRecord<"settlement-batches"> | undefined;
+  for (const line of lines) {
+    const batch = recordsWhere(state, "settlement-batches", "id", String(line.data.settlementBatchId ?? ""))[0];
+    if (!batch || batch.id === from.id || !Array.isArray(batch.data.lineObservationIds)) continue;
+    const lineIds = batch.data.lineObservationIds as string[], linePaymentIds = (batch.data.linePaymentIds ||= []) as string[];
+    delete line.data.countedInBatchId;
+    let now: string;
+    if (linePaymentIds.includes(payment.id)) now = "is still not counted in this batch, as this batch counts its collection in another line";
+    else if (lineIds.length && currencyOf(line) !== currencyOf(batch)) {
+      delete line.data.duplicateSettlementLine;
+      separateOtherCurrencyLine(state, ctx, batch, line, payment.amountKobo, ` An earlier build reported it as counted in settlement batch ${from.reference}, which no longer counts it.`);
+      now = "is reported as a line in another currency than this batch";
+    } else if (counting) {
+      line.data.countedInBatchId = counting.id;
+      now = `is still not counted in this batch, as settlement batch ${counting.reference} now counts its collection`;
+    } else {
+      const schedule = lineSchedule(state, line, payment);
+      if (!lineIds.length) takeLineCurrency(batch, currencyOf(line), schedule);
+      delete line.data.duplicateSettlementLine;
+      linePaymentIds.push(payment.id); lineIds.push(line.id);
+      countLine(batch, line, lineTotals(line, payment, schedule), { grossKobo: 0, feeKobo: 0, expectedFeeKobo: 0 });
+      touch(batch, ctx.now);
+      counting = countedNow = batch;
+      now = "is now counted in this batch";
+    }
+    touch(line, ctx.now);
+    noteOpenReport(state, ctx, batch, lineCountedTwiceCondition(batch.id, line.id), `${why}, so settlement line ${line.reference} ${now}.`, line);
+  }
+  return countedNow;
 }
 
 /** A batch's first counted line gives it its currency, and the fee schedule for that currency when there is one. */
@@ -592,7 +672,8 @@ const otherCurrencyLineCondition = (batchId: string, lineId: string): string => 
  * Decision on a settlement line in another currency than its batch: a batch
  * holds one currency, so the line is never added to its totals. It is linked to
  * the batch as evidence (settlementBatchId, and otherCurrencyLineIds on the
- * batch), marked otherCurrencyLine, and reported to Finance with a
+ * batch, which names its own currency from then on, as an earlier one may not),
+ * marked otherCurrencyLine, and reported to Finance with a
  * settlement_variance exception of its own that names the batch, the line and
  * both currencies (condition settlement_variance:<batch>:currency:<line>; an
  * exception already open for the batch carries it, carryReport), which stays
@@ -602,6 +683,7 @@ const otherCurrencyLineCondition = (batchId: string, lineId: string): string => 
 function separateOtherCurrencyLine(state: DomainState, ctx: Context, batch: TypedRecord<"settlement-batches">, line: TypedRecord<"observations">, amount: number, note = ""): void {
   line.data.settlementBatchId = batch.id;
   line.data.otherCurrencyLine = true;
+  batch.data.currency ||= currencyOf(batch);
   const ids = Array.isArray(batch.data.otherCurrencyLineIds) ? batch.data.otherCurrencyLineIds.map(String) : [];
   if (!ids.includes(line.id)) batch.data.otherCurrencyLineIds = [...ids, line.id];
   touch(batch, ctx.now); touch(line, ctx.now);
@@ -2006,10 +2088,10 @@ function reversalsSetAsideAsResolved(state: DomainState, observations: readonly 
   });
 }
 
-/** What the audit entry adds for settlement lines an earlier build counted in a batch of another currency: each line, its batch and both currencies. */
-function separatedLinesNote(separated: readonly { line: TypedRecord<"observations">; batch: TypedRecord<"settlement-batches"> }[]): string | undefined {
+/** What the audit entry adds for settlement lines an earlier build counted in a batch of another currency: each line, its batch, both currencies and the batch that now counts its collection instead. */
+function separatedLinesNote(separated: readonly SeparatedLine[]): string | undefined {
   if (!separated.length) return undefined;
-  const named = separated.slice(0, 3).map(({ line, batch }) => `${line.reference} (${currencyOf(line)}) from settlement batch ${batch.reference} (${currencyOf(batch)})`);
+  const named = separated.slice(0, 3).map(({ line, batch, countedIn }) => `${line.reference} (${currencyOf(line)}) from settlement batch ${batch.reference} (${currencyOf(batch)})${countedIn ? `, now counted in settlement batch ${countedIn.reference}, where the provider lists it too` : ""}`);
   const more = separated.length > 3 ? `; and ${counted(separated.length - 3, "more", "more")}` : "";
   return `Took ${counted(separated.length, "settlement line")} in another currency than its batch out of the batch, as a batch holds one currency: ${named.join("; ")}${more}.`;
 }
