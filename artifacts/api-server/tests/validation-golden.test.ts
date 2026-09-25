@@ -207,7 +207,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
 {
   const state = seedMerchant('guided-import');
   const before = structuredClone(state);
-  const input = { kind: 'customers', syntheticOnly: true, commit: false, csv: 'Full name,External ref,Consent,Unused\n"Sample, Person",SAMPLE-CSV-1,"Synthetic\nconsent",ignore', mapping: { 'Full name': 'name', 'External ref': 'reference', Consent: 'consentProvenance', Unused: '' } };
+  const input = { kind: 'customers', syntheticOnly: true, commit: false, csv: 'Full name,External ref,Consent,Unused\n"Sample, Person",SAMPLE-CSV-1,"Synthetic\nconsent",ignore', mapping: { 'Full name': 'name', 'External ref': 'reference', Consent: 'consentProvenance', Unused: '' }, identityColumn: 'External ref' };
   const preview = importCsv(state, admin, input);
   assert.equal(preview.valid, 1); assert.equal(preview.imported, 0); assert.equal(preview.skipped, 0);
   assert.deepEqual(preview.columns, ['Full name', 'External ref', 'Consent', 'Unused']);
@@ -220,7 +220,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.equal(again.imported, 0); assert.equal(again.skipped, 1);
   assert.equal(state.records.find(record => record.reference === 'SAMPLE-CSV-1')?.data.Unused, undefined);
   const stableCount = state.records.length;
-  const invalid = importCsv(state, admin, { ...input, csv: 'name,reference,consentProvenance\nValid,SAMPLE-CSV-2,Synthetic\nInvalid,SAMPLE-CSV-3,', mapping: undefined, commit: true });
+  const invalid = importCsv(state, admin, { ...input, csv: 'name,reference,consentProvenance\nValid,SAMPLE-CSV-2,Synthetic\nInvalid,SAMPLE-CSV-3,', mapping: undefined, identityColumn: 'reference', commit: true });
   assert.equal(invalid.valid, 1); assert.equal(invalid.invalid, 1); assert.equal(invalid.imported, 0); assert.equal(state.records.length, stableCount);
   assert.match(invalid.rows[0]!.message, /Not imported/);
   assert.throws(() => importCsv(state, admin, { ...input, syntheticOnly: false }), /Only synthetic/);
@@ -238,7 +238,8 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
 // CSV numbers: a blank optional number is absent, while a blank amount and a receipt of ₦0 are row errors.
 {
   const state = seedMerchant("blank-numbers");
-  const rows = (kind: string, csv: string, extra: Partial<Parameters<typeof importCsv>[2]> = {}) => importCsv(state, admin, { kind, csv, syntheticOnly: true, commit: true, amountUnit: "kobo", ...extra });
+  // Each file's reference is its row ID.
+  const rows = (kind: string, csv: string, extra: Partial<Parameters<typeof importCsv>[2]> = {}) => importCsv(state, admin, { kind, csv, syntheticOnly: true, commit: true, amountUnit: "kobo", identityColumn: "reference", ...extra });
   const saved = (reference: string) => state.records.find((record) => record.reference === reference)!;
   // Each row was refused before: a blank count read as 0 failed its minimum, and a blank fee failed the amount parser.
   for (const [kind, csv] of [
@@ -270,9 +271,12 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.match(rows("due-items", noAmount).rows[0]!.message, /Enter kobo as a whole number/);
   assert.match(rows("due-items", noAmount, { amountUnit: "naira" }).rows[0]!.message, /Enter an amount in naira/);
   // Payment evidence records money received: ₦0, or no amount at all, is refused by the import and the record API alike.
-  for (const csv of ["name,reference,customerId,amountKobo,source\nZero receipt,IMP-O-ZERO,DEMO-C1001,0,webhook", "name,reference,customerId,source\nNo amount,IMP-O-NONE,DEMO-C1001,webhook"]) {
+  for (const [csv, message] of [
+    ["name,reference,customerId,amountKobo,source\nZero receipt,IMP-O-ZERO,DEMO-C1001,0,webhook", "Amount (column amountKobo): Enter the amount received. Payment evidence must be for more than ₦0."],
+    ["name,reference,customerId,source\nNo amount,IMP-O-NONE,DEMO-C1001,webhook", "No column is mapped to Amount. Map the column that holds it."],
+  ] as const) {
     const refused = rows("observations", csv);
-    assert.deepEqual([refused.invalid, refused.imported, refused.rows[0]!.message], [1, 0, "Enter the amount received. Payment evidence must be for more than ₦0."]);
+    assert.deepEqual([refused.invalid, refused.imported, refused.rows[0]!.message, refused.rows[0]!.detail], [1, 0, message, "Enter the amount received. Payment evidence must be for more than ₦0."]);
   }
   assert.equal(state.records.some((record) => ["IMP-O-ZERO", "IMP-O-NONE", "IMP-D-NOAMOUNT"].includes(record.reference)), false);
   const customerId = saved("IMP-C-BLANK").id;

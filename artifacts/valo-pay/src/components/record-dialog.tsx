@@ -15,6 +15,7 @@ import { permissionReason } from '@/lib/permissions';
 import { referenceOf } from '@/lib/notify';
 import { KEPT_IN_OPERATIONS, OpenOperations } from './pilot-ui';
 import { Link } from 'wouter';
+import { fromImportBatch } from '@workspace/valopay-schema';
 
 const actionLabels: Record<string, string> = {
   mandate_suspend: 'Suspend mandate', mandate_cancel: 'Cancel mandate', mandate_reinstate: 'Resume mandate',
@@ -61,7 +62,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const isMoney = (field: FieldDef) => field.type === 'number' && /Kobo$/.test(field.name);
   const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label) } : field);
   const { merchantId, workspace } = useWorkspace();
-  const importedEdit = !actionMutation && record?.data?.importIdentity;
+  // A batch-imported record changes only through a reviewed correction; a quick import's stays editable (fromImportBatch).
+  const importedEdit = !actionMutation && fromImportBatch(record) ? record!.data.importIdentity as { batchId: string } : undefined;
   const blockedReason = permissionReason(workspace, { action: actionMutation, kind, record }) || (importedEdit ? 'Imported source records cannot be edited directly. Use a reviewed correction for supported fields, or the dedicated workflow action for other changes.' : undefined);
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState<any>({});

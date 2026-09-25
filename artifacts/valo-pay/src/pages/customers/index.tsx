@@ -12,7 +12,7 @@ import { CustomerAvatar, StatusBadge } from '@/components/record-label';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { Link } from 'wouter';
 import { RecordDialog } from '@/components/record-dialog';
-import { recordStatuses } from '@workspace/valopay-schema';
+import { importFieldLabel, recordStatuses } from '@workspace/valopay-schema';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
 import { keepRowsWhilePaging, useDebouncedSearch } from '@/lib/use-record-pagination';
@@ -68,13 +68,14 @@ export default function CustomersPage() {
         onOpenChange={setIsDialogOpen}
         title="Add customer"
         fields={[
-          { name: 'name', label: 'Full name', type: 'text', required: true },
-          { name: 'reference', label: 'Loan software reference', type: 'text', required: true },
-          { name: 'status', label: 'Status', type: 'select', options: recordStatuses.customers.map(status => ({ label: status.charAt(0).toUpperCase() + status.slice(1), value: status })), required: true },
-          { name: 'bankName', label: 'Bank name', type: 'text', isData: true },
-          { name: 'accountMasked', label: 'Masked account number (e.g. ******1234)', type: 'text', isData: true },
-          { name: 'phoneMasked', label: 'Masked phone number', type: 'text', isData: true },
-          { name: 'consentProvenance', label: 'Consent source or reference', type: 'text', isData: true, required: true, help: 'For example: signed form CONSENT-001 or a consent link reference. Use sample details only.' },
+          // The same words as the import screens' columns and row errors (importFieldLabel).
+          { name: 'name', label: importFieldLabel('customers', 'name'), type: 'text', required: true },
+          { name: 'reference', label: importFieldLabel('customers', 'reference'), type: 'text', required: true },
+          { name: 'status', label: importFieldLabel('customers', 'status'), type: 'select', options: recordStatuses.customers.map(status => ({ label: status.charAt(0).toUpperCase() + status.slice(1), value: status })), required: true },
+          { name: 'bankName', label: importFieldLabel('customers', 'bankName'), type: 'text', isData: true },
+          { name: 'accountMasked', label: importFieldLabel('customers', 'accountMasked'), type: 'text', isData: true, help: 'For example ******1234. Never enter a full account number.' },
+          { name: 'phoneMasked', label: importFieldLabel('customers', 'phoneMasked'), type: 'text', isData: true },
+          { name: 'consentProvenance', label: importFieldLabel('customers', 'consentProvenance'), type: 'text', isData: true, required: true, help: 'For example: signed form CONSENT-001 or a consent link reference. Use sample details only.' },
         ]}
         defaultValues={{ status: 'active' }}
       />

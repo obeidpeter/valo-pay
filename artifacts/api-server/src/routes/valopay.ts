@@ -12,7 +12,7 @@ import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, instantInputSchema, isCloseTime, pathId, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState, ValopayRecord } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
-import { importCsv } from "../lib/valopay-import";
+import { importCsv, withRowIdColumn } from "../lib/valopay-import";
 import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
 import { assertExportPermitted, exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
 import { assertRecordVersion, assertSettingsVersion, mergeData } from "../lib/edit-versions";
@@ -170,7 +170,7 @@ router.post("/v1/actions",async(req,res)=>{
 });
 router.post("/v1/imports",async(req,res)=>{
  lenderQuery(req);
- const body=S.ImportRecordsBody.parse(req.body);
+ const body=S.ImportRecordsBody.parse(withRowIdColumn(req.body));
  res.json(await withState(req,res,(state,ctx)=>importCsv(state,ctx,body),body.commit,S.ImportRecordsResponse));
 });
 router.get('/v1/customers/:id/history',async(req,res)=>{

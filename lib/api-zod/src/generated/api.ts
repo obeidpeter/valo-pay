@@ -403,7 +403,7 @@ export const PerformActionResponse = zod.object({
 
 
 /**
- * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.
+ * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data. Every row needs a source row ID from the identityColumn column; a row already imported with the same data is skipped, and one with different data is refused. An invalid row reports every failing rule, naming the operator's column, with the record API's words in detail.
  * @summary Preview or commit a synthetic CSV import
  */
 export const importRecordsQueryMerchantIdMax = 100;
@@ -423,14 +423,19 @@ export const ImportRecordsHeader = zod.object({
   "Idempotency-Key": zod.string().min(importRecordsHeaderIdempotencyKeyMin).max(importRecordsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender. Only a commit (commit true) uses it: a preview writes nothing.')
 })
 
+export const importRecordsBodyIdentityColumnMax = 100;
+
+
+
 export const ImportRecordsBody = zod.object({
   "kind": zod.string(),
   "csv": zod.string(),
   "syntheticOnly": zod.boolean(),
   "commit": zod.boolean(),
   "mapping": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
-  "amountUnit": zod.enum(['naira', 'kobo']).optional().describe('Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice.')
-}).describe('A synthetic CSV to preview or commit for one kind, with an optional column mapping.')
+  "amountUnit": zod.enum(['naira', 'kobo']).optional().describe('Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice.'),
+  "identityColumn": zod.string().max(importRecordsBodyIdentityColumnMax).describe('Required: the CSV header of the column that holds each row\'s source row ID, a different, non-empty value of up to 160 characters on every row. A file without that column, or a value blank or repeated, is refused (400) naming what to map. The row ID is kept with the record, so it is screened under its column\'s header: a raw account number is refused (400), as in a saved batch. The column is the row\'s identity and fills no field unless the mapping maps it to one or it is headed reference or eventId. Rows are recognised across quick imports by the lender\'s one quick-import source and the row ID: a row imported before with the same data is skipped as a duplicate, and one with different data is a row error.')
+}).describe('A synthetic CSV to preview or commit for one kind, with its source row ID column and an optional column mapping.')
 
 export const ImportRecordsResponse = zod.object({
   "valid": zod.number().int(),
@@ -439,8 +444,9 @@ export const ImportRecordsResponse = zod.object({
   "rows": zod.array(zod.object({
   "row": zod.number().int(),
   "status": zod.string(),
-  "message": zod.string()
-}).describe('The outcome of one imported row.')),
+  "message": zod.string(),
+  "detail": zod.string().optional().describe('An invalid row\'s problems in the record API\'s words, field names included, beside the message\'s words for the operator\'s columns.')
+}).describe('The outcome of one imported row: valid, invalid or duplicate (already imported). An invalid row\'s message names each failing rule\'s column in the operator\'s words; detail keeps the record API\'s words.')),
   "columns": zod.array(zod.string()).optional(),
   "preview": zod.array(zod.object({
   "row": zod.number().int(),

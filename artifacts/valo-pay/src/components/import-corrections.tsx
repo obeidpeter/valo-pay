@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   importCorrectionsResponseSchema,
   importCorrectionPreviewSchema,
+  importFieldLabel,
   type ImportCorrectionPreviewInput,
 } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -66,9 +67,7 @@ function Comparison({ preview }: { preview: Preview }) {
               {preview.differences.map((d) => (
                 <tr key={d.field} className="border-t">
                   <th className="p-2 font-medium">
-                    {d.field === "amountKobo"
-                      ? "Amount"
-                      : readableLabel(d.field)}
+                    {importFieldLabel(preview.targetKind, d.field)}
                   </th>
                   <td className="p-2">
                     {d.field === "amountKobo"

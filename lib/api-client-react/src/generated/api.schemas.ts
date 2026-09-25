@@ -369,7 +369,7 @@ export const ImportInputAmountUnit = {
 } as const;
 
 /**
- * A synthetic CSV to preview or commit for one kind, with an optional column mapping.
+ * A synthetic CSV to preview or commit for one kind, with its source row ID column and an optional column mapping.
  */
 export interface ImportInput {
   kind: string;
@@ -379,15 +379,22 @@ export interface ImportInput {
   mapping?: RecordData;
   /** Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice. */
   amountUnit?: ImportInputAmountUnit;
+  /**
+     * Required: the CSV header of the column that holds each row's source row ID, a different, non-empty value of up to 160 characters on every row. A file without that column, or a value blank or repeated, is refused (400) naming what to map. The row ID is kept with the record, so it is screened under its column's header: a raw account number is refused (400), as in a saved batch. The column is the row's identity and fills no field unless the mapping maps it to one or it is headed reference or eventId. Rows are recognised across quick imports by the lender's one quick-import source and the row ID: a row imported before with the same data is skipped as a duplicate, and one with different data is a row error.
+     * @maxLength 100
+     */
+  identityColumn: string;
 }
 
 /**
- * The outcome of one imported row.
+ * The outcome of one imported row: valid, invalid or duplicate (already imported). An invalid row's message names each failing rule's column in the operator's words; detail keeps the record API's words.
  */
 export interface ImportRow {
   row: number;
   status: string;
   message: string;
+  /** An invalid row's problems in the record API's words, field names included, beside the message's words for the operator's columns. */
+  detail?: string;
 }
 
 export type ImportResultPreviewItem = {

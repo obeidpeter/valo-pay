@@ -7,10 +7,12 @@
  */
 
 /**
- * The outcome of one imported row.
+ * The outcome of one imported row: valid, invalid or duplicate (already imported). An invalid row's message names each failing rule's column in the operator's words; detail keeps the record API's words.
  */
 export interface ImportRow {
   row: number;
   status: string;
   message: string;
+  /** An invalid row's problems in the record API's words, field names included, beside the message's words for the operator's columns. */
+  detail?: string;
 }

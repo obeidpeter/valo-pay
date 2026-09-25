@@ -14,7 +14,7 @@ describe('CSV amount units', () => {
     const user = userEvent.setup(); renderApp('/collections');
     await user.click(await screen.findByRole('button', { name: 'Import sample data' }));
     await user.selectOptions(screen.getByLabelText('Import as'), 'observations');
-    await user.type(screen.getByLabelText('CSV content'), 'name,reference,amount,source,narration\nSample receipt,CSV-NAIRA,18000.50,webhook,Synthetic payment');
+    await user.type(screen.getByLabelText('CSV content'), 'row_id,name,reference,amount,source,narration\nr1,Sample receipt,CSV-NAIRA,18000.50,webhook,Synthetic payment');
     expect(screen.getByRole('button', { name: 'Check data' })).toHaveProperty('disabled', true);
     await user.selectOptions(screen.getByLabelText('Amounts in your CSV *'), 'naira');
     await user.click(screen.getByRole('button', { name: 'Check data' }));
@@ -38,18 +38,18 @@ describe('CSV amount units', () => {
     const user = userEvent.setup(); renderApp('/collections');
     await user.click(await screen.findByRole('button', { name: 'Import sample data' }));
     await user.selectOptions(screen.getByLabelText('Import as'), 'observations');
-    await user.type(screen.getByLabelText('CSV content'), 'name,reference,amount,source,feeKobo\nZero receipt,CSV-ZERO,0,webhook,\nBlank fee,CSV-BLANK-FEE,100.00,webhook,');
+    await user.type(screen.getByLabelText('CSV content'), 'row_id,name,reference,amount,source,feeKobo\nr1,Zero receipt,CSV-ZERO,0,webhook,\nr2,Blank fee,CSV-BLANK-FEE,100.00,webhook,');
     await user.selectOptions(screen.getByLabelText('Amounts in your CSV *'), 'naira');
     await user.click(screen.getByRole('button', { name: 'Check data' }));
-    expect(await screen.findByText('0 imported · 0 skipped as duplicates · 1 row to fix · 1 valid row')).toBeTruthy();
-    expect(screen.getByText(/Enter the amount received\. Payment evidence must be for more than ₦0\./)).toBeTruthy();
+    expect(await screen.findByText('0 imported · 0 skipped as already imported · 1 row to fix · 1 valid row')).toBeTruthy();
+    expect(screen.getByText('Amount: Enter the amount received. Payment evidence must be for more than ₦0.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Import data' })).toHaveProperty('disabled', true);
     expect(api.state().records.some(record => ['CSV-ZERO', 'CSV-BLANK-FEE'].includes(record.reference))).toBe(false);
   });
 
   it('converts every row on the server, preserves exact decimals, and retains kobo API compatibility', () => {
     const ctx = ctxAt(wat('2027-07-01T09:00:00'), 'Admin');
-    const input = { kind: 'observations', syntheticOnly: true, commit: true, csv: 'name,reference,amountKobo,source\nSample,CSV-KOBO,100050,webhook' };
+    const input = { kind: 'observations', syntheticOnly: true, commit: true, identityColumn: 'reference', csv: 'name,reference,amountKobo,source\nSample,CSV-KOBO,100050,webhook' };
     const state = structuredClone(api.state());
     expect(importCsv(state, ctx, input).imported).toBe(1);
     expect(state.records.find(record => record.reference === 'CSV-KOBO')?.amountKobo).toBe(100050);

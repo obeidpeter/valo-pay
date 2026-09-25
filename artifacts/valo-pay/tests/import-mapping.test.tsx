@@ -32,7 +32,7 @@ describe('import batches', () => {
     expect(within(results).getByText(warning)).toBeTruthy();
     // The suggestion is shown as the mapping and is an unsaved change: the check above is the previous one.
     expect((screen.getByRole('combobox', { name: 'full_name' }) as HTMLSelectElement).value).toBe('name');
-    expect(screen.getByText('Suggested from the column names: full_name as Name. Save and check the batch to use it, or choose another option.')).toBeTruthy();
+    expect(screen.getByText('Suggested from the column names: full_name as Full name. Save and check the batch to use it, or choose another option.')).toBeTruthy();
     expect(within(results).getByRole('heading', { name: 'Previous check · save your corrections to check again' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Commit checked batch' }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Save and check batch' }));
@@ -76,7 +76,7 @@ describe('import batches', () => {
     // A header that names no field shows as Skip column.
     expect((screen.getByRole('combobox', { name: 'customer_reference' }) as HTMLSelectElement).value).toBe('');
     expect((screen.getByRole('combobox', { name: 'full_name' }) as HTMLSelectElement).value).toBe('name');
-    expect(screen.getByText('Suggested from the column names: full_name as Name. Save and check the batch to use it, or choose another option.')).toBeTruthy();
+    expect(screen.getByText('Suggested from the column names: full_name as Full name. Save and check the batch to use it, or choose another option.')).toBeTruthy();
   });
 
   it('asks before committing a check that warns, and commits only when told to', async () => {
@@ -115,15 +115,14 @@ describe('sample data import on Collections', () => {
     await screen.findByRole('heading', { name: 'Check results' });
     return user;
   }
-  const file = 'full_name,reference,consentProvenance\nNamed in an unmapped column,UNMAPPED-C1,Synthetic consent';
+  const file = 'row_id,full_name,reference,consentProvenance\nr1,Named in an unmapped column,UNMAPPED-C1,Synthetic consent';
 
-  it('matches full_name to the name, so the next check has nothing to warn about', async () => {
+  it('matches full_name to the name before the first check, so the check has nothing to warn about', async () => {
     const user = await checked(file);
     const results = screen.getByRole('region', { name: 'Check results' });
-    expect(within(results).getByRole('heading', { name: 'Check before you import' })).toBeTruthy();
+    expect(within(results).queryByRole('heading', { name: 'Check before you import' })).toBeNull();
     expect((screen.getByLabelText('Map full_name') as HTMLSelectElement).value).toBe('name');
-    await user.click(screen.getByRole('button', { name: 'Check data' }));
-    await waitFor(() => expect(within(screen.getByRole('region', { name: 'Check results' })).queryByRole('heading', { name: 'Check before you import' })).toBeNull());
+    expect(api.calls.find(call => call.path === '/v1/imports')?.body).toMatchObject({ identityColumn: 'row_id', mapping: { row_id: '', full_name: 'name', reference: 'reference', consentProvenance: 'consentProvenance' } });
     await user.click(screen.getByRole('button', { name: 'Import data' }));
     await screen.findByText(/Import complete\./);
     expect(customer()?.name).toBe('Named in an unmapped column');

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { importBatchDetailSchema, importBatchListSchema, importFieldsOf, sourcesViewSchema, suggestImportField, type BatchInput } from "@workspace/valopay-schema";
+import { csvHeader, importBatchDetailSchema, importBatchListSchema, importFieldLabel, importFieldsOf, importKindLabels, sourcesViewSchema, suggestImportField, type BatchInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
   lenderPath,
@@ -25,29 +25,19 @@ import { PageButtons } from "@/components/record-pagination";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useDialogFocusReturn } from "@/lib/focus";
 import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
-import { ScrollFrame } from "@/components/scroll-frame";
 import { readableLabel } from "@/components/record-label";
+import { ImportRowResults, importSummary, sampleImportCsv, sampleMapping } from "@/components/import-results";
 import { ImportCorrections } from "@/components/import-corrections";
 import { isStaleRecordError } from "@/components/form-field";
 
-const types = {
-  customers: "Customers",
-  mandates: "Mandates",
-  "due-items": "Instalments",
-  attempts: "Collection attempts",
-  observations: "Payment evidence",
-};
-const samples = {
-  customers:
-    "source_row_id,name,reference,consentProvenance,bankName,accountMasked\ncustomer-001,Pilot customer,PILOT-C001,Synthetic pilot consent,Sandbox Bank,•••• 0001",
-  mandates:
-    "source_row_id,name,reference,customerId,amount,workflow,frequency,activationDeadline,consentEvidence,consentGaps\nmandate-001,Pilot mandate,PILOT-M001,PILOT-C001,50000,hosted_consent,monthly,2028-12-01,SYNTHETIC-CONSENT-001,",
-  "due-items":
-    "source_row_id,name,reference,customerId,amount,dueDate,mandateId,owner,overrideReason\ninstalment-001,Pilot instalment,PILOT-D001,PILOT-C001,25000,2028-12-01,,lms,",
-  attempts:
-    "source_row_id,name,reference,customerId,amount,dueItemId,number,failureCode,occurredAt\nattempt-001,Pilot attempt,PILOT-A001,PILOT-C001,25000,PILOT-D001,1,INSUFFICIENT_FUNDS,2028-12-02",
-  observations:
-    "source_row_id,name,reference,customerId,amount,source,dueItemId,narration\npayment-001,Pilot payment,PILOT-O001,PILOT-C001,25000,statement,PILOT-D001,PILOT-D001 synthetic transfer",
+const types = importKindLabels as Record<BatchInput["kind"], string>;
+/** Each kind's sample row: its source row ID and each field's value (amounts in kobo), headed by the shared labels. */
+const samples: Record<BatchInput["kind"], { rowId: string; values: Array<[string, string]> }> = {
+  customers: { rowId: "customer-001", values: [["name", "Pilot customer"], ["reference", "PILOT-C001"], ["consentProvenance", "Synthetic pilot consent"], ["bankName", "Sandbox Bank"], ["accountMasked", "•••• 0001"]] },
+  mandates: { rowId: "mandate-001", values: [["name", "Pilot mandate"], ["reference", "PILOT-M001"], ["customerId", "PILOT-C001"], ["amountKobo", "5000000"], ["workflow", "hosted_consent"], ["frequency", "monthly"], ["activationDeadline", "2028-12-01"], ["consentEvidence", "SYNTHETIC-CONSENT-001"], ["consentGaps", ""]] },
+  "due-items": { rowId: "instalment-001", values: [["name", "Pilot instalment"], ["reference", "PILOT-D001"], ["customerId", "PILOT-C001"], ["amountKobo", "2500000"], ["dueDate", "2028-12-01"], ["mandateId", ""], ["owner", "lms"], ["overrideReason", ""]] },
+  attempts: { rowId: "attempt-001", values: [["name", "Pilot attempt"], ["reference", "PILOT-A001"], ["customerId", "PILOT-C001"], ["amountKobo", "2500000"], ["dueItemId", "PILOT-D001"], ["number", "1"], ["failureCode", "INSUFFICIENT_FUNDS"], ["occurredAt", "2028-12-02"]] },
+  observations: { rowId: "payment-001", values: [["name", "Pilot payment"], ["reference", "PILOT-O001"], ["customerId", "PILOT-C001"], ["amountKobo", "2500000"], ["source", "statement"], ["dueItemId", "PILOT-D001"], ["narration", "PILOT-D001 synthetic transfer"]] },
 };
 const fields = [
   "name",
@@ -85,7 +75,6 @@ const fields = [
   "currency",
   "payerKey",
 ];
-const fieldLabel = (field: string) => (field === "amountKobo" ? "Amount" : readableLabel(field));
 /**
  * Where a column goes when the mapping leaves it out, as the service reads it:
  * the row identity column is only the identity unless it is the reference or
@@ -141,7 +130,9 @@ function LenderImports() {
   const [selected, setSelected] = useState<string | null>(() =>
       search.get("batch"),
     ),
-    [editor, setEditor] = useState(0);
+    [editor, setEditor] = useState(0),
+    // Set by a save or commit, which may open the saved batch in a new editor: its results take focus, as the wizard's do.
+    focusResults = useRef(false);
   return (
     <div className="space-y-6">
       <PilotHeading title="Import batches">
@@ -161,6 +152,7 @@ function LenderImports() {
           initialDate={search.get("businessDate")}
           initialExpectation={search.get("expectation")}
           onSaved={(id) => setSelected(id)}
+          focusResults={focusResults}
           onNew={() => {
             setSelected(null);
             setEditor((n) => n + 1);
@@ -247,6 +239,7 @@ function BatchEditor({
   initialDate,
   initialExpectation,
   onSaved,
+  focusResults,
   onNew,
 }: {
   id: string | null;
@@ -254,6 +247,7 @@ function BatchEditor({
   initialDate: string | null;
   initialExpectation: string | null;
   onSaved(id: string): void;
+  focusResults: { current: boolean };
   onNew(): void;
 }) {
   const { merchantId, workspace } = useWorkspace();
@@ -274,6 +268,8 @@ function BatchEditor({
     [fileError, setFileError] = useState(""),
     [reading, setReading] = useState(false),
     [suggested, setSuggested] = useState<Record<string, string>>({}),
+    // The sample's mapping, kept while the CSV still has the column it maps.
+    [fromSample, setFromSample] = useState<Record<string, string>>({}),
     // Committing a check with warnings takes one more step: the fallbacks are named first.
     [confirmingCommit, setConfirmingCommit] = useState(false);
   const sources = usePilotQuery(
@@ -373,9 +369,16 @@ function BatchEditor({
   const dirty = !!form.csv && JSON.stringify(form) !== saved;
   const { confirmDiscard } = useUnsavedChanges(dirty);
   const mutation = usePilotMutation((record) => {
+    focusResults.current = true;
     hydrate(record);
     onSaved(record.id);
   });
+  const resultsHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!batch?.data.check || !focusResults.current) return;
+    focusResults.current = false;
+    resultsHeading.current?.focus();
+  }, [batch]);
   const busy = mutation.isPending || reading,
     locked =
       busy || mutation.hasUnconfirmedOutcome || batch?.status === "committed";
@@ -426,6 +429,11 @@ function BatchEditor({
   // Suggestions come from the checked columns: a changed file takes them back until its own check.
   const withoutSuggestions = (mapping: Record<string, string>) =>
     Object.fromEntries(Object.entries(mapping).filter(([column, field]) => suggested[column] !== field));
+  // A sample column's mapping goes with its column, so an edited sample keeps it and another file never inherits it.
+  const withoutSampleColumns = (mapping: Record<string, string>, csv: string) => {
+    const columns = csvHeader(csv);
+    return Object.fromEntries(Object.entries(mapping).filter(([column, field]) => fromSample[column] !== field || columns.includes(column)));
+  };
   const commit = () =>
     mutation.mutate({
       path: `/pilot/batches/${batch.id}/commit`,
@@ -703,17 +711,20 @@ function BatchEditor({
             variant="outline"
             disabled={locked || denied || !!id}
             onClick={() => {
-              if (confirmDiscard())
-                setForm({
-                  ...form,
-                  csv: samples[form.kind],
-                  mapping: {},
-                  name: form.name || `${types[form.kind]} sample`,
-                  source: form.source || "Pilot sample",
-                  sourceBatchId: form.sourceBatchId || `${form.kind}-001`,
-                  identityColumn: "source_row_id",
-                  amountUnit: "naira",
-                });
+              if (!confirmDiscard()) return;
+              // Headed in the operator's words, with the mapping that says so.
+              const mapping = sampleMapping(form.kind, samples[form.kind].values, "source_row_id");
+              setFromSample(mapping);
+              setForm({
+                ...form,
+                csv: sampleImportCsv(form.kind, samples[form.kind].rowId, samples[form.kind].values, "naira", "source_row_id"),
+                mapping,
+                name: form.name || `${types[form.kind]} sample`,
+                source: form.source || "Pilot sample",
+                sourceBatchId: form.sourceBatchId || `${form.kind}-001`,
+                identityColumn: "source_row_id",
+                amountUnit: "naira",
+              });
             }}
           >
             Use sample
@@ -722,13 +733,14 @@ function BatchEditor({
         <label className="block space-y-2 text-sm font-medium">
           CSV content
           <textarea
+            id="batch-csv"
             className={`${pilotField} min-h-40 font-mono text-xs`}
             value={form.csv}
             disabled={locked || denied}
             required
             onChange={(e) => {
               const csv = e.target.value;
-              setForm((current) => ({ ...current, csv, mapping: withoutSuggestions(current.mapping) }));
+              setForm((current) => ({ ...current, csv, mapping: withoutSampleColumns(withoutSuggestions(current.mapping), csv) }));
               setSuggested({});
             }}
           />
@@ -774,7 +786,7 @@ function BatchEditor({
                       </option>
                       {options.map((field) => (
                         <option key={field} value={field}>
-                          {fieldLabel(field)}
+                          {importFieldLabel(form.kind, field)}
                         </option>
                       ))}
                     </select>
@@ -786,7 +798,7 @@ function BatchEditor({
               <p className="mt-3 text-sm">
                 Suggested from the column names:{" "}
                 {Object.entries(suggested)
-                  .map(([column, field]) => `${column} as ${fieldLabel(field)}`)
+                  .map(([column, field]) => `${column} as ${importFieldLabel(form.kind, field)}`)
                   .join(", ")}
                 . Save and check the batch to use{" "}
                 {Object.keys(suggested).length === 1 ? "it" : "them"}, or
@@ -891,7 +903,11 @@ function BatchEditor({
           className="space-y-3 border-t pt-5"
           aria-label="Saved batch results"
         >
-          <h3 className="font-semibold">
+          <h3
+            ref={resultsHeading}
+            tabIndex={-1}
+            className="font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+          >
             {batch.status === "committed"
               ? "Import complete"
               : dirty
@@ -899,10 +915,7 @@ function BatchEditor({
                 : "Saved check results"}
           </h3>
           <p role="status" className="text-sm">
-            {formatNumber(check.imported)} imported ·{" "}
-            {formatNumber(check.skipped)} already present ·{" "}
-            {formatNumber(check.invalid)} to fix ·{" "}
-            {formatNumber(check.valid)} valid
+            {importSummary(check)}
           </p>
           {!!check.warnings?.length && (
             <div className="space-y-2 rounded-lg border border-warning-border bg-warning/20 p-3 text-sm">
@@ -949,19 +962,15 @@ function BatchEditor({
               imported until you commit a batch with no row errors.
             </p>
           )}
-          <ScrollFrame
+          {/* The wizard's rows to fix, errors CSV and correction focus; a new check starts again from its rows to fix. */}
+          <ImportRowResults
+            key={batch.updatedAt}
+            rows={check.rows}
             label="Import check results"
+            filename={`${batch.data.sourceBatchId || batch.data.kind}-errors.csv`}
+            onCorrect={locked || denied ? undefined : () => document.getElementById("batch-csv")?.focus()}
             className="max-h-72 overflow-auto rounded-lg border p-3 text-sm"
-          >
-            {check.rows.map((row: any) => (
-              <p key={row.row} className="border-b py-2 last:border-0">
-                <strong>
-                  Row {row.row} · {readableLabel(row.status)}:{" "}
-                </strong>
-                {row.message}
-              </p>
-            ))}
-          </ScrollFrame>
+          />
           {check.preview?.some((row: any) => row.amountKobo !== undefined) && (
             <div className="rounded-lg bg-secondary/30 p-3 text-sm">
               <h4 className="font-medium">Converted amounts · first rows</h4>

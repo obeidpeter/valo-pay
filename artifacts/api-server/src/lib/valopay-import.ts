@@ -1,29 +1,52 @@
 import { parse } from "csv-parse/sync";
 import { canonicalDigest } from './digests';
-import { makeRecord, validateRecord } from "../domain";
+import { assertNoRealBankDetails, makeRecord, validateRecord } from "../domain";
+import type { ValidationProblem } from "../domain/validation";
 import type { Context, DomainState } from "../domain/types";
 import { counted, csvAmountToKobo, defaultStatus, importBooleanFields, importFieldsOf, importKinds as sharedImportKinds, importNumericFields, suggestImportField } from "@workspace/valopay-schema";
+import { importRowError } from "./import-row-errors";
 
 const importKinds:readonly string[]=sharedImportKinds;
 const topFields=new Set(["name","status","reference","amountKobo","customerId"]);
 const numeric=importNumericFields;
 const boolean=importBooleanFields;
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+/**
+ * The source of every quick import's rows (POST /v1/imports): one for the lender, so a row ID is recognised
+ * whichever file brings it again. Import batches name their own source.
+ */
+export const QUICK_IMPORT_SOURCE = "Quick import";
+const ROW_ID_RULE = "Choose the column that holds each row's source row ID: every row needs a different, non-empty value, up to 160 characters, so that a later import recognises the row.";
+/**
+ * Each row's source row ID, from the identity column: a different, non-empty value on every row, up to 160 characters,
+ * or the file is refused (400). The ID is kept with the record, so it is screened for bank details under its header.
+ */
+export function sourceRowIds(rows: Record<string, string>[], identityColumn: string | undefined, columns: string[]): string[] {
+  if (!identityColumn?.trim()) fail(`Map a row ID column. ${ROW_ID_RULE}`);
+  if (!columns.includes(identityColumn)) fail(`Map a row ID column. The file has no column named “${identityColumn}”. ${ROW_ID_RULE}`);
+  try { assertNoRealBankDetails(rows.map((row) => ({ [identityColumn]: row[identityColumn] }))); }
+  catch (error) { fail(error instanceof Error ? error.message : "The source row IDs could not be checked."); }
+  const ids = rows.map((row) => String(row[identityColumn] || "").trim());
+  if (ids.some((id) => !id || id.length > 160) || new Set(ids).size !== ids.length) fail("Choose a source row ID column with a different, non-empty value on every row (up to 160 characters).");
+  return ids;
+}
+/** A quick import's body with its row ID column: one sent without it is refused by importCsv in plain words, naming what to map, rather than as a missing property. */
+export const withRowIdColumn = (body: unknown): unknown => body && typeof body === "object" && !Array.isArray(body) ? { identityColumn: "", ...body } : body;
 const unsafeKey = (key: string) => ["__proto__", "constructor", "prototype"].includes(key);
 /**
  * A warning for each displayed value that fell back while a column went unused: a name taken from the reference
  * (or the row number) and a generated reference. A column is unused when it is skipped or names no field of the
- * kind, so the importer keeps it only as extra detail that nothing reads; the row identity column is metadata.
+ * kind, so the importer keeps it only as extra detail that nothing reads; the row identity column is metadata,
+ * unless it looks like the field that fell back (a reference chosen as the row ID fills no reference unless mapped).
  * Without an unused column a fallback is taken as intended: the source simply has no such value.
  */
 function fallbackWarnings(kind: string, columns: string[], targets: string[], identityColumn: string | undefined, fallbacks: { name: number; reference: number }): string[] {
   const fields = new Set(importFieldsOf(kind));
-  const unused = columns.filter((column, index) => targets[index] ? !fields.has(targets[index]!) : column !== identityColumn);
-  if (!unused.length) return [];
   const warnings: string[] = [];
   for (const field of ["name", "reference"] as const) {
     const rows = fallbacks[field], one = rows === 1, label = field === "name" ? "Name" : "Reference";
-    if (!rows) continue;
+    const unused = columns.filter((column, index) => targets[index] ? !fields.has(targets[index]!) : column !== identityColumn || suggestImportField(kind, column) === field);
+    if (!rows || !unused.length) continue;
     const fallback = field === "name"
       ? targets.includes(field) ? `${one ? "its name is" : "their names are"} taken from ${one ? "its reference (or its row number" : "their references (or their row numbers"} without one)` : "each record's name is taken from its reference (or its row number without one)"
       : targets.includes(field) ? `${one ? "it gets a generated reference" : "they get generated references"}` : "each record gets a generated reference";
@@ -33,7 +56,13 @@ function fallbackWarnings(kind: string, columns: string[], targets: string[], id
   }
   return warnings;
 }
-export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>;amountUnit?:'naira'|'kobo'; identityColumn?: string; identities?: { source: string; batchId: string; ids: string[] }}){
+/**
+ * Checks or commits a synthetic CSV of one kind, all rows or none. Every row carries a source row ID (a batch's own,
+ * or the identity column's for a quick import), and a row already imported under its source and row ID is skipped
+ * when its data is the same and refused when it differs. An invalid row reports every failing rule, worded for the
+ * operator's columns (importRowError), with the record API's words as its detail.
+ */
+export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>;amountUnit?:'naira'|'kobo'; identityColumn?: string; identities?: { source: string; batchId?: string; ids: string[] }}){
   if(!input.syntheticOnly)fail("Pre-data gate is closed. Only synthetic sample records are accepted.",403);
   if(!importKinds.includes(input.kind))fail("This resource does not support CSV import.");
   const amountUnit = input.amountUnit ?? 'kobo';
@@ -54,17 +83,23 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   if(parsed.length>500||!parsed.length)fail("Provide between 1 and 500 CSV records.");
   if (input.mapping && (Array.isArray(input.mapping) || Object.entries(input.mapping).some(([key, target]) => !columns.includes(key) || unsafeKey(key) || typeof target !== 'string' || unsafeKey(target)))) fail('Choose a valid destination or Skip column for each CSV column.');
   const destination = (key: string) => {
-    const chosen = input.mapping && Object.hasOwn(input.mapping, key) ? String(input.mapping[key]).trim() : key;
+    // The row ID column is the row's identity: it fills a field only when mapped to one, or when it is the reference or event ID itself.
+    const chosen = input.mapping && Object.hasOwn(input.mapping, key) ? String(input.mapping[key]).trim() : key === input.identityColumn && !['reference', 'eventId'].includes(key) ? '' : key;
     return chosen === 'amount' ? 'amountKobo' : chosen;
   };
   const targets = columns.map(destination);
   if (new Set(targets.filter(Boolean)).size !== targets.filter(Boolean).length) fail('Map each destination field only once. Choose Skip column for unused columns.');
-  const working=structuredClone(state), rows:{row:number;status:string;message:string}[]=[];
+  const identities = input.identities ?? { source: QUICK_IMPORT_SOURCE, ids: sourceRowIds(parsed, input.identityColumn, columns) };
+  // The column a field is read from, which a row error names.
+  const columnOf = (field: string) => columns.find((_column, index) => targets[index] === field);
+  const working=structuredClone(state), rows:{row:number;status:string;message:string;detail?:string}[]=[];
   const amounts = new Map<number, number>();
   let valid=0,invalid=0,imported=0;
   // Imported rows whose name or reference came from a fallback rather than the file.
   const fallbacks={name:0,reference:0};
   for(const [index,raw] of parsed.entries()){
+    // Every failing rule of the row, from reading its cells and from validation, so one check shows all there is to fix.
+    const problems: ValidationProblem[] = [];
     try{
       const record:Record<string,any>={data:{synthetic:true}}, blankAsZero:Record<string,number>={};
       for(const [key,value] of Object.entries(raw)){
@@ -80,22 +115,27 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
         }
         let decoded:unknown=value;
         if (numeric.has(target) && target.endsWith('Kobo')) {
-          decoded = csvAmountToKobo(value, amountUnit);
+          try { decoded = csvAmountToKobo(value, amountUnit); }
+          catch (error) { problems.push({ field: target, message: error instanceof Error ? error.message : 'Check this amount.' }); continue; }
           if (target === 'amountKobo') amounts.set(index + 2, decoded as number);
         } else if(numeric.has(target))decoded=Number(value);
-        if(boolean.has(target)) { if (!['true', 'false', ''].includes(value)) throw new Error(`${target} must be true or false.`); decoded=value==="true"; }
+        if(boolean.has(target)) {
+          if (!['true', 'false', ''].includes(value)) { problems.push({ field: target, message: `${target} must be true or false.`, rule: { type: 'boolean' } }); continue; }
+          decoded=value==="true";
+        }
         if(target==="consentGaps")decoded=value?value.split("|"):[];
         if(topFields.has(target))record[target]=decoded;else record.data[target]=decoded;
       }
-      const identity = input.identities && { source: input.identities.source, rowId: input.identities.ids[index], batchId: input.identities.batchId };
+      const identity = { source: identities.source, rowId: identities.ids[index]!, ...(identities.batchId ? { batchId: identities.batchId } : {}) };
       // Stored in the row's import identity and compared when the row is imported again: its first form.
       const identityFingerprint = canonicalDigest({ ...record, data: { ...record.data, ...blankAsZero } }, 'legacy-en-us-replacer');
-      if (identity) {
-        const prior = working.records.find(r => r.kind === input.kind && r.data.importIdentity?.source === identity.source && r.data.importIdentity?.rowId === identity.rowId);
-        if (prior) {
-          if (prior.data.importIdentity.fingerprint !== identityFingerprint) throw new Error('This source row ID was already imported with different data. Review the existing record; it cannot be replaced by importing again.');
-          rows.push({ row: index + 2, status: 'duplicate', message: 'Already imported: the same source row and data are saved.' }); continue;
-        }
+      // A row with a cell that could not be read is not compared with its saved row, nor as payment evidence, whose details
+      // include its amounts: it is not yet what the file means. Its other conflicts are reported with every other rule.
+      const readable = !problems.length;
+      const prior = working.records.find(r => r.kind === input.kind && r.data.importIdentity?.source === identity.source && r.data.importIdentity?.rowId === identity.rowId);
+      if (prior && readable) {
+        if (prior.data.importIdentity.fingerprint === identityFingerprint) { rows.push({ row: index + 2, status: 'duplicate', message: 'This source row ID was imported before with the same data; nothing is changed.' }); continue; }
+        problems.push({ message: 'This source row ID was already imported with different data. Review the existing record; it cannot be replaced by importing again.' });
       }
       const named=Boolean(record.name),referenced=Boolean(record.reference);
       record.name ||= record.reference || `${input.kind} import ${index+1}`;
@@ -114,21 +154,24 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       if(input.kind==="mandates"){record.data.origin="imported";record.data.consentGaps ||= [];}
       // Payment evidence is the same when its source event is or, without event IDs, when its source, reference, payer,
       // amounts, currency, connection and batch are. Evidence that only shares a reference is new: reconciliation
-      // merges it into its payment or holds it as a conflict, and never loses its money.
+      // merges it into its payment or holds it as a conflict, and never loses its money. The row's own saved record is
+      // no other record.
       const sameDetails=(saved:{reference:string;customerId:string;amountKobo:number;data:Record<string,any>})=>saved.reference===record.reference&&saved.customerId===(record.customerId||"")&&saved.amountKobo===record.amountKobo
         &&["grossAmountKobo","feeKobo","batchReference","currency","provider","providerConnection"].every(key=>saved.data[key]===record.data[key]);
-      const savedEvidence=input.kind==="observations"?working.records.find(r=>r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
-      if(savedEvidence&&!sameDetails(savedEvidence))throw new Error('This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.');
-      if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r.kind===input.kind&&r.reference===record.reference))){
-        if (identity) throw new Error('This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped.');
-        rows.push({row:index+2,status:"duplicate",message:input.kind==="observations"?"Skipped: the same payment evidence is already saved.":"Skipped: this source already has a record with the same reference."});continue;
+      const savedEvidence=input.kind==="observations"&&readable?working.records.find(r=>r!==prior&&r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
+      if(savedEvidence&&!sameDetails(savedEvidence))problems.push({ message: 'This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.' });
+      // A new row ID never takes over a saved record: a conflicting row is refused, not silently skipped.
+      else if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r!==prior&&r.kind===input.kind&&r.reference===record.reference))){
+        problems.push({ field: 'reference', message: 'This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped.' });
       }
-      validateRecord(working,ctx,input.kind,record);
-      if (identity) record.data.importIdentity = { ...identity, fingerprint: identityFingerprint };
+      try { validateRecord(working,ctx,input.kind,record,false,problems); }
+      catch (error) { problems.push({ message: error instanceof Error ? error.message : 'Invalid record.' }); }
+      if (problems.length) { invalid++; rows.push({ row: index + 2, status: 'invalid', ...importRowError(problems, { kind: input.kind, unit: amountUnit, columnOf }) }); continue; }
+      record.data.importIdentity = { ...identity, fingerprint: identityFingerprint };
       makeRecord(working,input.kind,{...record,createdAt:ctx.now,updatedAt:ctx.now});
       valid++;rows.push({row:index+2,status:"valid",message:input.commit?"Sample record imported.":"Checked and ready to import."});
       if(!named)fallbacks.name++;if(!referenced)fallbacks.reference++;
-    }catch(error){invalid++;rows.push({row:index+2,status:"invalid",message:error instanceof Error?error.message:"Invalid record."});}
+    }catch(error){invalid++;const message=error instanceof Error?error.message:"Invalid record.";rows.push({row:index+2,status:"invalid",message,detail:message});}
   }
   // All-or-nothing: review every error before committing.
   if(input.commit&&invalid===0){state.records=working.records;imported=valid;}

@@ -20,21 +20,28 @@ async function customerImport(csv: string) {
 
 describe('UX-I01 import outcome and correction guidance', () => {
   it('explains a duplicate-only check as complete without suggesting an unavailable import', async () => {
-    const customer = api.state().records.find(record => record.kind === 'customers')!;
-    await customerImport(`name,reference,consentProvenance\nExisting,${customer.reference},Synthetic`);
+    const user = await customerImport('row_id,name,reference,consentProvenance\nr1,Imported once,UX-I01-ONCE,Synthetic');
+    await user.click(screen.getByRole('button', { name: 'Import data' }));
+    await screen.findByRole('heading', { name: 'Import results' });
+    const commits = api.calls.filter(call => call.path === '/v1/imports' && (call.body as { commit?: boolean }).commit).length;
+    await user.click(screen.getByRole('button', { name: 'Check data' }));
+    await screen.findByRole('heading', { name: 'Check results' });
+    expect(within(screen.getByRole('region', { name: 'Check results' })).getByText(/Row 2 · Already imported:/)).toBeTruthy();
     expect(screen.getByText('This was a check only. No records were saved.')).toBeTruthy();
     expect(screen.getByText('All rows already exist. There is nothing new to import; existing records have not been changed.')).toBeTruthy();
     expect(screen.queryByText('Checked and ready. Review the preview, then select Import data.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Import data' })).toHaveProperty('disabled', true);
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Check results' }));
-    expect(api.calls.filter(call => call.path === '/v1/imports' && (call.body as { commit?: boolean }).commit)).toHaveLength(0);
+    expect(api.calls.filter(call => call.path === '/v1/imports' && (call.body as { commit?: boolean }).commit)).toHaveLength(commits);
+    expect(api.state().records.filter(record => record.reference === 'UX-I01-ONCE')).toHaveLength(1);
   });
 
   it('starts with row errors, exposes all results on demand and returns focus to the retained CSV', async () => {
-    const csv = 'name,reference,consentProvenance\nValid,UX-I01-VALID,Synthetic\nInvalid,UX-I01-INVALID,';
+    const csv = 'row_id,name,reference,consentProvenance\nr1,Valid,UX-I01-VALID,Synthetic\nr2,Invalid,UX-I01-INVALID,';
     const user = await customerImport(csv);
     const results = screen.getByRole('region', { name: 'Check results' });
     expect(within(results).getByText(/Row 3 · Invalid/)).toBeTruthy();
+    expect(within(results).getByText('Consent source or reference (column consentProvenance): Enter a value; it is blank on this row.')).toBeTruthy();
     expect(within(results).queryByText(/Row 2 · Valid/)).toBeNull();
     expect(api.state().records.some(record => record.reference === 'UX-I01-VALID')).toBe(false);
     await user.click(screen.getByRole('button', { name: 'Show all row results' }));
@@ -43,12 +50,12 @@ describe('UX-I01 import outcome and correction guidance', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('CSV content'));
     expect(screen.getByLabelText('CSV content')).toHaveProperty('value', csv);
     const referenceMap = screen.getByLabelText('Map reference');
-    expect(within(referenceMap).getByRole('option', { name: 'Name' })).toHaveProperty('disabled', true);
-    expect(screen.getByText(/rows without a reference cannot be recognised as duplicates/)).toBeTruthy();
+    expect(within(referenceMap).getByRole('option', { name: 'Full name' })).toHaveProperty('disabled', true);
+    expect(screen.getByText(/Every row needs a source row ID: a row imported before with the same ID and data is skipped/)).toBeTruthy();
   });
 
   it('recovers a lost committed import response with the same key and blocks a changed batch', async () => {
-    const user = await customerImport('name,consentProvenance\nReference-free sample,Synthetic');
+    const user = await customerImport('row_id,name,consentProvenance\nr1,Reference-free sample,Synthetic');
     const originalFetch = globalThis.fetch;
     const committed = new Map<string, Response>();
     const keys: string[] = [];
@@ -76,7 +83,7 @@ describe('UX-I01 import outcome and correction guidance', () => {
   });
 
   it('discards a lost import deliberately, which frees the wizard for a new import under a new key', async () => {
-    const user = await customerImport('name,consentProvenance\nDiscarded import sample,Synthetic');
+    const user = await customerImport('row_id,name,consentProvenance\nr1,Discarded import sample,Synthetic');
     const send = globalThis.fetch;
     const keys: string[] = [];
     globalThis.fetch = async (input, options) => {

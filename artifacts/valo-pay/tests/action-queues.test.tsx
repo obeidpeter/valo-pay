@@ -84,7 +84,7 @@ describe('actionable operational queues', () => {
       await screen.findByText('DEMO-LOAN-1004');
       await user.click(screen.getByRole('button', { name: 'Import sample data' }));
       await user.selectOptions(screen.getByLabelText('Amounts in your CSV *'), 'kobo');
-      await user.type(screen.getByRole('textbox', { name: 'CSV content' }), 'name,reference\nSample instalment,SAMPLE-001');
+      await user.type(screen.getByRole('textbox', { name: 'CSV content' }), 'row_id,name,reference\nr1,Sample instalment,SAMPLE-001');
       await user.click(screen.getByRole('button', { name: 'Check data' }));
       expect(await screen.findByRole('button', { name: 'Checking data…' })).toBeTruthy();
       await user.selectOptions(screen.getAllByLabelText('Active lender')[0]!, api.merchantIds[1]!);

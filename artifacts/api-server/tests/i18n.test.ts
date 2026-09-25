@@ -70,7 +70,7 @@ const csvText = csv.bytes.toString("utf8");
 assert.ok(csvText.startsWith("﻿"), "the CSV starts with the byte order mark");
 assert.ok(csvText.includes("Dami Adéyẹmí") && csvText.includes("Chiamaka Ọbi"), "the CSV carries the names unchanged");
 assert.equal(csv.contentType, "text/csv; charset=utf-8");
-const preview = importCsv(state, ctx, { kind: "customers", syntheticOnly: true, commit: false, csv: "﻿name,reference,consentProvenance,bankName,accountMasked,phoneMasked\r\nỌlá Adébáyọ̀,IMP-C001,Synthetic imported consent,Sandbox Bank,•••• 0001,+234 ••• ••01\r\n" });
+const preview = importCsv(state, ctx, { kind: "customers", syntheticOnly: true, commit: false, identityColumn: "reference", csv: "﻿name,reference,consentProvenance,bankName,accountMasked,phoneMasked\r\nỌlá Adébáyọ̀,IMP-C001,Synthetic imported consent,Sandbox Bank,•••• 0001,+234 ••• ••01\r\n" });
 assert.equal((preview as { valid: number }).valid, 1, "a file saved by a spreadsheet program, mark and all, is read");
 checks += 4;
 

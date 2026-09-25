@@ -113,7 +113,7 @@ test("an import whose name falls back warns, suggests the column and asks before
   const results = page.getByRole("region", { name: "Saved batch results" });
   await expect(results.getByText(warning)).toBeVisible();
   await expect(page.getByRole("combobox", { name: "full_name" })).toHaveValue("name");
-  await expect(page.getByText(/Suggested from the column names: full_name as Name\./)).toBeVisible();
+  await expect(page.getByText(/Suggested from the column names: full_name as Full name\./)).toBeVisible();
   await page.addScriptTag({ path: path.resolve("node_modules/axe-core/axe.min.js") });
   expect(
     await page.evaluate(async () =>

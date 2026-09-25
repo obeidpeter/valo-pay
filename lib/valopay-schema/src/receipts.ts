@@ -17,8 +17,8 @@ export const actionResultSchema = z.object({
   message: z.string(), record: valopayRecordSchema.optional(), data: recordDataSchema,
 }).strict();
 
-/** The outcome of one imported row (ImportRow). */
-export const importRowSchema = z.object({ row: count, status: z.string(), message: z.string() }).strict();
+/** The outcome of one imported row, and an invalid row's problems in the record API's words (ImportRow). */
+export const importRowSchema = z.object({ row: count, status: z.string(), message: z.string(), detail: z.string().optional() }).strict();
 
 /** How many rows were valid, invalid and imported, each row's outcome, a check's columns and preview, and its warnings (ImportResult). */
 export const importResultSchema = z.object({

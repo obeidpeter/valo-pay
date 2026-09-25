@@ -8,7 +8,7 @@ import {
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, assertNoRealBankDetails, assertSourceOpened, isSealedPayload } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
-import { importCsv } from "../lib/valopay-import";
+import { importCsv, sourceRowIds } from "../lib/valopay-import";
 import { batchSourceQuality, assertSourceBatchReady } from './source-quality';
 import { assertSourceExpectation } from './source-completeness';
 
@@ -89,15 +89,8 @@ function rowIdentities(input: BatchInput): string[] {
     Buffer.byteLength(input.csv) > 1500000
   )
     refuse("Use between 1 and 500 rows, up to 1.5 MB.");
-  const ids = rows.map((row) => String(row[input.identityColumn] || "").trim());
-  if (
-    ids.some((id) => !id || id.length > 160) ||
-    new Set(ids).size !== ids.length
-  )
-    refuse(
-      "Choose a source row ID column with a different, non-empty value on every row (up to 160 characters).",
-    );
-  return ids;
+  // The quick import's rule: a different, non-empty ID on every row, up to 160 characters.
+  return sourceRowIds(rows, input.identityColumn, Object.keys(rows[0]!));
 }
 export function saveImportBatch(
   state: DomainState,
