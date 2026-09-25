@@ -138,7 +138,10 @@ describe("exceptions", () => {
     // Only the two codes that decide it are offered, each named for what it does to the reversal rather than by the
     // generic mismatch's labels, and the box says to leave the exception open while Finance checks.
     expect(within(code).getAllByRole('option').map(option => option.textContent)).toEqual(['Choose an option', 'Provider state adopted; reversal waits for its payment', 'Platform state confirmed; reversal set aside for good']);
-    expect(within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent).toContain('Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile, the reversal applies to it and this exception closes.');
+    // A payment that arrives meanwhile is reversed only through the reversal's own connection (fourth review, finding 4).
+    const before = within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent;
+    expect(before).toContain('Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile through the same connection, the reversal applies to it; through another connection, the reversal is held for you with an exception of its own. Either way this exception closes.');
+    expect(before).not.toContain('if its payment arrives meanwhile, the reversal applies to it');
     const outcome = () => within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
     await user.selectOptions(code, 'provider_state_adopted');
     expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Provider state adopted; reversal waits for its payment');
