@@ -57,22 +57,22 @@ export function formatRecordMoney(record: { data?: { currency?: unknown } | null
  * Money held in other currencies than naira, as the contract's OtherCurrencies
  * lists it (a close's `otherCurrencies`, a customer position's
  * `unallocatedOtherCurrencies`: by currency code, a count and an amount in that
- * currency's minor unit), each in its own currency with what it counts, by
- * code: "USD 1,000.00 (1 payment)". Empty with none.
+ * currency's minor unit), by code: each currency's money in that currency
+ * ("USD 1,000.00") and what it counts ("1 payment"). Empty with none.
  */
-export function otherCurrencyAmounts(otherCurrencies: OtherCurrencies | null | undefined, singular: string, pluralForm?: string): string[] {
+export function otherCurrencyEntries(otherCurrencies: OtherCurrencies | null | undefined, singular: string, pluralForm?: string): { code: string; money: string; counted: string }[] {
   // A close's report reaches the page untyped, so anything but an object lists nothing.
   return Object.entries(otherCurrencies && typeof otherCurrencies === 'object' ? otherCurrencies as Record<string, Partial<OtherCurrencies[string]> | null> : {})
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([code, entry]) => `${formatMinor(Number(entry?.amount ?? 0), code)} (${formatCount(Number(entry?.count ?? 0), singular, pluralForm)})`);
+    .map(([code, entry]) => ({ code, money: formatMinor(Number(entry?.amount ?? 0), code), counted: formatCount(Number(entry?.count ?? 0), singular, pluralForm) }));
 }
 
 /**
  * A naira total with the money held beside it in other currencies, which is
- * never added to it, each as otherCurrencyAmounts writes it:
+ * never added to it, each with what it counts (otherCurrencyEntries):
  * "₦32,000.00 and USD 1,000.00 (1 payment)". With none, the naira total alone.
  */
 export function formatWithOtherCurrencies(kobo: number, otherCurrencies: OtherCurrencies | null | undefined, singular: string, pluralForm?: string): string {
-  const amounts = [formatKobo(kobo), ...otherCurrencyAmounts(otherCurrencies, singular, pluralForm)];
+  const amounts = [formatKobo(kobo), ...otherCurrencyEntries(otherCurrencies, singular, pluralForm).map(({ money, counted }) => `${money} (${counted})`)];
   return amounts.length === 1 ? amounts[0]! : `${amounts.slice(0, -1).join(', ')} and ${amounts.at(-1)}`;
 }

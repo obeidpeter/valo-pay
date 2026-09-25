@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, waitFor } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { queryClient, queryDefaults } from "@/App";
 import { customerTimeline } from "../../api-server/src/domain/timeline";
 
@@ -46,9 +46,9 @@ describe("customer timeline", () => {
     expect(position.textContent).toContain("Unapplied credit");
     // The service derives the money beside the naira (the position the fake API serves is the domain's), and the page shows it as it comes.
     expect(customerTimeline(api.state(), ada.id).position.unallocatedOtherCurrencies).toEqual({ EUR: { count: 2, amount: 5_000 }, USD: { count: 1, amount: 100_000 } });
-    const others = screen.getByText("Unapplied in other currencies").parentElement!;
-    expect(others.textContent!.replace(/\u00a0/g, " ")).toContain("EUR 50.00 (2 payments)");
-    expect(others.textContent!.replace(/\u00a0/g, " ")).toContain("USD 1,000.00 (1 payment)");
+    // Each currency is an item of its own under the label, by code, as close evidence writes it.
+    const others = screen.getByRole("list", { name: "Unapplied in other currencies" });
+    expect(within(others).getAllByRole("listitem").map((item) => item.textContent!.replace(/\u00a0/g, " "))).toEqual(["EUR 50.00 (2 payments)", "USD 1,000.00 (1 payment)"]);
     // The payment itself is listed in its own currency, never as naira.
     const listed = (await screen.findByRole("heading", { name: "Payments" })).closest("section")!;
     expect(listed.textContent!.replace(/\u00a0/g, " ")).toContain("SBX-USD-CARDUSD 1,000.00");

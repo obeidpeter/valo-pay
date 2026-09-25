@@ -7,7 +7,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerHistory, getGetCustomerHistoryQueryKey, } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
-import { formatRecordMoney, otherCurrencyAmounts } from '@/lib/currencies';
+import { formatRecordMoney, otherCurrencyEntries } from '@/lib/currencies';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
 import { Link, useParams, useSearch, useSearchParams } from 'wouter';
@@ -95,7 +95,7 @@ export default function CustomerTimelinePage() {
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;
   // Money in another currency that the customer's payments hold unapplied, never added to the naira credit.
-  const otherCredit = otherCurrencyAmounts(position?.unallocatedOtherCurrencies, 'payment');
+  const otherCredit = otherCurrencyEntries(position?.unallocatedOtherCurrencies, 'payment');
 
   return (
     <div className="space-y-6">
@@ -143,9 +143,12 @@ export default function CustomerTimelinePage() {
                 <span className="text-sm text-muted-foreground">Unapplied credit</span>
                 <span className="text-lg font-bold font-mono">{formatKobo(Number(position?.unallocatedKobo || 0))}</span>
               </div>
-              {otherCredit.length > 0 && <div className="flex justify-between items-baseline gap-3">
-                <span className="text-sm text-muted-foreground">Unapplied in other currencies</span>
-                <span className="text-right text-sm font-semibold font-mono">{otherCredit.map(amount => <span key={amount} className="block">{amount}</span>)}</span>
+              {/* A list under its label, each currency on a line of its own, as the card is narrow beside the history. */}
+              {otherCredit.length > 0 && <div>
+                <span id="other-credit" className="text-sm text-muted-foreground">Unapplied in other currencies</span>
+                <ul aria-labelledby="other-credit" className="mt-1 space-y-0.5 text-right text-sm">
+                  {otherCredit.map(({ code, money, counted }) => <li key={code}><span className="whitespace-nowrap font-mono font-semibold">{money}</span> <span className="ml-1 whitespace-nowrap text-muted-foreground">({counted})</span></li>)}
+                </ul>
               </div>}
               <p className="text-[11px] text-muted-foreground">{String(position?.note || 'Calculated from instalments and recorded payments. We never hold money.')}</p>
             </div>
