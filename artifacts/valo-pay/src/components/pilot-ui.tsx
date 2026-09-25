@@ -82,11 +82,19 @@ export function PilotError({
     </div>
   ) : null;
 }
+/**
+ * A change whose answer was lost: Check original request, Operations for a
+ * change it records, and Discard original request, which moves focus to `next`,
+ * the control that sent the request where the page names it, and otherwise to
+ * the page's own nearest control.
+ */
 export function RecoveryNotice({
   mutation,
   persistent = true,
+  next,
 }: {
   persistent?: boolean;
+  next?: () => HTMLElement | null | undefined;
   mutation: {
     hasUnconfirmedOutcome: boolean;
     isPending: boolean;
@@ -128,6 +136,7 @@ export function RecoveryNotice({
         <DiscardOriginalRequest
           disabled={mutation.isPending}
           onDiscard={mutation.abandonUnconfirmed}
+          next={next}
         />
       </div>
     </div>
