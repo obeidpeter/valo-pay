@@ -888,7 +888,7 @@ section("a waiting reversal Finance resolved under an earlier build", () => {
     const outcome = run(code);
     equal([outcome.reversal, outcome.debit, outcome.due, outcome.raised], [["resolved", "reversal_set_aside_after_review", true], ["allocated", "none"], ["paid", 0], []], `${code}: the first reconciliation after the upgrade sets the reversal aside, as the earlier build said, and the debit stands`);
     const noted = code !== "platform_state_confirmed";
-    equal([outcome.upgraded.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence PSK-UNSEEN-1 .*as the earlier build that recorded Finance's resolution said it would/.test(String(outcome.upgraded.data.auditNote))], [noted ? 1 : 0, noted], `${code}: the close's audit entry says so where the code now means otherwise (${outcome.upgraded.data.auditNote})`);
+    equal([outcome.upgraded.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence PSK-UNSEEN-1 .*, as a resolution recorded before resolutions recorded their rules is read, whatever its code \(the build before the third review said any resolution sets it aside\): it reverses nothing/.test(String(outcome.upgraded.data.auditNote)) && !/said it would/.test(String(outcome.upgraded.data.auditNote))], [noted ? 1 : 0, noted], `${code}: the close's audit entry says so where the code now means otherwise, without saying which build recorded it (${outcome.upgraded.data.auditNote})`);
     equal([outcome.later.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence/.test(String(outcome.later.data.auditNote ?? ""))], [0, false], `${code}: once`);
   }
   // A resolution this build records carries its rule version, and follows the codes as they are now.

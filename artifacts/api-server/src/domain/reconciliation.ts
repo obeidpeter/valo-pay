@@ -2014,12 +2014,17 @@ function separatedLinesNote(separated: readonly { line: TypedRecord<"observation
   return `Took ${counted(separated.length, "settlement line")} in another currency than its batch out of the batch, as a batch holds one currency: ${named.join("; ")}${more}.`;
 }
 
-/** What the audit entry adds for them: each reversal, the code Finance chose and why it was set aside. */
+/**
+ * What the audit entry adds for them: each reversal, the code Finance chose and
+ * why it was set aside. It does not say which build recorded the resolution,
+ * which nothing on the record tells: the build merged on 25 September recorded
+ * none either, and told Finance that provider_state_adopted keeps it waiting.
+ */
 function earlierResolutionsNote(kept: readonly { reversal: TypedRecord<"observations">; exception: TypedRecord<"exceptions"> }[]): string | undefined {
   if (!kept.length) return undefined;
   const named = kept.slice(0, 3).map(({ reversal, exception }) => `${reversal.reference} (${moneyText(reversal.amountKobo, currencyOf(reversal))}, resolved as ${exception.data.resolutionCode})`);
   const more = kept.length > 3 ? `; and ${counted(kept.length - 3, "more", "more")}` : "";
-  return `Set aside reversal evidence ${named.join("; ")}${more}, as the earlier build that recorded Finance's resolution said it would: it reverses nothing, even if its payment arrives later.`;
+  return `Set aside reversal evidence ${named.join("; ")}${more}, as a resolution recorded before resolutions recorded their rules is read, whatever its code (the build before the third review said any resolution sets it aside): it reverses nothing, even if its payment arrives later.`;
 }
 
 /** When a pay-by-bank checkout's outcome became unknown: its first unknown event, else its last change. */
