@@ -301,6 +301,11 @@ try {
   // The Paystack ingress's read without the lock runs as the service member too, so it finds only what the lock could take.
   assert.deepEqual(await Promise.all([["lender-a", "workspace-a"], ["lender-a", "workspace-b"], ["lender-b", "workspace-b"], ["lender-gone", "workspace-a"]].map(([merchant, workspace]) => store.merchantInWorkspace(merchant!, workspace!))), [true, false, false, false], "A lender is found only in its own workspace, and never outside the service member's organisation.");
   assert.equal(await store.inMerchantAsSystem("lender-b", `${store.SYSTEM_ACTOR_PREFIX}isolation probe`, async () => true), undefined, "The lock cannot take another organisation's lender either.");
+  // The daily audit check runs as the service member too: it walks and records its own organisation's lender, once a day, and cannot see another's.
+  assert.equal((await store.checkAuditChainDaily("lender-a"))?.valid, true, "The daily audit check walks the service member's lender under the restricted login.");
+  assert.equal(typeof (await admin.query(`SELECT settings->>'dailyAuditCheckAt' AS at FROM "${schema}".valopay_merchants WHERE id='lender-a'`)).rows[0].at, "string", "and records that it ran");
+  assert.equal(await store.checkAuditChainDaily("lender-a"), undefined, "The day's check runs once.");
+  assert.equal(await store.checkAuditChainDaily("lender-b"), undefined, "Another organisation's lender is not found.");
   // Actual acceptance and ON CONFLICT renewal under the restricted LOGIN.
   // Only Clerk's verified-email lookup is replaced; no external call is made.
   const { clerkClient } = await import("@clerk/express"), previousGetUser = clerkClient.users.getUser;
@@ -397,7 +402,7 @@ try {
   assert.deepEqual([ready.status, ready.schema], ["ok", { status: "ok", missing: [] }], "readiness checks the isolated runtime schema");
   await store.closeDatabase(); runtimePool = undefined;
   assert.deepEqual(await publicFlags(), publicBefore, "The rehearsal leaves the application's own tables as they were.");
-  console.log("Runtime isolation passed: migrations refused without opt-in or in the application's schema, actual restricted login, ten forced-RLS tables, the reviewed policies, helpers, workspace guard, role attributes, memberships, privileges and schema objects compared by definition (twenty-two weakenings refused), readiness from the transaction's own check and of the isolated schema, once-per-statement lender scope at pilot scale, pooled-scope reset, no rows or writes without a full scope, own-lender writes and rollback, cross-lender, identity-column, delete and row-security changes refused, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
+  console.log("Runtime isolation passed: migrations refused without opt-in or in the application's schema, actual restricted login, ten forced-RLS tables, the reviewed policies, helpers, workspace guard, role attributes, memberships, privileges and schema objects compared by definition (twenty-two weakenings refused), readiness from the transaction's own check and of the isolated schema, once-per-statement lender scope at pilot scale, pooled-scope reset, no rows or writes without a full scope, own-lender writes and rollback, cross-lender, identity-column, delete and row-security changes refused, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks, the daily audit check as the service member, and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

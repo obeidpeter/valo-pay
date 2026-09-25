@@ -440,7 +440,7 @@ export const getGetOverviewUrl = (params: GetOverviewParams,) => {
 }
 
 /**
- * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified, or since the chain's head once the lender keeps a break. The last one verified stays before the first entry that breaks the chain, and a break this check or verify_audit found is kept, so it stays in the feed after any later write until verify_audit finds the chain valid again.
+ * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified, or since the chain's head once the lender keeps a break. The last one verified stays before the first entry that breaks the chain. This read stores nothing: once a completed write, verify_audit or the daily check that follows the lender's first daily close of the day has recorded a break, the lender keeps it, and it stays in the feed after any later write until a check of the whole chain (verify_audit or the daily check) finds the chain valid again. A break only this check has found clears if the chain is repaired before one of them records it.
  * @summary The operations overview for one lender
  */
 export const getOverview = async (params: GetOverviewParams, options?: Parameters<typeof customFetch>[1]): Promise<Overview> => {

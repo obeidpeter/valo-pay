@@ -6,11 +6,13 @@
 // without moving the head is followed, never forked, and the export worker's
 // claim reads the head only once it holds the lender. The overview checks the
 // chain from that point and shows the eight latest entries; verify_audit
-// checks it whole and records how far it held. A break either finds (a fork, a
-// gap, a changed entry, an entry whose sequence is not a whole number, which
-// is a break at its place and hides no fork) is kept for the lender, so it
-// stays reported until verify_audit finds the chain valid again, and each
-// later check reads only the entries since the head.
+// checks it whole and records how far it held. A break (a fork, a gap, a
+// changed entry, an entry whose sequence is not a whole number, which is a
+// break at its place and hides no fork) that a completed write or verify_audit
+// records is kept for the lender, so it stays reported until a walk of the
+// whole chain finds it valid again (verify_audit here; the daily check is in
+// audit-daily-check), and each later check reads only the entries since the
+// head.
 // Every load has earlier closes as summaries, settings read only the latest
 // close, the records list has every close as its summary, and a list of a kind
 // that grows with history is capped when it names no limit.
@@ -341,7 +343,7 @@ try {
       await pool.query("DELETE FROM valopay_records WHERE id=$1", [forkId]);
       assert.equal(await entryNamed(forked), head.data.sequence, "a repair leaves the break the lender knows of");
       await write(forked, "After the repair");
-      assert.equal(await entryNamed(forked), head.data.sequence, "and so does a later write: only verify_audit reads the whole chain again");
+      assert.equal(await entryNamed(forked), head.data.sequence, "and so does a later write: only a walk of the whole chain reads it again");
       assert.equal((await verifyChain(forked)).valid, true, "verify_audit finds the chain valid again");
       assert.deepEqual([await overview(forked), (await chainOf(forked))!.broken], [false, undefined], "which clears the break and the overview's alert");
       await write(forked, "After the check");

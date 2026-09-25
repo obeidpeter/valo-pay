@@ -20,11 +20,17 @@
  * nobody has changed for closeRules.idleSandboxDays has its automatic close
  * switched off instead of run.  A stop ends the pass after the lender in
  * progress; the rest are still due at the next start.
+ *
+ * After its closes, the pass checks the whole audit chain
+ * (checkAuditChainDaily) of each lender it gave its first close of the WAT
+ * day, once a day however many missed business dates it catches up, and of
+ * each lender a person closed meanwhile in this process (auditChecks), while
+ * its budget lasts: the checks it leaves wait for the next pass.
  */
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import { closeRules } from "@workspace/valopay-schema";
-import { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inMerchantAsSystem, initialiseCloseCursors, loadState, recordScheduledCloseFailure, sandboxInactiveFor, saveState, settleChanges } from "./valopay-store";
+import { SYSTEM_ACTOR_PREFIX, appendAudit, checkAuditChainDaily, dailyAuditCheckDue, dueScheduledCloses, inMerchantAsSystem, initialiseCloseCursors, loadState, recordScheduledCloseFailure, sandboxInactiveFor, saveState, settleChanges, writeAuditCheck } from "./valopay-store";
 import { runDailyClose } from "../domain/actions";
 import { pauseIdleSandboxClose, scheduledCloseDue } from "../domain/close";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -119,9 +125,34 @@ export interface CloseRunOptions {
   /** Once aborted, the pass ends after the lender in progress. */
   signal?: AbortSignal;
   onlyMerchantIds?: readonly string[];
+  /**
+   * The lenders whose daily audit check is still to run: those a person closed in this process, to which the pass adds
+   * those it closes. After its closes, the pass runs each one's check while its budget lasts, taking them from the set;
+   * the rest stay for the next pass (a one-shot pass, which has none, leaves them to each lender's next close).
+   */
+  auditChecks?: Set<string>;
 }
 
-type Outcome = Omit<ClosedMerchant, "merchantId"> | { paused: true };
+type Outcome = (Omit<ClosedMerchant, "merchantId"> & { auditCheckDue: boolean }) | { paused: true };
+
+/**
+ * Runs the daily check of the lender's whole audit chain and logs what it
+ * found (`audit.daily_check`, an error when the chain is broken), or why it
+ * could not (`audit.daily_check_failed`); it never throws. A check that
+ * fails, or finds the day's check already run, leaves the lender as it was.
+ */
+export async function runDailyAuditCheck(merchantId: string, log?: Logger): Promise<void> {
+  const started = Date.now();
+  try {
+    const found = await checkAuditChainDaily(merchantId);
+    if (!found) return;
+    const fields = { event: "audit.daily_check", merchantId, ...found, durationMs: Date.now() - started };
+    if (found.valid) log?.info(fields, found.cleared ? "Daily audit log check: every entry intact, and the recorded break is cleared" : "Daily audit log check: every entry intact");
+    else log?.error(fields, `Daily audit log check: the chain is broken at entry ${found.brokenAt}`);
+  } catch (error) {
+    log?.error({ event: "audit.daily_check_failed", merchantId, err: error, durationMs: Date.now() - started }, "Daily audit log check could not run; the lender's next daily close runs it");
+  }
+}
 
 /**
  * One pass: give legacy merchants a cursor, then close due merchants batch
@@ -138,6 +169,7 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
   const batchSize = options.batchSize ?? closeRules.batchSize, budgetMs = options.budgetMs ?? closeRules.passBudgetSeconds * 1000;
   const log = options.log?.child({ job: "scheduled_close", runId: run.runId });
   const spent = () => options.signal?.aborted === true || Date.now() - started >= budgetMs;
+  const auditChecks = options.auditChecks ?? new Set<string>();
   run.initialised = await initialiseCloseCursors();
   const exclude = new Set<string>();
   // Whether the pass saw the end of what was due: a batch shorter than batchSize, every lender of it taken up.
@@ -160,14 +192,16 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
             await saveState(ctx, state);
             return { paused: true };
           }
-          const result = runDailyClose(state, ctx, "scheduled");
+          // The close lists a broken audit chain as its own write checked it; the day's check of the whole chain follows the pass's closes.
+          const result = runDailyClose(state, ctx, "scheduled", undefined, writeAuditCheck(ctx, state));
+          const auditCheckDue = dailyAuditCheckDue(state.settings, ctx.now);
           enrolEligibleFailures(state, ctx);
           if(result.record?.kind==='closes')bindCloseReviewBasis(state,result.record);
           // As for a close run by hand, the audit entry names the exceptions the close closed because their condition cleared.
           appendAudit(state, ctx, "daily_close", result.record!.id, withAuditNote(result.message, result.data.auditNote), settleChanges(ctx, state));
           await saveState(ctx, state);
           const schedule = result.data.schedule as { late?: boolean; delayMinutes?: number | null } | undefined;
-          return { closeId: result.record!.id, late: schedule?.late === true, delayMinutes: schedule?.delayMinutes ?? null };
+          return { closeId: result.record!.id, late: schedule?.late === true, delayMinutes: schedule?.delayMinutes ?? null, auditCheckDue };
         });
         if (!outcome) {
           run.skipped.push(merchantId);
@@ -176,9 +210,12 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
           run.paused.push(merchantId);
           log?.info({ merchantId, idleDays: closeRules.idleSandboxDays }, "scheduled daily close paused for an idle sandbox");
         } else {
-          run.closed.push({ merchantId, ...outcome });
+          const { auditCheckDue, ...closed } = outcome;
+          run.closed.push({ merchantId, ...closed });
           exclude.add(merchantId);
-          log?.info({ merchantId, ...outcome }, "scheduled daily close completed");
+          log?.info({ merchantId, ...closed }, "scheduled daily close completed");
+          // Checked after the pass's closes, so no lender's close waits for another's walk.
+          if (auditCheckDue) auditChecks.add(merchantId);
         }
       } catch (error) {
         const retry = await recordScheduledCloseFailure(merchantId).catch((recordError: unknown) => {
@@ -192,12 +229,19 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
     }
     if (due.length < batchSize) { drained = run.examined - takenBefore === due.length; break; }
   }
+  // The day's audit checks, one at a time on the pass's connection, while the budget lasts: the rest stay in the set for
+  // the next pass, and a stop, or a one-shot pass, leaves them to each lender's next close.
+  for (const merchantId of auditChecks) {
+    if (spent()) break;
+    auditChecks.delete(merchantId);
+    await runDailyAuditCheck(merchantId, log);
+  }
   // Ended by its budget rather than by a stop or the end of what was due: the lenders it did not take up are still due.
   run.budgetSpent = !drained && options.signal?.aborted !== true;
   if (run.initialised) log?.info({ initialised: run.initialised }, "close cursors initialised for merchants that had none");
-  // One line per pass that found work, with its duration; a quiet pass is a debug line so the log is not a metronome.
-  const summary = { event: "close.run", durationMs: Date.now() - started, initialised: run.initialised, batches: run.batches, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length };
-  if (run.examined || run.failed.length) log?.info(summary, "scheduled close pass finished"); else log?.debug(summary, "scheduled close pass found nothing due");
+  // One line per pass that found work, with its duration and the audit checks its budget left; a quiet pass is a debug line so the log is not a metronome.
+  const summary = { event: "close.run", durationMs: Date.now() - started, initialised: run.initialised, batches: run.batches, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length, auditChecksLeft: auditChecks.size };
+  if (run.examined || run.failed.length || auditChecks.size) log?.info(summary, "scheduled close pass finished"); else log?.debug(summary, "scheduled close pass found nothing due");
   return run;
 }
 
@@ -246,7 +290,7 @@ export async function runClosePassOnce(options: CloseRunOptions = {}, pass: (opt
   }
 }
 
-/** The running scheduler: stop it, run a pass now, or wait for the pass in progress. */
+/** The running scheduler: stop it, run a pass now, wait for the pass in progress, or ask for a lender's daily audit check. */
 export interface CloseScheduler {
   /** Stops the timers and ends the pass in progress after the lender it is closing. */
   stop(): void;
@@ -254,6 +298,8 @@ export interface CloseScheduler {
   tick(): Promise<CloseRun | null>;
   /** Waits for the pass in progress, if any, without starting one: what a shutdown does before it ends the pool. */
   settle(): Promise<void>;
+  /** Runs the lender's daily audit check after a person's close, in a pass started now or at the end of the pass in progress (or, once that has run its checks, of the next tick's). */
+  checkAudit(merchantId: string): void;
 }
 
 /**
@@ -265,12 +311,13 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
   const intervalMs = options.intervalMs ?? closeRules.tickSeconds * 1000;
   const budgetMs = options.budgetMs ?? Math.min(closeRules.passBudgetSeconds * 1000, Math.round(intervalMs * 0.75));
   const stopping = new AbortController();
+  const auditChecks = new Set<string>();
   let running: Promise<CloseRun | null> | null = null;
   const tick = (): Promise<CloseRun | null> => {
     if (running) return running;
     applySchedulerEvent({ type: "ticked", at: new Date().toISOString() });
     const started = Date.now();
-    running = runDueCloses({ batchSize: options.batchSize, log: options.log, onlyMerchantIds: options.onlyMerchantIds, budgetMs, signal: stopping.signal })
+    running = runDueCloses({ batchSize: options.batchSize, log: options.log, onlyMerchantIds: options.onlyMerchantIds, budgetMs, signal: stopping.signal, auditChecks })
       .then((run) => {
         const at = new Date().toISOString();
         applySchedulerEvent({ type: "succeeded", at, run: run.examined || run.failed.length ? { runId: run.runId, at, durationMs: Date.now() - started, initialised: run.initialised, batches: run.batches, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length } : null });
@@ -291,5 +338,10 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
     stop() { clearTimeout(first); clearInterval(timer); stopping.abort(); applySchedulerEvent({ type: "stopped" }); },
     tick,
     settle() { return running ? running.then(() => undefined) : Promise.resolve(); },
+    checkAudit(merchantId) {
+      if (stopping.signal.aborted) return;
+      auditChecks.add(merchantId);
+      void tick();
+    },
   };
 }
