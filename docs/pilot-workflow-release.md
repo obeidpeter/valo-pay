@@ -16,7 +16,7 @@ Create an empty synthetic lender → save/check/correct an import batch → comm
 
 ## Deployment boundary
 
-Apply the additive schema to a disposable database first. Verify the code and migration before applying them to the existing synthetic development preview. The code reaches main in one pull request from the development branch, codex/investor-presentation, which supersedes the stack of draft pull requests #48 to #53. Production, live financial operations, external email, real customer ingestion and real Clerk/provider acceptance are separate gates.
+Apply the additive schema to a disposable database first. Verify the code and migration before applying them to the existing synthetic development preview. The code reaches main in one pull request from the development branch, codex/investor-presentation, which supersedes the stack of open draft pull requests #48 to #51 and #53. Production, live financial operations, external email, real customer ingestion and real Clerk/provider acceptance are separate gates.
 
 The forced-RLS rehearsal of the time, since removed, was independent of this application repository. This release must not claim forced row security protects the default runtime. Staff access supplements the repository's explicit workspace/lender predicates and requires an independent security review before real data.
 
