@@ -2921,7 +2921,7 @@ export const getCreatePilotLenderUrl = () => {
 }
 
 /**
- * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.
+ * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused. A name that matches a lender already in the workspace, ignoring letter case and surrounding or repeated spaces, is refused (409) with an error naming that lender, in the sandbox and on a staff host alike, so a creation whose answer was lost and is sent again with a new key cannot make a second lender.
  * @summary Create a synthetic lender
  */
 export const createPilotLender = async (pilotLenderInput: PilotLenderInput, options?: Parameters<typeof customFetch>[1]): Promise<Merchant> => {

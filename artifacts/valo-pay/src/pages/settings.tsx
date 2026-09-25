@@ -20,6 +20,7 @@ import { RecordDialog } from '@/components/record-dialog';
 import { HandBackContext, handBackResult } from '@/components/hand-back-context';
 import { LoadProblem, RefreshProblem } from '@/components/load-problem';
 import { DiscardOriginalRequest, DISCARD_ORIGINAL_WARNING } from '@/components/discard-original-request';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 
 export default function SettingsPage() {
   const { merchantId, workspace } = useWorkspace();
@@ -262,7 +263,7 @@ export default function SettingsPage() {
           </Button>
         </div>
         {updateRole.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The role-change response is unconfirmed. Retry the original request before selecting another role.</p><DiscardOriginalRequest disabled={updateRole.isPending} onDiscard={updateRole.abandonUnconfirmed} /></div>}
-        {requestInstruction.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The block-test response is unconfirmed. Retry the original test to recover its result. This does not enable live instructions.</p><DiscardOriginalRequest disabled={requestInstruction.isPending} onDiscard={requestInstruction.abandonUnconfirmed} /></div>}
+        {requestInstruction.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The block-test response is unconfirmed. Retry the original test to recover its result. This does not enable live instructions. {KEPT_IN_OPERATIONS}</p><div className="flex flex-wrap items-center gap-3"><OpenOperations /><DiscardOriginalRequest disabled={requestInstruction.isPending} onDiscard={requestInstruction.abandonUnconfirmed} /></div></div>}
         {otherOutcomeUnconfirmed && <p className="text-sm text-muted-foreground mt-3">Resolve the unconfirmed settings or control request before changing roles.</p>}
       </section>}
 
@@ -288,7 +289,7 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
-          {execAlert && <div className="px-6 pt-6"><FormAlert title={updateExecSettings.hasUnconfirmedOutcome ? 'Settings outcome unconfirmed' : 'Settings not saved'}>{execAlert}{updateExecSettings.hasUnconfirmedOutcome && <div className="mt-2"><DiscardOriginalRequest disabled={updateExecSettings.isPending || refreshingLatest} onDiscard={() => { updateExecSettings.abandonUnconfirmed(); setExecAlert(''); setExecConflict(false); }} /></div>}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
+          {execAlert && <div className="px-6 pt-6"><FormAlert title={updateExecSettings.hasUnconfirmedOutcome ? 'Settings outcome unconfirmed' : 'Settings not saved'}>{execAlert}{updateExecSettings.hasUnconfirmedOutcome && <><p className="mt-2">{KEPT_IN_OPERATIONS}</p><div className="mt-2 flex flex-wrap items-center gap-3"><OpenOperations /><DiscardOriginalRequest disabled={updateExecSettings.isPending || refreshingLatest} onDiscard={() => { updateExecSettings.abandonUnconfirmed(); setExecAlert(''); setExecConflict(false); }} /></div></>}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
           <div className="p-6 space-y-6">
             <fieldset disabled={updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome || refreshingLatest} className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
@@ -449,7 +450,7 @@ export default function SettingsPage() {
                 </Button>
                 </div>
               </div>
-              {killSwitch.hasUnconfirmedOutcome && <div ref={stopNotice} role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} next={() => keepButton.current ?? stopButton.current} /></div>}
+              {killSwitch.hasUnconfirmedOutcome && <div ref={stopNotice} role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action. {KEPT_IN_OPERATIONS}</p><div className="flex flex-wrap items-center gap-3"><OpenOperations /><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} next={() => keepButton.current ?? stopButton.current} /></div></div>}
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">
                   <AlertTriangle className="h-3 w-3" /> Emergency stop active. No instructions can be sent to a provider or bank.
@@ -469,7 +470,7 @@ export default function SettingsPage() {
                 <p className="mt-2 text-xs text-muted-foreground">{staffPilot ? 'Turning the stop off needs two administrators: your request waits until another administrator approves it.' : 'In a pilot, turning the stop off needs a second administrator’s approval. In this sandbox one person plays every role, so it takes effect at once.'}</p>
               )}
               {/* Outside the box: a refetch that shows the request settled, as a lost approval may have settled it, takes the box away. */}
-              {approveStop.hasUnconfirmedOutcome && <div ref={approvalNotice} role="alert" className="mt-3 space-y-2 text-sm"><p>The approval's response is unconfirmed. The stop may already be off. Retry the original approval to recover its result.</p><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} busy={approveStop.isPending} busyLabel="Checking original request…">Retry original approval</Button><DiscardOriginalRequest disabled={approveStop.isPending} onDiscard={approveStop.abandonUnconfirmed} next={() => approveButton.current ?? stopButton.current} /></div></div>}
+              {approveStop.hasUnconfirmedOutcome && <div ref={approvalNotice} role="alert" className="mt-3 space-y-2 text-sm"><p>The approval's response is unconfirmed. The stop may already be off. Retry the original approval to recover its result. {KEPT_IN_OPERATIONS}</p><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} busy={approveStop.isPending} busyLabel="Checking original request…">Retry original approval</Button><OpenOperations /><DiscardOriginalRequest disabled={approveStop.isPending} onDiscard={approveStop.abandonUnconfirmed} next={() => approveButton.current ?? stopButton.current} /></div></div>}
               {stopResult && <p ref={stopResultMessage} role="status" className="mt-3 text-sm">{stopResult}</p>}
             </div>
           </div>

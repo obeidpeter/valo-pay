@@ -1,7 +1,7 @@
 // Team & access on a staff host, with the directory the API answers each viewer: what a colleague's row counts, and
 // what an applied change or a decision leaves on the page and where focus goes once its button has gone (console
 // review of 24 September, items 3 to 5).
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { StaffDirectory } from "@workspace/valopay-schema";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
@@ -217,4 +217,40 @@ it("moves focus to the decision's message when Approve invitation, Approve chang
     await waitFor(() => expect(document.activeElement).toBe(message));
   }
   expect(within(panel).getByText("Nothing is waiting for approval.")).toBeTruthy();
+});
+
+// Backlog decision UX-B02-X1: team and access changes stay out of the operations journal, so while one's outcome is
+// unconfirmed the page asks before it is left or reloaded, which would lose the only way to check it.
+const leaving = () => { const unload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unload); return unload.defaultPrevented; };
+for (const lost of ["an access change", "an invitation"] as const) it(`asks before leaving Team & access while ${lost}'s outcome is unconfirmed`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const send = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    const path = new URL(url, "http://localhost").pathname;
+    if ((path === "/api/v1/team/members/m-ops" && options?.method === "PATCH") || (path === "/api/v1/team/invitations" && options?.method === "POST")) throw new TypeError("Failed to fetch");
+    return send(input, options);
+  };
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  expect(leaving()).toBe(false);
+  if (lost === "an access change") {
+    await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Access for Chidi Ops"), "suspended");
+    await user.type(within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops"), "On leave for two weeks");
+    await user.click(within(card("Chidi Ops")).getByRole("button", { name: "Save access change" }));
+  } else {
+    await user.type(screen.getByLabelText("Verified email"), "new.colleague@example.test");
+    await user.click(screen.getByRole("button", { name: "Create invitation" }));
+  }
+  await screen.findByText("Outcome not confirmed");
+  expect(leaving()).toBe(true);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await user.click(screen.getAllByRole("link", { name: "Overview" })[0]!);
+  expect(confirm).toHaveBeenCalled();
+  expect(window.location.pathname).toBe("/team");
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole("button", { name: "Discard original request" }));
+  await waitFor(() => expect(screen.queryByText("Outcome not confirmed")).toBeNull());
+  expect(leaving()).toBe(false);
 });

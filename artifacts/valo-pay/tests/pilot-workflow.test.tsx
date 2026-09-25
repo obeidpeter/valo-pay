@@ -576,3 +576,41 @@ it("asks for confirmation before revoking a staff member, and keeps their access
   // Other access changes need no extra step.
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+// Backlog decision UX-B02-X1: lender creation and access readiness stay out of the operations journal, so while one's
+// outcome is unconfirmed the page asks before it is left or reloaded, which would lose the only way to check it.
+const leaving = () => { const unload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unload); return unload.defaultPrevented; };
+for (const page of ["/pilot", "/team"] as const) it(`asks before leaving ${page} while its unrecorded change's outcome is unconfirmed`, async () => {
+  const user = userEvent.setup();
+  const send = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/v1/team/readiness" && (options?.method ?? "GET") === "GET") {
+      const answer = await (await send(input, options)).json();
+      return new Response(JSON.stringify({ ...answer, canCommission: true, checks: answer.checks.map((check: any) => check.id === "encryption" ? { ...check, state: "configured_not_verified" } : check) }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if ((path === "/api/v1/pilot/lenders" || path === "/api/v1/team/readiness/encryption") && options?.method === "POST") throw new TypeError("Failed to fetch");
+    return send(input, options);
+  };
+  renderApp(page);
+  if (page === "/pilot") {
+    await user.type(await screen.findByLabelText("Lender name"), "Guarded pilot lender");
+    expect(leaving()).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Create lender" }));
+  } else {
+    const verify = await screen.findByRole("button", { name: "Verify encryption access" });
+    expect(leaving()).toBe(false);
+    await user.click(verify);
+  }
+  await screen.findByText("Outcome not confirmed");
+  expect(leaving()).toBe(true);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await user.click(screen.getAllByRole("link", { name: "Overview" })[0]!);
+  expect(confirm).toHaveBeenCalled();
+  expect(window.location.pathname).toBe(page);
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole("button", { name: "Discard original request" }));
+  await waitFor(() => expect(screen.queryByText("Outcome not confirmed")).toBeNull());
+  expect(leaving()).toBe(false);
+});

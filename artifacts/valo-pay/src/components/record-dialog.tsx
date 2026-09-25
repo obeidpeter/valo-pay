@@ -13,6 +13,7 @@ import { formatDate } from '@/lib/formatters';
 import { koboToNaira, moneyFieldLabel, nairaToKobo } from '@/lib/money-input';
 import { permissionReason } from '@/lib/permissions';
 import { referenceOf } from '@/lib/notify';
+import { KEPT_IN_OPERATIONS, OpenOperations } from './pilot-ui';
 import { Link } from 'wouter';
 
 const actionLabels: Record<string, string> = {
@@ -83,7 +84,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const changeOpen = (open: boolean) => {
     if (!open && isPending) return;
     if (!open && hasUnconfirmedOutcome) {
-      if (window.confirm('The outcome is not confirmed. Closing does not cancel the request and discards this draft and its retry information. Check the records before starting again. Close anyway?')) onOpenChange(false);
+      if (window.confirm('The outcome is not confirmed. Closing does not cancel the request and discards this draft and its retry information. If the service received the request, it stays in Operations, where you can check it before starting again. Close anyway?')) onOpenChange(false);
       return;
     }
     if (open || confirmDiscard()) onOpenChange(open);
@@ -266,10 +267,10 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
             {importedEdit?.batchId && <Link href={`/imports?batch=${encodeURIComponent(importedEdit.batchId)}`} onClick={()=>onOpenChange(false)} className="inline-flex min-h-11 items-center text-sm text-primary underline">Review the committed import and corrections</Link>}
             {hasUnconfirmedOutcome && <div role="alert" className="space-y-2 rounded-lg border border-warning-border bg-warning/20 p-3 text-sm">
               <p className="font-semibold">Outcome not confirmed</p>
-              <p>The request may have finished. Retry the same request to recover its result before changing these values. Keep this dialog open: its draft and retry information are not saved after closing or reloading.</p>
+              <p>The request may have finished. Retry the same request to recover its result before changing these values. Keep this dialog open to retry it here. {KEPT_IN_OPERATIONS}</p>
               {formErrors.length > 0 && <div><p className="font-medium">Latest response</p>{formErrors.map((message, index) => <p key={index}>{message}</p>)}</div>}
               {supportReference && <p>Support reference: {supportReference}</p>}
-              <Button type="button" variant="outline" busy={isPending} busyLabel="Recovering result…" onClick={() => { void retryUnconfirmed(); }}>Retry same request</Button>
+              <div className="flex flex-wrap items-center gap-3"><Button type="button" variant="outline" busy={isPending} busyLabel="Recovering result…" onClick={() => { void retryUnconfirmed(); }}>Retry same request</Button><OpenOperations /></div>
             </div>}
             <fieldset disabled={isPending || hasUnconfirmedOutcome || !!blockedReason} className="contents">
             {typeof context === 'function' ? context(formData) : context}

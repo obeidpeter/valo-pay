@@ -756,6 +756,12 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = requestFingerprint(input);
   const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
   if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return { lender: found.info, repeated: true }; }
+  // The journal does not record lender creation, so a creation whose answer was lost and is sent again after a reload
+  // has a new key: a name already in the workspace, ignoring case and surrounding or repeated spaces, is refused
+  // naming that lender, in every mode, rather than making a second one.
+  const same = (await session.client.query<{ name: string }>(`SELECT info->>'name' AS name FROM valopay_merchants WHERE workspace_id=$1
+    AND lower(btrim(regexp_replace(info->>'name','\\s+',' ','g')))=lower(btrim(regexp_replace($2,'\\s+',' ','g'))) ORDER BY id LIMIT 1`, [session.workspace.id, input.name])).rows[0];
+  if (same) fail(`A lender named "${same.name}" already exists in this workspace. Select it in the lender list, or choose another name.`, 409);
   // 'team' access holds the workspace lock exclusively (lockWorkspace), so two creations at once are counted one after the other.
   if (ctx.accessMode !== 'staff') {
     const held = (await session.client.query<{ count: number }>('SELECT count(*)::int AS count FROM valopay_merchants WHERE workspace_id=$1', [session.workspace.id])).rows[0]!.count;

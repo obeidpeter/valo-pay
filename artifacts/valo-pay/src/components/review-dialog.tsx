@@ -9,6 +9,7 @@ import { permissionReason } from '@/lib/permissions';
 import { FieldError, FormAlert, FormErrorLinks, focusField, invalidProps } from '@/components/form-field';
 import { useWorkspace } from '@/lib/workspace-context';
 import { notifyDone, referenceOf, saidBy } from '@/lib/notify';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 
 export const reviewJobs = [
   { value: 'mandates', label: 'Mandate operations' },
@@ -36,7 +37,7 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
   const close = () => {
     if (create.isPending) return;
     if (create.hasUnconfirmedOutcome) {
-      if (window.confirm('The review outcome is not confirmed. Closing does not cancel the request and discards this draft and its retry information. Check the reviews before starting again. Close anyway?')) onClose();
+      if (window.confirm('The review outcome is not confirmed. Closing does not cancel the request and discards this draft and its retry information. If the service received the review, it stays in Operations, where you can check it before starting again. Close anyway?')) onClose();
       return;
     }
     if (confirmDiscard()) onClose();
@@ -76,10 +77,10 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
         <form onSubmit={submit} noValidate className="space-y-5">
           {create.hasUnconfirmedOutcome && <div role="alert" className="space-y-2 rounded-lg border border-warning-border bg-warning/20 p-3 text-sm">
             <p className="font-semibold">Review outcome not confirmed</p>
-            <p>The review may have been recorded. Retry the same review to recover its result without adding another. Keep this dialog open: the draft and retry information are not saved after closing or reloading.</p>
+            <p>The review may have been recorded. Retry the same review to recover its result without adding another. Keep this dialog open to retry it here. {KEPT_IN_OPERATIONS}</p>
             {failure && <div><p className="font-medium">Latest response</p><p>{failure}</p></div>}
             {referenceOf(create.error) && <p>Support reference: {referenceOf(create.error)}</p>}
-            <Button type="button" variant="outline" busy={create.isPending} busyLabel="Recovering review…" onClick={() => { void create.retryUnconfirmed().catch(() => {}); }}>Retry same review</Button>
+            <div className="flex flex-wrap items-center gap-3"><Button type="button" variant="outline" busy={create.isPending} busyLabel="Recovering review…" onClick={() => { void create.retryUnconfirmed().catch(() => {}); }}>Retry same review</Button><OpenOperations /></div>
           </div>}
           <fieldset disabled={create.isPending || create.hasUnconfirmedOutcome} className="contents">
           {!create.hasUnconfirmedOutcome && (failure || Object.keys(errors).length > 0) && <FormAlert title="Review not saved">{failure || 'Check the highlighted fields.'}<FormErrorLinks errors={errors} fields={reviewFields} prefix="review" /></FormAlert>}
