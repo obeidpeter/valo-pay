@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { screen, userEvent, waitFor, renderApp, within } from './harness';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { makeRecord } from '../../api-server/src/domain/records';
@@ -194,6 +194,22 @@ for (const [how, said, removed] of [
     await user.click(screen.getByRole('button', { name: 'Check original request' }));
     await waitFor(() => expect(screen.queryByText('Outcome not confirmed')).toBeNull());
   }
+});
+
+// Third review of the audit fixes, finding 6: Discard original request moved focus to the nearest control above its
+// notice, the Sandbox guide at the top of the page, rather than to the run it had been carrying on.
+it('moves focus from a discarded run request back to the run, never to the Sandbox guide above the page', async () => {
+  moreBatches(); enable(); const user = userEvent.setup(); renderApp('/lifecycle');
+  await prepare(user); await approve(user);
+  secondExecute('lost');
+  await runByKeyboard(user);
+  await screen.findByText(/^The run stopped because its last request was not confirmed/);
+  expect(screen.getByRole('button', { name: /^Sandbox guide/ })).toBeTruthy();
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  screen.getByRole('button', { name: 'Discard original request' }).focus();
+  await user.keyboard('{Enter}');
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard original request' })).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: /^(Execute|Resume) approved run$/ })));
 });
 
 it('keeps retention details and controls unavailable to non-administrators', async () => {

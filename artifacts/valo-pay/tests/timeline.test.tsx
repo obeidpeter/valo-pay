@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, waitFor } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { queryClient, queryDefaults } from "@/App";
+import { customerTimeline } from "../../api-server/src/domain/timeline";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -27,6 +28,31 @@ describe("customer timeline", () => {
     await waitFor(() => expect(opened).toHaveBeenCalledWith(`/api/v1/exports/${record.id}/download?merchantId=${api.merchantIds[0]}`, "_blank"));
     // Radix also announces a new notice through a hidden copy for a moment, so the text may be present twice.
     expect(screen.getAllByText(new RegExp(`SHA-256 checksum: ${String(record.data.checksum).slice(0, 16)}`)).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Third review of the audit fixes: the customer's positions list money in another currency beside the naira credit
+  // (unallocatedOtherCurrencies, shaped like a close's otherCurrencies), which the page shows as close evidence does.
+  it("shows the customer's unapplied money in another currency beside the naira credit, and a payment in its own currency", async () => {
+    const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+    api.mutate((state) => {
+      const payment = state.records.find((record) => record.kind === "payments" && record.customerId === ada.id)!;
+      const unapplied = (id: string, reference: string, amountKobo: number, currency: string) => state.records.push({ ...structuredClone(payment), id, reference, status: "unallocated", amountKobo, createdAt: api.now, data: { ...structuredClone(payment.data), currency, channel: "card", allocatedKobo: 0 } });
+      unapplied("usd-card-payment", "SBX-USD-CARD", 100_000, "USD");
+      unapplied("eur-card-payment-1", "SBX-EUR-CARD-1", 2_000, "EUR");
+      unapplied("eur-card-payment-2", "SBX-EUR-CARD-2", 3_000, "EUR");
+    });
+    renderApp(`/customers/${ada.id}`);
+    const position = (await screen.findByText("Customer position")).parentElement!;
+    expect(position.textContent).toContain("Unapplied credit");
+    // The service derives the money beside the naira (the position the fake API serves is the domain's), and the page shows it as it comes.
+    expect(customerTimeline(api.state(), ada.id).position.unallocatedOtherCurrencies).toEqual({ EUR: { count: 2, amount: 5_000 }, USD: { count: 1, amount: 100_000 } });
+    // Each currency is an item of its own under the label, by code, as close evidence writes it.
+    const others = screen.getByRole("list", { name: "Unapplied in other currencies" });
+    expect(within(others).getAllByRole("listitem").map((item) => item.textContent!.replace(/\u00a0/g, " "))).toEqual(["EUR 50.00 (2 payments)", "USD 1,000.00 (1 payment)"]);
+    // The payment itself is listed in its own currency, never as naira.
+    const listed = (await screen.findByRole("heading", { name: "Payments" })).closest("section")!;
+    expect(listed.textContent!.replace(/\u00a0/g, " ")).toContain("SBX-USD-CARDUSD 1,000.00");
+    expect(listed.textContent).not.toContain("₦1,000.00");
   });
 
   it("says when the lender has no customer with the reference, inside the console", async () => {

@@ -1,7 +1,7 @@
-import { normaliseRefundStatus, normaliseReversalStatus } from '@workspace/valopay-schema';
+import { nairaText, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo } from '@workspace/valopay-schema';
 
 type ActingWorkspace = { role: string; actor: string } | undefined;
-type PermissionRecord = { status?: string; data?: Record<string, unknown> } | null;
+type PermissionRecord = { status?: string; reference?: string; amountKobo?: number; data?: Record<string, unknown> } | null;
 export type PermissionRequest = { action?: string; kind?: string; record?: PermissionRecord };
 
 const operators = ['Admin', 'Operations', 'Finance'];
@@ -30,6 +30,20 @@ const actionRoles: Record<string, string[]> = {
   backtest_policy: [...operators, 'Compliance reviewer'], preregister_experiment: ['Admin'],
 };
 
+/**
+ * Why the service refuses to allocate a payment to any instalment, in its words (assertPaymentAllocatable): it is in
+ * another currency than naira, or its money went back to the payer. Null for a payment it would allocate.
+ */
+export function allocationRefusal(payment: PermissionRecord): string | null {
+  if (!payment) return null;
+  const currency = String(payment.data?.currency || 'NGN').trim().toUpperCase();
+  if (currency !== 'NGN') return `Payment ${payment.reference} is in ${currency}. Instalments are owed in naira, so it cannot be applied to one. Record its refund or resolve it with Finance.`;
+  if (paymentMoneyReturned(payment)) return `Payment ${payment.reference} was ${normaliseReversalStatus(payment.data?.reversalStatus) === 'reversed' ? 'reversed by the provider' : 'refunded to the payer'}. Its money went back, so it cannot be allocated to an instalment.`;
+  const refunded = paymentRefundedKobo(payment);
+  if (refunded > 0 && paymentUnappliedKobo(payment) <= 0) return `Payment ${payment.reference} was refunded to the payer in part: ${nairaText(refunded)} went back, so nothing is left to allocate to an instalment.`;
+  return null;
+}
+
 /** Presentation guard only. The server remains authoritative for every write. */
 export function permissionReason(workspace: ActingWorkspace, { action, kind, record }: PermissionRequest): string | null {
   if (!action && !kind) return null;
@@ -46,6 +60,9 @@ export function permissionReason(workspace: ActingWorkspace, { action, kind, rec
   // One refund is recorded per payment, even one that returned only part of it, and reversed money already went back.
   if (action === 'record_refund' && normaliseReversalStatus(record?.data?.reversalStatus) === 'reversed') return 'The provider reversed this payment, so its money already went back.';
   if (action === 'record_refund' && normaliseRefundStatus(record?.data?.refundStatus) === 'refunded') return 'A refund is already recorded for this payment.';
+  // A payment in another currency, or whose money went back, takes no allocation: its Allocate says why, as the service would.
+  const refusal = action === 'manual_allocate' ? allocationRefusal(record ?? null) : null;
+  if (refusal) return refusal;
   // Confirming a pay-by-bank payment whose outcome stayed unknown records a receipt, so Finance records it.
   if (action === 'resolve_exception' && record?.data?.linkedKind === 'connected-intents' && !['Admin', 'Finance'].includes(workspace.role)) return 'Requires Admin or Finance: the outcome of a pay-by-bank payment is Finance’s to record.';
   if (!action && ['templates', 'policies'].includes(kind || '') && record && !['draft', 'rejected'].includes(record.status || '')) {

@@ -1,6 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
+import type { QueryClient } from '@tanstack/react-query';
 
 export const RECORD_PAGE_SIZES = [25, 50, 100] as const;
+
+/**
+ * A picker's search sits in its dialog's form and looks as the person types, so Enter there does nothing more: it never
+ * submits the form around it, such as an allocation or a new mandate that happens to be complete.
+ */
+export function searchWithoutSubmitting(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.preventDefault();
+}
 
 /** Wait for a pause in typing; changing lenders never reuses another lender's search. */
 export function useDebouncedSearch(value: string, scope: string | null | undefined, delay = 300) {
@@ -51,10 +60,12 @@ const listOf = (queryKey: readonly unknown[]) => JSON.stringify(queryKey.map(par
 /**
  * A list query's placeholder while a person pages: the rows shown stay until the next page arrives, so the table, its
  * pager and the control pressed stay in place. Only another page of the same list keeps them; another lender, record,
- * search or filter never shows the earlier rows. Pass the query's key.
+ * search or filter never shows the earlier rows. Nor does a page whose request has failed: once its query has recorded
+ * an error, fetching it again (Try again, a refresh, a return to the tab) shows it loading, never the earlier page's
+ * rows as its own. Pass the query's key and the query client.
  */
-export function keepRowsWhilePaging(queryKey: readonly unknown[]) {
+export function keepRowsWhilePaging(queryKey: readonly unknown[], client: QueryClient) {
   const list = listOf(queryKey);
   return <T,>(previous: T | undefined, previousQuery?: { queryKey: readonly unknown[] }): T | undefined =>
-    previousQuery && listOf(previousQuery.queryKey) === list ? previous : undefined;
+    previousQuery && listOf(previousQuery.queryKey) === list && !client.getQueryState(queryKey)?.errorUpdateCount ? previous : undefined;
 }

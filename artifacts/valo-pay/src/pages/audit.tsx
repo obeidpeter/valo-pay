@@ -9,6 +9,7 @@ import { RecordPagination } from '@/components/record-pagination';
 import { keepRowsWhilePaging, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate, formatCount } from '@/lib/formatters';
@@ -27,11 +28,11 @@ export default function AuditPage() {
   currentMerchant.current = merchantId;
   const verificationRequest = useRef(0);
 
-  const auditKey = getListRecordsQueryKey('audit', listParams);
+  const auditKey = getListRecordsQueryKey('audit', listParams), client = useQueryClient();
   const { data, isLoading, error, refetch, isFetching } = useListRecords(
     'audit',
     listParams,
-    { query: { enabled: !!merchantId, queryKey: auditKey, placeholderData: keepRowsWhilePaging(auditKey) } }
+    { query: { enabled: !!merchantId, queryKey: auditKey, placeholderData: keepRowsWhilePaging(auditKey, client) } }
   );
 
   const verify = usePerformAction(undefined, merchantId);

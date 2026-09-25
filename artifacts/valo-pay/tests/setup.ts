@@ -1,8 +1,9 @@
 // Runs before every console test file: browser APIs jsdom lacks, and a clean
 // query cache and DOM between tests so one page's data never leaks into the next.
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { queryClient } from "@/App";
+import { watchFormSubmitters } from "./form-submitters";
 
 // Cold lazy-page transforms can exceed Testing Library's 1s default when the
 // whole jsdom suite runs together. Wait for the asserted state, never a sleep;
@@ -45,10 +46,17 @@ if (typeof Element.prototype.releasePointerCapture !== "function") Element.proto
 // Everything else (the thirty-second staleness) stays as production configures it.
 queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
 
+// Every form a test renders is checked: a control inside it that can submit it without being its submit button
+// (type="submit"), such as a pager or a retry left without type="button", fails the test (tests/form-submitters.ts).
+const submitters = watchFormSubmitters();
+beforeEach(() => submitters.start());
+
 afterEach(() => {
+  const implicit = submitters.take();
   cleanup();
   queryClient.clear();
   // A theme chosen in one test is this browser's, not the next test's.
   localStorage.clear();
   document.documentElement.classList.remove("dark");
+  if (implicit.length) throw new Error(`A control inside a form submits it without being its submit button: ${implicit.join("; ")}. Give it type="button", or type="submit" if it is the form's submit button.`);
 });

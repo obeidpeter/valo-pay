@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'wouter';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
 import { ExportJobControl, exportKindTitle, exportStatusLabel, exportStatusLabels } from '@/components/export-job-control';
 import { PilotError, PilotHeading, PilotPanel, pilotField } from '@/components/pilot-ui';
@@ -27,8 +28,8 @@ function SavedExports() {
   const parsedOffset = Number(params.get('offset') || 0), offset = Number.isSafeInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
   const query = { merchantId: merchantId!, status, offset, limit: 25 };
   // Paging keeps the jobs shown, and so the page buttons and the one pressed, until the next page arrives.
-  const listKey = getListRecordsQueryKey('exports', query);
-  const list = useListRecords('exports', query, { query: { enabled: !!merchantId, queryKey: listKey, placeholderData: keepRowsWhilePaging(listKey), refetchInterval: 5000 } });
+  const listKey = getListRecordsQueryKey('exports', query), client = useQueryClient();
+  const list = useListRecords('exports', query, { query: { enabled: !!merchantId, queryKey: listKey, placeholderData: keepRowsWhilePaging(listKey, client), refetchInterval: 5000 } });
   const exact = { merchantId: merchantId!, id: requested, limit: 1 };
   const focused = useListRecords('exports', exact, { query: { enabled: !!merchantId && !!requested, queryKey: getListRecordsQueryKey('exports', exact) } });
   const selected = requested ? focused.data?.items.find(item => item.id === requested && item.merchantId === merchantId) : list.data?.items[0];

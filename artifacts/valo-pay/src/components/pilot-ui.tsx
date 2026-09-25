@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import { Link } from "wouter";
 import { Button } from "./ui/button";
+import { usePageProblemFocus } from "./record-pagination";
 import { saidBy } from "@/lib/notify";
 import { DiscardOriginalRequest } from "./discard-original-request";
 
@@ -52,19 +53,29 @@ export const UNJOURNALED_WRITE_PROBLEM =
  * gave none (no answer, or a proxy's error page). A read and a change need
  * different fallbacks: a failed read changed nothing and is simply tried
  * again, while a change may have been saved and is checked where it is
- * recorded (`READ_PROBLEM` by default).
+ * recorded (`READ_PROBLEM` by default). A read's problem that took the place
+ * of its list's page buttons after a page press takes their focus.
  */
 export function PilotError({
   error,
   retry,
   fallback = READ_PROBLEM,
+  noticeRef,
 }: {
   error: unknown;
   retry?: () => void;
   fallback?: string;
+  /** The notice, for a page that moves focus to it. */
+  noticeRef?: RefObject<HTMLDivElement | null>;
 }) {
+  const notice = useRef<HTMLDivElement>(null);
+  usePageProblemFocus(notice);
   return error ? (
     <div
+      ref={(element) => {
+        notice.current = element;
+        if (noticeRef) noticeRef.current = element;
+      }}
       role="alert"
       className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm"
     >
@@ -77,11 +88,22 @@ export function PilotError({
     </div>
   ) : null;
 }
+/**
+ * A change whose answer was lost: Check original request, Operations for a
+ * change it records, and Discard original request, which moves focus to `next`,
+ * the control that sent the request where the page names it, and otherwise to
+ * the page's own nearest control.
+ */
 export function RecoveryNotice({
   mutation,
   persistent = true,
+  next,
+  noticeRef,
 }: {
   persistent?: boolean;
+  next?: () => HTMLElement | null | undefined;
+  /** Whichever notice shows, a lost answer's or a refusal's, for a page that moves focus to it. */
+  noticeRef?: RefObject<HTMLDivElement | null>;
   mutation: {
     hasUnconfirmedOutcome: boolean;
     isPending: boolean;
@@ -92,6 +114,7 @@ export function RecoveryNotice({
 }) {
   return mutation.hasUnconfirmedOutcome ? (
     <div
+      ref={noticeRef}
       role="alert"
       className="space-y-3 rounded-lg border border-warning-border bg-warning/20 p-4 text-sm"
     >
@@ -123,10 +146,11 @@ export function RecoveryNotice({
         <DiscardOriginalRequest
           disabled={mutation.isPending}
           onDiscard={mutation.abandonUnconfirmed}
+          next={next}
         />
       </div>
     </div>
   ) : (
-    <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} />
+    <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} noticeRef={noticeRef} />
   );
 }

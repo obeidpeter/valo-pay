@@ -12,11 +12,12 @@ const controls = "a[href], button, input:not([type='hidden']), select, textarea,
  * has gone: the control the page names (the one that sent the request), else
  * the submit button of the form the notice is in, else the nearest control
  * before the notice or, with none, after it, within its dialog or the page's
- * main region. Read when the button is pressed, tried once the notice has gone.
+ * own content (never the guides or other chrome above the page). Read when the
+ * button is pressed, tried once the notice has gone.
  */
 function nextControl(button: HTMLElement, named?: () => HTMLElement | null | undefined): () => void {
   const notice = button.closest<HTMLElement>("[role='alert']") ?? button.parentElement ?? button;
-  const scope = button.closest<HTMLElement>("[role='dialog']") ?? document.getElementById("main") ?? document.body;
+  const scope = button.closest<HTMLElement>("[role='dialog']") ?? button.closest<HTMLElement>("[data-page-content]") ?? document.getElementById("main") ?? document.body;
   const form = notice.closest("form");
   const others = [...scope.querySelectorAll<HTMLElement>(controls)].filter((element) => !notice.contains(element));
   const before = others.filter((element) => notice.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING).reverse();
