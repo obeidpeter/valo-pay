@@ -115,6 +115,41 @@ describe("unconfirmed changes the journal records point to Operations", () => {
     pointsToOperations("Import outcome not confirmed");
   });
 
+  it("on Reports, for a daily close, but not for its refusal", async () => {
+    const user = userEvent.setup();
+    renderApp("/reports");
+    api.failNext(/^\/v1\/actions$/, { status: 403, error: "Daily close requires the Operations role." }, "POST");
+    await user.click(await screen.findByRole("button", { name: "Run daily close" }));
+    const refused = (await screen.findByText("Daily close requires the Operations role.")).closest('[role="alert"]') as HTMLElement;
+    expect(refused.textContent).not.toContain(KEPT);
+    expect(within(refused).queryByRole("link", { name: "Open Operations" })).toBeNull();
+    api.failNext(/^\/v1\/actions$/, "offline", "POST");
+    await user.click(screen.getByRole("button", { name: "Run daily close" }));
+    await screen.findByText(/The service could not confirm the result/);
+    pointsToOperations("Daily close could not be confirmed");
+  });
+
+  it("on Reconciliation, for a run", async () => {
+    const user = userEvent.setup();
+    renderApp("/reconciliation");
+    api.failNext(/^\/v1\/actions$/, "offline", "POST");
+    await user.click(await screen.findByRole("button", { name: "Run reconciliation" }));
+    await screen.findByText("Reconciliation could not be completed");
+    pointsToOperations("Reconciliation could not be completed");
+  });
+
+  it("on the audit log, for a check", async () => {
+    const user = userEvent.setup();
+    renderApp("/audit");
+    api.failNext(/^\/v1\/actions$/, "offline", "POST");
+    await user.click(await screen.findByRole("button", { name: "Check audit log" }));
+    const toast = (await screen.findAllByText("Audit log could not be checked")).map((title) => title.closest("li")).find(Boolean) as HTMLElement;
+    keptInOperations(toast);
+    // The notice store outlives a render, so the notice is dismissed here rather than left for the next case.
+    await user.click(within(toast).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByText("Audit log could not be checked")).toBeNull());
+  });
+
   it("in the settings notices for journaled actions, but not the demo role switch", async () => {
     const user = userEvent.setup();
     renderApp("/settings");

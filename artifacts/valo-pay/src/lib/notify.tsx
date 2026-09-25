@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { toast } from '@/hooks/use-toast';
 import { ToastAction } from '@/components/ui/toast';
 
@@ -28,8 +29,8 @@ export function notifyDone(title: string, description?: string, action?: NoticeA
   });
 }
 
-/** A problem notice: what did not happen and what to do; it stays until dismissed. */
-export function notifyProblem(title: string, description?: string) {
+/** A problem notice: what did not happen and what to do, such as a link to where to do it; it stays until dismissed. */
+export function notifyProblem(title: string, description?: ReactNode) {
   return toast({ title, description, variant: 'destructive', type: 'foreground', duration: Infinity });
 }
 
