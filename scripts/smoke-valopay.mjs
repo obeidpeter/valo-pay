@@ -44,7 +44,11 @@ await action("run_reconciliation");
 assert.equal((await list("payments")).length,payments.length,"Reconciliation replay must not create another payment.");
 const pending=payments.find(p=>p.status==="proposed");
 if(pending){
- await action("confirm_allocation",pending.id);
+ // A decision names the proposal it was made on: its id and the version read.
+ const proposal=(await list("allocations")).find(a=>a.data.paymentId===pending.id&&a.status==="proposed");
+ assert(proposal,"A proposed payment must have its proposed allocation.");
+ await call("actions",{method:"POST",expected:400,body:{action:"confirm_allocation",recordId:pending.id,reason:"Must name the proposal"}});
+ await action("confirm_allocation",pending.id,{data:{proposalId:proposal.id,proposalUpdatedAt:proposal.updatedAt}});
  const allocations=await list("allocations");
  assert(allocations.filter(a=>a.data.paymentId===pending.id&&a.status==="confirmed").reduce((sum,a)=>sum+a.amountKobo,0)<=pending.amountKobo);
 }

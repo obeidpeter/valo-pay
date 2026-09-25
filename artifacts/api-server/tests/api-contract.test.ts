@@ -38,7 +38,7 @@ function concrete(entry: { path: string; operation: Record<string, any> }): stri
   });
 }
 /** A body the journal treats as recoverable, where the route needs one to be. */
-const journalBody = (path: string) => path === "/v1/imports" ? { commit: true } : path === "/v1/actions" ? { action: "confirm_allocation" } : {};
+const journalBody = (path: string) => path === "/v1/imports" ? { commit: true } : path === "/v1/actions" ? { action: "run_reconciliation" } : {};
 
 // ---- 1. The error body and the statuses every operation can return ----
 await section("error body and statuses", () => {
@@ -195,6 +195,34 @@ try {
   checks += 2;
   });
 
+  // An edit names the version it was made on (UX-B01-GEN): without it the edit is refused, naming the field, before
+  // the lender is read; with it the edit reaches the lender (here, the database-limit answer). From another client
+  // address, so the request limit these checks share stays clear.
+  await section("versions edits require", async () => {
+    const elsewhere = { "X-Forwarded-For": "198.51.100.25" };
+    const edits: Array<[string, Record<string, unknown>, string, string]> = [
+      ["/v1/records/customers/a?merchantId=offline-lender", { name: "Renamed customer" }, "expectedUpdatedAt", "2026-09-19T12:00:00.000+01:00"],
+      ["/v1/settings?merchantId=offline-lender", { closeTime: "07:00" }, "expectedRevision", "a".repeat(64)],
+    ];
+    for (const [path, body, field, version] of edits) {
+      const missing = await send("PATCH", path, body, elsewhere);
+      assert.equal(missing.status, 400, `PATCH ${path} without ${field}: ${JSON.stringify(missing.data)}`);
+      assert.deepEqual(fields(missing.data), [field], `PATCH ${path} names ${field}`);
+      documented("PATCH", path, missing);
+      const empty = await send("PATCH", path, { ...body, [field]: "" }, elsewhere);
+      assert.deepEqual([empty.status, fields(empty.data)], [400, [field]], `PATCH ${path} with an empty ${field}: ${JSON.stringify(empty.data)}`);
+      const versioned = await send("PATCH", path, { ...body, [field]: version }, elsewhere);
+      assert.equal(versioned.status, 503, `PATCH ${path} with ${field} reaches the lender: ${JSON.stringify(versioned.data)}`);
+      checks += 5;
+    }
+    // The contract says so, and names the data an allocation decision requires.
+    assert.deepEqual(schemas.RecordUpdate.required, ["expectedUpdatedAt"], "a record edit requires expectedUpdatedAt");
+    assert.deepEqual(schemas.SettingsInput.required, ["expectedRevision"], "a settings edit requires expectedRevision");
+    assert.deepEqual(schemas.AllocationDecisionData?.required, ["proposalId", "proposalUpdatedAt"], "an allocation decision's data requires the proposal and its version");
+    assert.match(spec.paths["/v1/actions"].post.description, /confirm_allocation and reject_allocation require data\.proposalId and data\.proposalUpdatedAt/, "the action's description names the pair");
+    checks += 4;
+  });
+
   // The service's own refusals carry the documented error body.
   await section("documented refusals", async () => {
   assert.ok(schemas.ErrorBody, "the contract describes the error body");
@@ -228,5 +256,5 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`API contract checks passed (${checks} checks): the error body and statuses, the Idempotency-Key each write takes and the 410 of a repeat after retention, a missing merchantId, unreadable bodies on writes without one, offset date-times and the documented refusals.`);
+console.log(`API contract checks passed (${checks} checks): the error body and statuses, the Idempotency-Key each write takes and the 410 of a repeat after retention, a missing merchantId, unreadable bodies on writes without one, offset date-times, the versions edits require and the documented refusals.`);
 process.exit(0);

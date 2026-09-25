@@ -1104,7 +1104,7 @@
           }
         },
         "summary": "Update a record",
-        "description": "Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version."
+        "description": "Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. expectedUpdatedAt is required: the updatedAt of the record the edit was made on. A request without it is refused (400, naming it) and saves nothing; a record changed since is 409, leaving the edit unapplied. An identical successful Idempotency-Key replay returns its original result before checking the version."
       }
     },
     "/v1/actions": {
@@ -1353,7 +1353,7 @@
           }
         },
         "summary": "Run a domain action on the lender's state",
-        "description": "Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md."
+        "description": "Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md. confirm_allocation and reject_allocation require data.proposalId and data.proposalUpdatedAt (AllocationDecisionData), with recordId the payment: a request without either is refused (400, naming it) and saves nothing. A proposal another has replaced, or that has changed since it was read, is 409; a payment with no proposal left to decide is refused (400). expectedUpdatedAt is optional, except for resolve_exception on a coordinated case; sent, it is the updatedAt of the record recordId names, and a record changed since is 409."
       }
     },
     "/v1/imports": {
@@ -2404,7 +2404,7 @@
           }
         },
         "summary": "Change a lender's execution settings",
-        "description": "Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version."
+        "description": "Admin only. expectedRevision is required: the revision of the settings originally opened. A request without it is refused (400, naming it) and saves nothing; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version."
       }
     },
     "/v1/exports": {
@@ -14704,11 +14704,15 @@
             "$ref": "#/components/schemas/RecordData"
           },
           "expectedUpdatedAt": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Required: the updatedAt of the record as the edit read it. A request without it is refused (400, naming it); a record changed since is 409. Compared as an instant."
           }
         },
-        "required": [],
-        "description": "The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is."
+        "required": [
+          "expectedUpdatedAt"
+        ],
+        "description": "The fields to change on a record, with the version they were made on (expectedUpdatedAt, required); omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is."
       },
       "Merchant": {
         "type": "object",
@@ -14991,7 +14995,7 @@
         "required": [
           "action"
         ],
-        "description": "An action to run: its name, the record it applies to, the reason for it and any data it needs."
+        "description": "An action to run: its name, the record it applies to, the reason for it and any data it needs. For confirm_allocation and reject_allocation, data is an AllocationDecisionData: both of its fields are required."
       },
       "ActionResult": {
         "type": "object",
@@ -15411,11 +15415,15 @@
             "type": "boolean"
           },
           "expectedRevision": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "description": "Required: the revision of the settings as the edit read them (GET /v1/settings). A request without it is refused (400, naming it); settings changed since are 409."
           }
         },
-        "required": [],
-        "description": "The execution settings to change; every field is optional."
+        "required": [
+          "expectedRevision"
+        ],
+        "description": "The execution settings to change, with the revision they were made on (expectedRevision, required); every other field is optional."
       },
       "ExportInput": {
         "type": "object",
@@ -15839,6 +15847,26 @@
           "offsets"
         ],
         "description": "Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record."
+      },
+      "AllocationDecisionData": {
+        "type": "object",
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The id of the proposed allocation reviewed (the allocation record, not the payment)."
+          },
+          "proposalUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The proposed allocation's updatedAt as it was read: an RFC 3339 date and time with Z or an offset. It is compared as an instant, so the same instant written another way names the same version."
+          }
+        },
+        "required": [
+          "proposalId",
+          "proposalUpdatedAt"
+        ],
+        "description": "The data confirm_allocation and reject_allocation require (POST /v1/actions, recordId the payment): the proposed allocation the decision was made on, by its id and the updatedAt it was read with. Both are required: a request without either is refused (400, naming data.proposalId or data.proposalUpdatedAt) and saves nothing. A proposal another has replaced, or that has changed since it was read, is 409; a payment with no proposal left to decide is refused (400). Other fields are ignored."
       },
       "ErrorDetail": {
         "type": "object",

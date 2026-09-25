@@ -7,7 +7,7 @@
  */
 
 /**
- * The execution settings to change; every field is optional.
+ * The execution settings to change, with the revision they were made on (expectedRevision, required); every other field is optional.
  */
 export interface SettingsInput {
   executionStart?: number;
@@ -21,5 +21,9 @@ export interface SettingsInput {
   notificationCostAlertKobo?: number;
   closeTime?: string;
   scheduledCloseEnabled?: boolean;
-  expectedRevision?: string;
+  /**
+     * Required: the revision of the settings as the edit read them (GET /v1/settings). A request without it is refused (400, naming it); settings changed since are 409.
+     * @minLength 1
+     */
+  expectedRevision: string;
 }

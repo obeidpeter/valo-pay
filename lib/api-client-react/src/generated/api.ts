@@ -714,7 +714,7 @@ export const getUpdateRecordUrl = (kind: string,
 }
 
 /**
- * Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
+ * Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. expectedUpdatedAt is required: the updatedAt of the record the edit was made on. A request without it is refused (400, naming it) and saves nothing; a record changed since is 409, leaving the edit unapplied. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
 export const updateRecord = async (kind: string,
@@ -813,7 +813,7 @@ export const getPerformActionUrl = (params: PerformActionParams,) => {
 }
 
 /**
- * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.
+ * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md. confirm_allocation and reject_allocation require data.proposalId and data.proposalUpdatedAt (AllocationDecisionData), with recordId the payment: a request without either is refused (400, naming it) and saves nothing. A proposal another has replaced, or that has changed since it was read, is 409; a payment with no proposal left to decide is refused (400). expectedUpdatedAt is optional, except for resolve_exception on a coordinated case; sent, it is the updatedAt of the record recordId names, and a record changed since is 409.
  * @summary Run a domain action on the lender's state
  */
 export const performAction = async (actionInput: ActionInput,
@@ -1352,7 +1352,7 @@ export const getUpdateSettingsUrl = (params: UpdateSettingsParams,) => {
 }
 
 /**
- * Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
+ * Admin only. expectedRevision is required: the revision of the settings originally opened. A request without it is refused (400, naming it) and saves nothing; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Change a lender's execution settings
  */
 export const updateSettings = async (settingsInput: SettingsInput,

@@ -101,6 +101,8 @@ describe("forms", () => {
     const sent = api.calls.find((call) => call.method === "PATCH")!;
     expect(sent.status).toBe(200);
     expect((sent.body as { data: Record<string, unknown> }).data).toMatchObject({ owner: null, severity: exception.data.severity, notes: exception.data.notes });
+    // With the version the edit was made on, which the service requires.
+    expect((sent.body as { expectedUpdatedAt?: string }).expectedUpdatedAt).toBe(exception.updatedAt);
     const saved = api.state().records.find((record) => record.id === exception.id)!;
     expect(saved.data.owner).toBeUndefined();
     expect(saved.data.severity).toBe(exception.data.severity);

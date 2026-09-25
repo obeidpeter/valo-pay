@@ -124,6 +124,16 @@ export const merchantSchema = z.object({
 export type MerchantView = z.infer<typeof merchantSchema>;
 /** A confirmation in plain words, when nothing else changed that the caller needs to read back. */
 export const messageSchema = z.object({ message: z.string() }).strict();
+/**
+ * The data confirm_allocation and reject_allocation require (POST /v1/actions,
+ * whose recordId names the payment): the proposed match the decision was made
+ * on, by its id and the version it was read with. A request without either is
+ * refused, naming it, before anything is read or saved.
+ */
+export const allocationDecisionDataSchema = z.object({
+  proposalId: z.string().min(1, "Send the id of the proposed match you reviewed.").describe("The id of the proposed allocation reviewed (the allocation record, not the payment)."),
+  proposalUpdatedAt: instantInputSchema.describe("The proposed allocation's updatedAt as it was read: an RFC 3339 date and time with Z or an offset. It is compared as an instant, so the same instant written another way names the same version."),
+});
 /** A person who can own a case or review a close: a demo role in the sandbox, an active staff member with lender access on a staff host. */
 export const assigneeSchema = z.object({ actor: z.string(), name: z.string(), role: z.string() }).strict();
 /** A possible case owner or reviewer. */

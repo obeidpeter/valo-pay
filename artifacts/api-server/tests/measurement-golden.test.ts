@@ -256,7 +256,7 @@ const throughDatabase = (state: DomainState) => {
   const proposal = recordsOf(state, "allocations").find((item) => item.data.dueItemId === other.id)!;
   assert.deepEqual([proposal.status, proposal.data.rule, proposing.allocated.count], ["proposed", "R5", 0], "a proposal is not an allocation");
   const payment = recordsOf(state, "payments").find((item) => item.reference === "TRF-CONF-2")!;
-  executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "confirm_allocation", recordId: payment.id, reason: "Payer confirmed by phone" });
+  executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "confirm_allocation", recordId: payment.id, reason: "Payer confirmed by phone", data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } });
   const confirming = close(wat("2027-07-03T07:00:00"));
   assert.deepEqual([confirming.allocated, confirming.allocatedByRule], [{ count: 1, kobo: 6_000_000 }, { R5: { count: 1, kobo: 6_000_000, automatic: 0 } }], "the confirmation counts once, in its own period");
   // Reviewing earlier matches changes them, but confirms nothing new.

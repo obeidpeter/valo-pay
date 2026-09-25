@@ -127,8 +127,8 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
  const kind=safeKind(req.params.kind),{id}=S.UpdateRecordParams.parse(req.params),body=S.UpdateRecordBody.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
   const old=state.records.find(r=>r.kind===kind&&r.id===id);if(!old)fail("Record not found.",404);
-  if (kind === 'exceptions' && old.data.case && !body.expectedUpdatedAt) fail('Refresh this coordinated case before editing it.',409);
   if (kind === 'exceptions' && old.data.case?.assignee && old.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') fail('Ask the case assignee or an administrator to make this change.',403);
+  // Every edit names the version it was made on (the contract requires expectedUpdatedAt), a coordinated case's included.
   assertRecordVersion(old,body.expectedUpdatedAt);
   const {expectedUpdatedAt: _version,...changes}=body;
   const input={...old,...changes,data:{...mergeData(old.data,body.data),synthetic:true} as Record<string,any>,updatedAt:ctx.now};

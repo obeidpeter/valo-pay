@@ -1,5 +1,5 @@
 import {
-  counted, businessDateSchema,
+  allocationDecisionDataSchema, counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, handBackFallbackOwner, isKnownFailureCode,
   heldEvidenceCodes, heldEvidenceOf, moneyText, nairaText, nextCloseInstant, normaliseFailureCode, otherCurrenciesText, passRuleText, paymentUnappliedKobo, resolutionCodesForException, resolveExceptionType, unseenReversalCodes, unseenReversalOf, withinQuietHours, templateTextProblems,
   type CloseTrigger,
@@ -381,6 +381,8 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);
+    // A decision names the proposal it was made on: without the pair it is refused, naming what it lacks, before anything is read.
+    const reviewed = input.action === "manual_allocate" ? undefined : allocationDecisionDataSchema.parse(data, { path: ["data"] });
     const payment = findRecord(state, String(input.recordId), "payments");
     // Evidence that named no payer is applied only here, and applying it identifies the payer in the same action.
     const identifying = !payment.customerId;
@@ -394,12 +396,10 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     }
     const allocation = recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id && item.status === "proposed");
     if (!allocation) throw new Error("This payment has no proposed allocation to review. Refresh the page to see its current status.");
-    // The console reviews a specific proposal, not whichever proposal happens to
-    // be current when its request arrives. Older API callers may omit this pair.
-    if (data.proposalId !== undefined || data.proposalUpdatedAt !== undefined) {
-      if (data.proposalId !== allocation.id || data.proposalUpdatedAt !== allocation.updatedAt) {
-        throw Object.assign(new Error("This proposed match has changed since you opened it. Refresh the queue and review the current proposal before deciding."), { status: 409 });
-      }
+    // The decision is on the proposal reviewed, not whichever proposal happens to be current when its request
+    // arrives; its version is compared as an instant, as a record's is (assertRecordVersion).
+    if (reviewed!.proposalId !== allocation.id || Date.parse(reviewed!.proposalUpdatedAt) !== Date.parse(allocation.updatedAt)) {
+      throw Object.assign(new Error("This proposed match has changed since you opened it. Refresh the queue and review the current proposal before deciding."), { status: 409 });
     }
     let withdrawn: string | undefined;
     if (input.action === "reject_allocation") {

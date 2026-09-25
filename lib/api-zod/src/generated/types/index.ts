@@ -12,6 +12,7 @@ export * from './acknowledgeHandoverParams';
 export * from './actionInput';
 export * from './actionResult';
 export * from './alert';
+export * from './allocationDecisionData';
 export * from './approveLifecycleRunParams';
 export * from './assignee';
 export * from './batchVersion';

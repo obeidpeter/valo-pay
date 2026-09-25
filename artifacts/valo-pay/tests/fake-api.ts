@@ -304,7 +304,9 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
         for (const key of ["unallocatedAlertThreshold", "notificationCostAlertKobo"] as const) if (body[key] !== undefined && (!Number.isInteger(body[key]) || Number(body[key]) < 0)) fail(`${key} must be a non-negative integer.`);
         if (body.closeTime !== undefined && !isCloseTime(body.closeTime)) fail("closeTime must be a WAT time as HH:MM, for example 07:00 (REC-01).");
         const previous = { time: closeTimeOf(state.settings), enabled: state.settings.scheduledCloseEnabled !== false };
-        Object.assign(state.settings, body);
+        // The version the edit names is not a preference, as the API keeps it out of the saved settings.
+        const { expectedRevision: _revision, ...preferences } = body;
+        Object.assign(state.settings, preferences);
         rescheduleAfterSettings(state, previous, ctx.now);
         return buildConsoleSettings(state, ctx.role, ctx.now, api.scheduler);
       }, { action: "patch.settings", objectId: "workspace", summary: "Synthetic workspace operation" }));
