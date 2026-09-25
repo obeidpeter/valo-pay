@@ -1,11 +1,23 @@
 import { Link, useSearch } from 'wouter';
 import type { ValopayRecord } from '@workspace/api-client-react';
-import { heldEvidenceCodes, heldEvidenceOf, resolveExceptionType } from '@workspace/valopay-schema';
+import { heldEvidenceCodes, heldEvidenceOf, resolveExceptionType, unseenReversalCodes, unseenReversalOf } from '@workspace/valopay-schema';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { readableLabel } from '@/components/record-label';
 
-/** A reversal waiting for a payment no connection has seen, as its exception's condition names it (the shared schema's unseenReversalOf). */
-const waitingReversal = (condition: unknown) => /^provider_status_mismatch:[^:]+:unseen$/.test(String(condition ?? ''));
+/** A reversal waiting for a payment no connection has seen: a provider_status_mismatch whose condition names its evidence. */
+const waitingReversal = (exception: ValopayRecord | null | undefined) =>
+  resolveExceptionType(exception?.data?.type) === 'provider_status_mismatch' && unseenReversalOf(exception?.data?.condition) !== undefined;
+
+/**
+ * A resolution code's name for one exception. A reversal waiting for its payment offers two of the generic mismatch's
+ * codes, whose own names (about a mandate's or attempt's state) do not say what they do to it, so each also says that;
+ * every other code is named as everywhere else.
+ */
+export function resolutionLabel(exception: ValopayRecord | null | undefined, code: unknown): string {
+  if (waitingReversal(exception) && code === unseenReversalCodes.adopted) return 'Provider state adopted; reversal waits for its payment';
+  if (waitingReversal(exception) && code === unseenReversalCodes.setAside) return 'Platform state confirmed; reversal set aside for good';
+  return readableLabel(code);
+}
 
 /**
  * What recording the chosen outcome does where the service acts on it: evidence held as a suspected duplicate, a payment
@@ -14,10 +26,11 @@ const waitingReversal = (condition: unknown) => /^provider_status_mismatch:[^:]+
  */
 export function resolutionEffect(exception: ValopayRecord, code: unknown): string | undefined {
   const type = resolveExceptionType(exception.data?.type), chosen = String(code || '');
-  if (type === 'provider_status_mismatch' && waitingReversal(exception.data?.condition)) {
-    if (!chosen) return 'Choose the outcome once you have checked with the provider which collection the reversal reverses. This box then says what the next reconciliation does with it.';
-    return chosen === 'provider_state_adopted'
-      ? 'Provider state adopted keeps the reversal waiting for its payment, with no new exception: the reconciliation that records that payment reverses it, or holds it for you if the payment names another payer, currency or amount. No money moves.'
+  if (waitingReversal(exception)) {
+    // No code keeps it open for Finance to check (escalated_to_provider is not offered), so the box says to leave it open.
+    if (!chosen) return 'Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile, the reversal applies to it and this exception closes. Once the provider has answered, choose the outcome, and this box says what the next reconciliation does with it.';
+    return chosen === unseenReversalCodes.adopted
+      ? 'The reversal keeps waiting for its payment, with no new exception: the reconciliation that records that payment reverses it, or holds it for you if the payment names another payer, currency or amount. No money moves.'
       : 'The next reconciliation sets the reversal aside for good: it reverses nothing, even if its payment arrives later. No money moves.';
   }
   if (type !== 'suspected_duplicate') return undefined;
@@ -57,6 +70,6 @@ export function ExceptionContext({ exception, customer, resolutionCode, resolvin
     <div className="rounded-md border bg-background p-3"><p className="font-medium">Recorded issue</p><p className="mt-1 whitespace-pre-wrap break-words">{String(exception.data?.notes || 'No notes have been recorded. Review the linked evidence before choosing an outcome.')}</p></div>
     {linkedId && <p className="break-all text-xs text-muted-foreground">Linked record: {linkedId}</p>}
     <div className="flex flex-wrap gap-x-4 gap-y-2">{exception.customerId && <Link className="min-h-6 text-primary underline" href={`/customers/${encodeURIComponent(exception.customerId)}?${customerParams}${linkedId ? `#record-${encodeURIComponent(linkedId)}` : ''}`}>Review customer history</Link>}{financial && <Link className="min-h-6 text-primary underline" href={`/reconciliation?${lender}`}>Review reconciliation</Link>}{mandate && <Link className="min-h-6 text-primary underline" href={`/mandates?${lender}`}>Review mandates</Link>}{checkout && <Link className="min-h-6 text-primary underline" href={`/pay-by-bank?${lender}`}>Review the pay-by-bank checkout</Link>}{!financial && !mandate && !checkout && <Link className="min-h-6 text-primary underline" href={`/collections?${lender}`}>Review collections</Link>}</div>
-    {resolving && <div className="rounded-md border bg-background p-3"><p className="font-medium">{resolutionCode ? `Record outcome: ${readableLabel(resolutionCode)}` : 'Record an outcome after reviewing the evidence.'}</p><p className="mt-1">{effect}</p></div>}
+    {resolving && <div className="rounded-md border bg-background p-3"><p className="font-medium">{resolutionCode ? `Record outcome: ${resolutionLabel(exception, resolutionCode)}` : 'Record an outcome after reviewing the evidence.'}</p><p className="mt-1">{effect}</p></div>}
   </section>;
 }

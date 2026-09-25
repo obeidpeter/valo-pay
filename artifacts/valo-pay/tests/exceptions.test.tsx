@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { makeRecord } from "../../api-server/src/domain/records";
-import { reconcile } from "../../api-server/src/domain/reconciliation";
+import { raiseException, reconcile } from "../../api-server/src/domain/reconciliation";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -133,18 +133,38 @@ describe("exceptions", () => {
     await user.click(await screen.findByRole('button', { name: 'Resolve' }));
     const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
     const code = within(dialog).getByLabelText(/How was this resolved/);
+    // Only the two codes that decide it are offered, each named for what it does to the reversal rather than by the
+    // generic mismatch's labels, and the box says to leave the exception open while Finance checks.
+    expect(within(code).getAllByRole('option').map(option => option.textContent)).toEqual(['Choose an option', 'Provider state adopted; reversal waits for its payment', 'Platform state confirmed; reversal set aside for good']);
+    expect(within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent).toContain('Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile, the reversal applies to it and this exception closes.');
     const outcome = () => within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
     await user.selectOptions(code, 'provider_state_adopted');
-    expect(outcome()).toContain('Provider state adopted keeps the reversal waiting for its payment, with no new exception');
+    expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Provider state adopted; reversal waits for its payment');
+    expect(outcome()).toContain('The reversal keeps waiting for its payment, with no new exception: the reconciliation that records that payment reverses it');
     await user.selectOptions(code, 'platform_state_confirmed');
+    expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Platform state confirmed; reversal set aside for good');
     expect(outcome()).toContain('The next reconciliation sets the reversal aside for good: it reverses nothing, even if its payment arrives later.');
     expect(outcome()).not.toContain('It does not allocate a payment');
     await user.type(within(dialog).getByLabelText(/^Reason/), 'The provider confirmed no such collection.');
     await user.click(within(dialog).getByRole('button', { name: 'Resolve exception' }));
     const answer = await screen.findByRole('status', { name: 'Resolution recorded' });
     expect(answer.textContent).toMatch(/Exception resolution recorded\. This reversal evidence is set aside at the next reconciliation/);
-    // Its Resolve button goes with the resolution, so focus moves to the answer.
+    // Its Resolve button goes with the resolution, so focus moves to the answer; the exception, shown alone, names its resolution the same way.
     await waitFor(() => expect(document.activeElement).toBe(answer));
+    expect(await screen.findByText('Resolution: Platform state confirmed; reversal set aside for good')).toBeTruthy();
+  });
+
+  it('keeps the generic labels and words for a provider status mismatch that is not a waiting reversal', async () => {
+    const user = userEvent.setup();
+    const mismatch = api.mutate((state, ctx) => raiseException(state, ctx, 'provider_status_mismatch', { notes: 'The provider shows the mandate active; the platform shows it pending activation.' }));
+    renderApp(`/exceptions?record=${mismatch.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const code = within(dialog).getByLabelText(/How was this resolved/);
+    expect(within(code).getAllByRole('option').map(option => option.textContent)).toEqual(['Choose an option', 'Provider state adopted', 'Platform state confirmed', 'Escalated to provider']);
+    await user.selectOptions(code, 'provider_state_adopted');
+    expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Provider state adopted');
+    expect(within(dialog).getByText(/^Record outcome:/).parentElement!.textContent).toContain('It does not allocate a payment, issue a refund, reissue a mandate or move money.');
   });
 
   it('shows a stored exception without a severity as having none, never as low', async () => {

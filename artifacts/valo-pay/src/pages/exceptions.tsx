@@ -16,7 +16,7 @@ import { exceptionSeverities, failureCodeList, resolutionCodesForException, reso
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
-import { ExceptionContext } from '@/components/exception-context';
+import { ExceptionContext, resolutionLabel } from '@/components/exception-context';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { useFocusWhenLost } from '@/lib/focus';
 
@@ -205,7 +205,7 @@ export default function ExceptionsPage() {
                           </Button>
                         </div>
                       ) : (
-                        <span className="text-muted-foreground text-xs">Resolution: {readableLabel(exception.data?.resolutionCode)}</span>
+                        <span className="text-muted-foreground text-xs">Resolution: {resolutionLabel(exception, exception.data?.resolutionCode)}</span>
                       )}
                     </td>
                   </tr>
@@ -234,7 +234,7 @@ export default function ExceptionsPage() {
           : values.confirmedFailureCode && values.resolutionCode !== 'resolved_failed' ? { confirmedFailureCode: 'Choose a failure code only when the provider confirmed that the debit failed.' } : {} : undefined}
         fields={
           actionKind === 'resolve' ? [
-            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesForException(selectedEx).map(code => ({ label: readableLabel(code), value: code })) },
+            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesForException(selectedEx).map(code => ({ label: resolutionLabel(selectedEx, code), value: code })) },
             ...(checkoutOutcome ? [{
               name: 'evidenceReference', label: 'Evidence reference', type: 'text' as const, isData: true,
               help: 'Only when the payment is confirmed as received: the masked reference of the evidence that the money arrived, such as a bank statement line (STMT-***4411).',
