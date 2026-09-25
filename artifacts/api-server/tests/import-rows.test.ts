@@ -2,7 +2,7 @@
 // the quick import (POST /v1/imports) requires a source row ID on every row and recognises its rows across imports,
 // and each row error names the operator's column in plain words, lists every failing rule and keeps the raw detail.
 import assert from "node:assert/strict";
-import { fromImportBatch, importFieldLabel, suggestImportField, suggestRowIdColumn, csvHeader } from "@workspace/valopay-schema";
+import { fromImportBatch, importFieldLabel, importFieldsOf, suggestImportField, suggestRowIdColumn, csvHeader } from "@workspace/valopay-schema";
 import { seedMerchant } from "../src/lib/valopay-seed";
 import { importCsv, QUICK_IMPORT_SOURCE } from "../src/lib/valopay-import";
 import { validateRecord } from "../src/domain/validation";
@@ -117,4 +117,87 @@ const quick = (state: ReturnType<typeof seedMerchant>, kind: string, csv: string
   assert.equal(batch.data.check.rows[0].message, "Consent source or reference (column consentProvenance): Enter a value; it is blank on this row."); checks += 1;
 }
 
-console.log(`Import row checks passed (${checks} checks): the quick import's required row IDs and durable recognition, row errors in the operator's words with every failing rule and the raw detail, single messages for record forms, and the shared labels.`);
+{
+  // A row ID is kept with the record, so it is screened as its column: a raw account number is refused as a batch
+  // refuses it, on a check and on a commit, with or without an Idempotency-Key.
+  const state = seedMerchant("row-id-screen");
+  const before = state.records.length;
+  const raw = "account_number,name,consentProvenance\n0123456789,Raw account row,Synthetic consent";
+  refused(() => quick(state, "customers", raw, { identityColumn: "account_number" }), /^Raw bank account details are not permitted; store a masked identifier only\.$/, "a raw account number as the row ID is refused");
+  refused(() => quick(state, "customers", raw, { identityColumn: "account_number", commit: false }), /^Raw bank account details are not permitted/, "and refused by a check");
+  refused(() => quick(state, "customers", "Account ID,name,consentProvenance\n0123-4567-89,Account digits,Synthetic consent", { identityColumn: "Account ID" }), /^Raw financial identifiers are not permitted/, "digits under a financial header are refused");
+  check(state.records.length === before, "nothing is saved from a refused row ID");
+  const masked = quick(state, "customers", "account_ref,name,consentProvenance\nACC-0001,Account reference row,Synthetic consent", { identityColumn: "account_ref" });
+  check(masked.imported === 1 && state.records.find((record) => record.name === "Account reference row")?.data.importIdentity.rowId === "ACC-0001", "a row ID that is no account number is kept");
+}
+
+{
+  // The header the browser reads is the importer's: blank lines before it are skipped, as the server's parser skips them.
+  assert.deepEqual(csvHeader("\nrow_id,name,consentProvenance\nr1,Leading blank line,Synthetic consent"), ["row_id", "name", "consentProvenance"]); checks += 1;
+  assert.deepEqual(csvHeader("﻿\r\n  \n\t\r\nrow_id,name\r\nr1,Blank lines"), ["row_id", "name"]); checks += 1;
+  assert.deepEqual(csvHeader("\n\n"), []); checks += 1;
+  const lead = quick(seedMerchant("leading-blank"), "customers", "\nrow_id,name,consentProvenance\nr1,Leading blank line,Synthetic consent", { commit: false });
+  check(lead.valid === 1 && lead.invalid === 0, "and the importer reads the same file");
+}
+
+{
+  // A reference chosen as the row ID column fills no reference unless mapped to it, so its generated reference warns.
+  const state = seedMerchant("reference-row-id");
+  const file = "Reference,name,consentProvenance\nREF-ROW-1,Keyed by its reference,Synthetic consent";
+  const unmapped = quick(state, "customers", file, { identityColumn: "Reference", commit: false });
+  check(unmapped.valid === 1 && unmapped.warnings?.some((warning) => warning.startsWith("No column is mapped to Reference, so each record gets a generated reference. Not mapped to a field: Reference, which looks like the reference.")), `the fallback reference warns (${JSON.stringify(unmapped.warnings)})`);
+  const mapped = quick(state, "customers", file, { identityColumn: "Reference", mapping: { Reference: "reference" } });
+  check(mapped.imported === 1 && !mapped.warnings && state.records.find((record) => record.name === "Keyed by its reference")?.reference === "REF-ROW-1", "mapped to the reference, it is the row ID and the reference");
+  const other = quick(state, "customers", "source_row_id,name,consentProvenance\nrow-9,No reference column,Synthetic consent", { identityColumn: "source_row_id", commit: false });
+  check(!other.warnings, "a row ID column that does not look like the reference is still metadata");
+}
+
+{
+  // A field a CSV cell cannot fill, such as one Valo Pay sets, is named in plain words, never by its path or zod's text.
+  const state = seedMerchant("platform-fields");
+  const history = quick(state, "mandates", "row_id,name,customerId,amount,workflow,consentEvidence,history\nr1,History,DEMO-C1001,5000000,hosted_consent,SYNTHETIC-CONSENT,v1", { commit: false, mapping: { history: "policyVersionHistory" } });
+  assert.equal(history.rows[0]!.message, "Policy version history (column history): A CSV column cannot fill this field. Choose Skip column for it."); checks += 1;
+  check(/policyVersionHistory: Expected array, received string/.test(String(history.rows[0]!.detail)), "the detail keeps zod's words");
+  // Every import field of every kind, given values it cannot take, is worded without a raw path or a zod default.
+  const base: Record<string, Record<string, string>> = {
+    customers: { name: "N", consentProvenance: "Synthetic" },
+    mandates: { name: "N", customerId: "DEMO-C1001", amountKobo: "5000000", workflow: "hosted_consent", consentEvidence: "SYN-1" },
+    "due-items": { name: "N", customerId: "DEMO-C1001", amountKobo: "1000000", dueDate: "2028-12-01", owner: "lms" },
+    attempts: { name: "N", customerId: "DEMO-C1001", amountKobo: "2500000", dueItemId: "DEMO-LOAN-1001" },
+    observations: { name: "N", reference: "OBS-X", customerId: "DEMO-C1001", amountKobo: "2500000", source: "webhook" },
+  };
+  const leaks: string[] = [];
+  for (const kind of Object.keys(base)) {
+    for (const field of importFieldsOf(kind)) {
+      for (const bad of ["zzz", "-5", "true", "a|b", "x".repeat(300)]) {
+        const cells = { ...base[kind], [field]: bad }, fields = Object.keys(cells);
+        const csv = `rid,${fields.map((_, index) => `c${index}`).join(",")}\nr1,${fields.map((name) => `"${cells[name]}"`).join(",")}`;
+        const [row] = quick(state, kind, csv, { commit: false, identityColumn: "rid", mapping: Object.fromEntries(fields.map((name, index) => [`c${index}`, name])) }).rows;
+        if (row!.status === "invalid" && (importFieldsOf(kind).some((key) => new RegExp(`\\b${key}:`).test(row!.message) || (/[A-Z]/.test(key) && new RegExp(`\\b${key}\\b`).test(row!.message))) || /Expected|received|Invalid|Required|String must|Number must|Array must/.test(row!.message))) leaks.push(`${kind}.${field}=${bad.slice(0, 5)}: ${row!.message}`);
+      }
+    }
+  }
+  assert.deepEqual(leaks, []); checks += 1;
+}
+
+{
+  // Decision 4 for the import's own conflicts: a row reports its reference and row ID conflicts beside every other rule.
+  const state = seedMerchant("conflicts");
+  const conflict = quick(state, "customers", "row_id,name,reference,consentProvenance,status\nr1,Conflict,DEMO-C1001,,archived", { commit: false });
+  assert.equal(conflict.rows[0]!.message, "Loan software reference (column reference): This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped. Status: “archived” is not one of the choices. Use Active (active) or Inactive (inactive). Consent source or reference (column consentProvenance): Enter a value; it is blank on this row."); checks += 1;
+  // A cell that cannot be read does not hide the reference conflict.
+  const unreadable = quick(state, "due-items", "row_id,name,reference,customerId,amount,dueDate,owner\nr1,Unreadable,DEMO-LOAN-1001,DEMO-C1001,12.5,2028-12-01,lms", { commit: false });
+  assert.equal(unreadable.rows[0]!.message, "Amount: Enter kobo as a whole number without commas or decimals, for example 100000. Choose Naira if the source uses naira. Reference: This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped."); checks += 1;
+  // A row ID imported before with different data reports the other rules too, and its own record's reference is no conflict.
+  check(quick(state, "customers", "row_id,name,reference,consentProvenance\nk1,Keyed once,QUICK-KEYED-1,Synthetic consent").imported === 1, "a keyed row is imported");
+  const changed = quick(state, "customers", "row_id,name,reference,consentProvenance,status\nk1,Keyed renamed,QUICK-KEYED-1,Synthetic consent,archived", { commit: false });
+  assert.equal(changed.rows[0]!.message, "This source row ID was already imported with different data. Review the existing record; it cannot be replaced by importing again. Status: “archived” is not one of the choices. Use Active (active) or Inactive (inactive)."); checks += 1;
+  const moved = quick(state, "customers", "row_id,name,reference,consentProvenance\nk1,Keyed once,DEMO-C1001,Synthetic consent", { commit: false });
+  check(/^This source row ID was already imported with different data\..* Loan software reference \(column reference\): This reference belongs to another saved record\./.test(moved.rows[0]!.message), `a changed reference that another record has is reported as well (${moved.rows[0]!.message})`);
+  // Payment evidence: an event saved with different details is one conflict, not also the reference's.
+  check(quick(state, "observations", "row_id,reference,customerId,amountKobo,source,eventId\no1,QUICK-EVIDENCE-2,DEMO-C1001,2500000,webhook,evt-2").imported === 1, "payment evidence is imported");
+  const evidence = quick(state, "observations", "row_id,reference,customerId,amountKobo,source,eventId,currency\no2,QUICK-EVIDENCE-2,DEMO-C1001,2600000,webhook,evt-2,XYZ", { commit: false });
+  check(evidence.rows[0]!.message.startsWith("This source event is already saved with different details.") && !/reference belongs/.test(evidence.rows[0]!.message), `the event conflict alone (${evidence.rows[0]!.message})`);
+}
+
+console.log(`Import row checks passed (${checks} checks): the quick import's required row IDs and durable recognition, screened as their column, row errors in the operator's words with every failing rule (the import's own conflicts included) and the raw detail, single messages for record forms, the shared labels, the header after blank lines, and the reference chosen as the row ID.`);

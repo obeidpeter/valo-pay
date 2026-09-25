@@ -25,27 +25,37 @@ const choices = (options: readonly unknown[]) => {
 const notChoice = (value: unknown, options: readonly unknown[]) => blank(value) ? MISSING : `“${String(value)}” is not one of the choices. Use ${choices(options)}.`;
 const DATE = "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z, and a real date.";
 
-/** What a schema issue asks for, or undefined to keep its own words. */
-function issueWords(issue: ZodIssue, field: string): string | typeof MISSING | undefined {
+/** zod's own texts, which a row error never shows; a schema's own words for an issue are plain already. */
+const zodText = /^(Required|Expected |Invalid|Unrecognized key|String must|Number must|Array must|Set must|Date must|BigInt must|Intersection results)/;
+/**
+ * An issue no rule below words: a list or an object, which no CSV cell can be (Valo Pay sets such fields), the
+ * schema's own words, or a plain request to check the value. zod's text stays in the detail.
+ */
+function otherIssue(issue: ZodIssue): string {
+  if (issue.code === "invalid_type" && ["array", "object", "map", "set"].includes(issue.expected)) return "A CSV column cannot fill this field. Choose Skip column for it.";
+  return zodText.test(issue.message) ? "Check this value; it is not in the form this field takes." : issue.message;
+}
+/** What a schema issue asks for, in plain words. */
+function issueWords(issue: ZodIssue, field: string): string | typeof MISSING {
   switch (issue.code) {
     case "invalid_type":
       if (issue.received === "undefined" || issue.received === "null") return MISSING;
       if (issue.expected === "integer") return "Enter a whole number.";
       if (issue.expected === "number") return "Enter a number.";
       if (issue.expected === "boolean") return "Use true or false.";
-      return undefined;
+      return otherIssue(issue);
     case "too_small":
       if (issue.type === "string") return Number(issue.minimum) <= 1 ? MISSING : `Enter at least ${issue.minimum} characters.`;
-      return issue.type === "number" ? `Enter a number of at least ${issue.minimum}.` : undefined;
+      return issue.type === "number" ? `Enter a number of at least ${issue.minimum}.` : otherIssue(issue);
     case "too_big":
       if (issue.type === "string") return `Use at most ${issue.maximum} characters.`;
-      return issue.type === "number" ? `Enter a number of at most ${issue.maximum}.` : undefined;
+      return issue.type === "number" ? `Enter a number of at most ${issue.maximum}.` : otherIssue(issue);
     case "invalid_enum_value":
       return notChoice(issue.received, issue.options);
     case "invalid_string": case "custom":
-      return dated.test(field) ? DATE : undefined;
+      return dated.test(field) ? DATE : otherIssue(issue);
     default:
-      return undefined;
+      return otherIssue(issue);
   }
 }
 /** What a rule asks for: its words, MISSING for a value the row lacks, or undefined to keep the refusal's own words. */
@@ -81,7 +91,7 @@ export function importRowError(problems: ValidationProblem[], context: { kind: s
     const key = problem.field ?? `\u0000${problem.message}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (!problem.field) { sentences.push(problem.message); continue; }
+    if (!problem.field) { sentences.push(problem.rule?.type === "issue" ? otherIssue(problem.rule.issue) : problem.message); continue; }
     const label = importFieldLabel(context.kind, problem.field), column = context.columnOf(problem.field);
     const words = ruleWords(problem.rule, problem.field, context.kind, context.unit, column);
     if (words === MISSING && !column) { sentences.push(`No column is mapped to ${label}. Map the column that holds it.`); continue; }

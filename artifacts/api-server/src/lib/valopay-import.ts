@@ -1,6 +1,6 @@
 import { parse } from "csv-parse/sync";
 import { canonicalDigest } from './digests';
-import { makeRecord, validateRecord } from "../domain";
+import { assertNoRealBankDetails, makeRecord, validateRecord } from "../domain";
 import type { ValidationProblem } from "../domain/validation";
 import type { Context, DomainState } from "../domain/types";
 import { counted, csvAmountToKobo, defaultStatus, importBooleanFields, importFieldsOf, importKinds as sharedImportKinds, importNumericFields, suggestImportField } from "@workspace/valopay-schema";
@@ -17,10 +17,15 @@ function fail(message: string, status = 400): never { throw Object.assign(new Er
  */
 export const QUICK_IMPORT_SOURCE = "Quick import";
 const ROW_ID_RULE = "Choose the column that holds each row's source row ID: every row needs a different, non-empty value, up to 160 characters, so that a later import recognises the row.";
-/** Each row's source row ID, from the identity column: a different, non-empty value on every row, up to 160 characters, or the file is refused (400). */
+/**
+ * Each row's source row ID, from the identity column: a different, non-empty value on every row, up to 160 characters,
+ * or the file is refused (400). The ID is kept with the record, so it is screened for bank details under its header.
+ */
 export function sourceRowIds(rows: Record<string, string>[], identityColumn: string | undefined, columns: string[]): string[] {
   if (!identityColumn?.trim()) fail(`Map a row ID column. ${ROW_ID_RULE}`);
   if (!columns.includes(identityColumn)) fail(`Map a row ID column. The file has no column named “${identityColumn}”. ${ROW_ID_RULE}`);
+  try { assertNoRealBankDetails(rows.map((row) => ({ [identityColumn]: row[identityColumn] }))); }
+  catch (error) { fail(error instanceof Error ? error.message : "The source row IDs could not be checked."); }
   const ids = rows.map((row) => String(row[identityColumn] || "").trim());
   if (ids.some((id) => !id || id.length > 160) || new Set(ids).size !== ids.length) fail("Choose a source row ID column with a different, non-empty value on every row (up to 160 characters).");
   return ids;
@@ -31,17 +36,17 @@ const unsafeKey = (key: string) => ["__proto__", "constructor", "prototype"].inc
 /**
  * A warning for each displayed value that fell back while a column went unused: a name taken from the reference
  * (or the row number) and a generated reference. A column is unused when it is skipped or names no field of the
- * kind, so the importer keeps it only as extra detail that nothing reads; the row identity column is metadata.
+ * kind, so the importer keeps it only as extra detail that nothing reads; the row identity column is metadata,
+ * unless it looks like the field that fell back (a reference chosen as the row ID fills no reference unless mapped).
  * Without an unused column a fallback is taken as intended: the source simply has no such value.
  */
 function fallbackWarnings(kind: string, columns: string[], targets: string[], identityColumn: string | undefined, fallbacks: { name: number; reference: number }): string[] {
   const fields = new Set(importFieldsOf(kind));
-  const unused = columns.filter((column, index) => targets[index] ? !fields.has(targets[index]!) : column !== identityColumn);
-  if (!unused.length) return [];
   const warnings: string[] = [];
   for (const field of ["name", "reference"] as const) {
     const rows = fallbacks[field], one = rows === 1, label = field === "name" ? "Name" : "Reference";
-    if (!rows) continue;
+    const unused = columns.filter((column, index) => targets[index] ? !fields.has(targets[index]!) : column !== identityColumn || suggestImportField(kind, column) === field);
+    if (!rows || !unused.length) continue;
     const fallback = field === "name"
       ? targets.includes(field) ? `${one ? "its name is" : "their names are"} taken from ${one ? "its reference (or its row number" : "their references (or their row numbers"} without one)` : "each record's name is taken from its reference (or its row number without one)"
       : targets.includes(field) ? `${one ? "it gets a generated reference" : "they get generated references"}` : "each record gets a generated reference";
@@ -124,11 +129,13 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       const identity = { source: identities.source, rowId: identities.ids[index]!, ...(identities.batchId ? { batchId: identities.batchId } : {}) };
       // Stored in the row's import identity and compared when the row is imported again: its first form.
       const identityFingerprint = canonicalDigest({ ...record, data: { ...record.data, ...blankAsZero } }, 'legacy-en-us-replacer');
-      // A row with a cell that could not be read is not compared with saved rows: it is not yet what the file means.
-      const prior = problems.length ? undefined : working.records.find(r => r.kind === input.kind && r.data.importIdentity?.source === identity.source && r.data.importIdentity?.rowId === identity.rowId);
-      if (prior) {
-        if (prior.data.importIdentity.fingerprint !== identityFingerprint) throw new Error('This source row ID was already imported with different data. Review the existing record; it cannot be replaced by importing again.');
-        rows.push({ row: index + 2, status: 'duplicate', message: 'This source row ID was imported before with the same data; nothing is changed.' }); continue;
+      // A row with a cell that could not be read is not compared with its saved row, nor as payment evidence, whose details
+      // include its amounts: it is not yet what the file means. Its other conflicts are reported with every other rule.
+      const readable = !problems.length;
+      const prior = working.records.find(r => r.kind === input.kind && r.data.importIdentity?.source === identity.source && r.data.importIdentity?.rowId === identity.rowId);
+      if (prior && readable) {
+        if (prior.data.importIdentity.fingerprint === identityFingerprint) { rows.push({ row: index + 2, status: 'duplicate', message: 'This source row ID was imported before with the same data; nothing is changed.' }); continue; }
+        problems.push({ message: 'This source row ID was already imported with different data. Review the existing record; it cannot be replaced by importing again.' });
       }
       const named=Boolean(record.name),referenced=Boolean(record.reference);
       record.name ||= record.reference || `${input.kind} import ${index+1}`;
@@ -145,18 +152,17 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       if(input.kind==="due-items")record.data.outstandingKobo=record.amountKobo;
       if(input.kind==="attempts"){record.data.source="external";record.data.simulated=true;}
       if(input.kind==="mandates"){record.data.origin="imported";record.data.consentGaps ||= [];}
-      if (!problems.length) {
-        // Payment evidence is the same when its source event is or, without event IDs, when its source, reference, payer,
-        // amounts, currency, connection and batch are. Evidence that only shares a reference is new: reconciliation
-        // merges it into its payment or holds it as a conflict, and never loses its money.
-        const sameDetails=(saved:{reference:string;customerId:string;amountKobo:number;data:Record<string,any>})=>saved.reference===record.reference&&saved.customerId===(record.customerId||"")&&saved.amountKobo===record.amountKobo
-          &&["grossAmountKobo","feeKobo","batchReference","currency","provider","providerConnection"].every(key=>saved.data[key]===record.data[key]);
-        const savedEvidence=input.kind==="observations"?working.records.find(r=>r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
-        if(savedEvidence&&!sameDetails(savedEvidence))throw new Error('This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.');
-        // A new row ID never takes over a saved record: a conflicting row is refused, not silently skipped.
-        if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r.kind===input.kind&&r.reference===record.reference))){
-          throw new Error('This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped.');
-        }
+      // Payment evidence is the same when its source event is or, without event IDs, when its source, reference, payer,
+      // amounts, currency, connection and batch are. Evidence that only shares a reference is new: reconciliation
+      // merges it into its payment or holds it as a conflict, and never loses its money. The row's own saved record is
+      // no other record.
+      const sameDetails=(saved:{reference:string;customerId:string;amountKobo:number;data:Record<string,any>})=>saved.reference===record.reference&&saved.customerId===(record.customerId||"")&&saved.amountKobo===record.amountKobo
+        &&["grossAmountKobo","feeKobo","batchReference","currency","provider","providerConnection"].every(key=>saved.data[key]===record.data[key]);
+      const savedEvidence=input.kind==="observations"&&readable?working.records.find(r=>r!==prior&&r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
+      if(savedEvidence&&!sameDetails(savedEvidence))problems.push({ message: 'This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.' });
+      // A new row ID never takes over a saved record: a conflicting row is refused, not silently skipped.
+      else if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r!==prior&&r.kind===input.kind&&r.reference===record.reference))){
+        problems.push({ field: 'reference', message: 'This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped.' });
       }
       try { validateRecord(working,ctx,input.kind,record,false,problems); }
       catch (error) { problems.push({ message: error instanceof Error ? error.message : 'Invalid record.' }); }

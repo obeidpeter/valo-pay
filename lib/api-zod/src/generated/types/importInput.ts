@@ -20,7 +20,7 @@ export interface ImportInput {
   /** Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice. */
   amountUnit?: ImportInputAmountUnit;
   /**
-     * Required: the CSV header of the column that holds each row's source row ID, a different, non-empty value of up to 160 characters on every row. A file without that column, or a value blank or repeated, is refused (400) naming what to map. The column is the row's identity and fills no field unless the mapping maps it to one or it is headed reference or eventId. Rows are recognised across quick imports by the lender's one quick-import source and the row ID: a row imported before with the same data is skipped as a duplicate, and one with different data is a row error.
+     * Required: the CSV header of the column that holds each row's source row ID, a different, non-empty value of up to 160 characters on every row. A file without that column, or a value blank or repeated, is refused (400) naming what to map. The row ID is kept with the record, so it is screened under its column's header: a raw account number is refused (400), as in a saved batch. The column is the row's identity and fills no field unless the mapping maps it to one or it is headed reference or eventId. Rows are recognised across quick imports by the lender's one quick-import source and the row ID: a row imported before with the same data is skipped as a duplicate, and one with different data is a row error.
      * @maxLength 100
      */
   identityColumn: string;

@@ -77,11 +77,12 @@ export function suggestRowIdColumn(columns: readonly string[]): string | undefin
 }
 /**
  * The header row of a CSV as the importer reads it: the first record, without
- * a byte order mark, each header trimmed and quoted ones unquoted. Empty when
- * the text has no complete header row, such as an unclosed quote.
+ * a byte order mark or the blank lines before it, each header trimmed and
+ * quoted ones unquoted. Empty when the text has no complete header row, such
+ * as an unclosed quote.
  */
 export function csvHeader(text: string): string[] {
-  const source = text.replace(/^\uFEFF/, ""), headers: string[] = [];
+  const source = text.replace(/^\uFEFF/, "").replace(/^(?:[ \t]*(?:\r\n|\n|\r))+/, ""), headers: string[] = [];
   const skipSpaces = (at: number) => { while (source[at] === " " || source[at] === "\t") at++; return at; };
   let index = 0;
   for (;;) {
