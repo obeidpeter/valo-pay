@@ -220,6 +220,9 @@ try {
       // Customer credit in SQL is naira only: what the customer's position is without the payments in another currency.
       const naira = full.records.filter((r) => !["READ-USD", "READ-USD-SPELLED"].includes(r.reference));
       assert.equal((await getCustomerHistory(ctx, merchantId, due.customerId, {})).position.unallocatedKobo, customerTimeline({ ...full, records: naira }, due.customerId).position.unallocatedKobo, "customer credit leaves out money in another currency");
+      // The third review of the audit fixes: that money is listed beside it by currency, whatever the spelling, in SQL as in the domain and the dispute pack.
+      assert.deepEqual((await getCustomerHistory(ctx, merchantId, due.customerId, {})).position.unallocatedOtherCurrencies, { USD: { count: 2, amount: 150_000 } }, "the customer history lists the money in another currency beside the naira credit");
+      assert.deepEqual(customerTimeline(full, due.customerId).position.unallocatedOtherCurrencies, { USD: { count: 2, amount: 150_000 } }, "and so does the customer timeline");
       // The audit month is the same WAT month in SQL and in the domain.
       const watMonth = (at: string) =>
         new Date(Date.parse(at) + 3_600_000).toISOString().slice(0, 7);

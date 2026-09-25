@@ -6,7 +6,7 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { CustomerHistoryCounts } from './customerHistoryCounts';
-import type { RecordData } from './recordData';
+import type { CustomerPosition } from './customerPosition';
 import type { ValopayRecord } from './valopayRecord';
 
 /**
@@ -14,7 +14,7 @@ import type { ValopayRecord } from './valopayRecord';
  */
 export interface CustomerHistory {
   customer: ValopayRecord;
-  position: RecordData;
+  position: CustomerPosition;
   events: ValopayRecord[];
   mandates: ValopayRecord[];
   dueItems: ValopayRecord[];

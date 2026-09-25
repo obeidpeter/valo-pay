@@ -7,9 +7,9 @@
  */
 import PDFDocument from "pdfkit";
 import { VALO_PACK_SANS_BOLD, VALO_PACK_SANS_REGULAR } from "../fonts/valo-pack-sans";
-import { counted, moneyText, otherCurrenciesText, paymentUnappliedKobo, WAT_OFFSET_MS } from "@workspace/valopay-schema";
+import { counted, moneyText, otherCurrenciesText, WAT_OFFSET_MS } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
-import { inNaira, positionFor, type CustomerPosition, type OtherCurrencies } from "../domain/close";
+import { inNaira, positionFor, unallocatedOtherCurrencies, type CustomerPosition, type OtherCurrencies } from "../domain/close";
 import { currencyOf } from "../domain/reconciliation";
 import { recordsOf } from "../domain/records";
 import { verifyAudit } from "./valopay-store";
@@ -168,7 +168,7 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
   const mandates = by("mandates"), dueItems = by("due-items"), attempts = by("attempts"), payments = by("payments"), exceptions = by("exceptions"), notifications = by("notifications");
   const consent = mandates.map((mandate) => ({ mandate: mandate.reference, evidence: text(mandate.data.consentEvidence), gaps: Array.isArray(mandate.data.consentGaps) ? mandate.data.consentGaps : [], provenance: text(customer.data.consentProvenance) }));
   // Naira totals as the close keeps them: money in another currency is listed beside them, never added in.
-  const unallocatedOther = inNaira(payments.filter((p) => paymentUnappliedKobo(p) > 0), (p) => paymentUnappliedKobo(p)).otherCurrencies;
+  const unallocatedOther = unallocatedOtherCurrencies(payments);
   return {
     kind: "dispute-pack", environment: "synthetic_sandbox",
     merchant: { id: state.merchant.id, name: state.merchant.name, provider: state.merchant.provider, mode: state.merchant.mode },
