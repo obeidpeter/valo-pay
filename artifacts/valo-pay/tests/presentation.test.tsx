@@ -4,7 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { Router } from 'wouter';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
-import { presentationSamples } from '@/lib/presenter-brief';
+import { presentationSamples, presenterBrief } from '@/lib/presenter-brief';
 import { queryClient } from '@/App';
 import { Layout } from '@/components/layout';
 import { PresentationProvider } from '@/components/presentation-guide';
@@ -122,6 +122,16 @@ it('imports the exact sample pack through batch validation, matches it automatic
   const review = pageReconciliation(state, 'proposals', { limit: 100 }, ctx.now).items;
   expect(review.map(r => r.id)).not.toContain(allocations[0]!.id);
   expect(review.map(r => state.records.find(p => p.id === r.data.paymentId)?.reference)).toEqual(['SBX-PAY-1003']);
+});
+
+// Integration fix: the kit said to choose Naira for every file, but Import batches offers Payment evidence no unit by
+// that name. It names the option each record type offers (amountUnitName).
+it('names the amount unit of each sample file as Import batches offers it', async () => {
+  const brief = presenterBrief('2026-09-22');
+  expect(brief).toContain("In Import batches choose the matching record type and, under Amounts in the source file, Naira (₦), or Major units (₦, or the row's currency) for Payment evidence;");
+  expect(brief).not.toMatch(/choose Naira,/);
+  renderApp('/presentation');
+  expect((await screen.findByText(/^In Import batches, choose each matching record type/)).textContent).toMatch(/^In Import batches, choose each matching record type and, under Amounts in the source file, Naira \(₦\), or Major units \(₦, or the row's currency\) for Payment evidence\. Use source name/);
 });
 
 it('opens the sample customer at step three, where the automatic R1 match and its explanation are shown', async () => {

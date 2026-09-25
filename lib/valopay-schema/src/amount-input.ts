@@ -64,13 +64,17 @@ export function minorToMajor(value: number, currency?: string): string {
  * Decode a CSV source amount in its explicitly chosen unit: `naira` is the
  * major unit of the row's currency (naira when it names none), converted with
  * that currency's decimals (majorToMinor), and `kobo` its minor unit as a whole
- * number.
+ * number. A minor-unit amount that is not one names the row's smallest unit
+ * and the other unit as the import screens call it for the kind (amountUnitName).
  */
-export function csvAmountToKobo(value: string, unit: 'naira' | 'kobo', currency?: string): number {
+export function csvAmountToKobo(value: string, unit: 'naira' | 'kobo', currency?: string, kind = ''): number {
   if (unit === 'naira') return majorToMinor(value, currency);
   const input = value.trim();
   if (!/^\d+$/.test(input) || !Number.isSafeInteger(Number(input))) {
-    throw new MoneyInputError('Enter kobo as a whole number without commas or decimals, for example 100000. Choose Naira if the source uses naira.');
+    const code = codeOf(currency), major = amountUnitName('naira', kind);
+    throw new MoneyInputError(code === "NGN"
+      ? `Enter kobo as a whole number without commas or decimals, for example 100000. Choose ${major} if the source uses naira.`
+      : `Enter the smallest unit of ${code} as a whole number without commas or decimals, for example 100000. Choose ${major} if the source gives amounts in ${code} rather than its smallest unit.`);
   }
   return Number(input);
 }

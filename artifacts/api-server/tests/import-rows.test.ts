@@ -92,7 +92,14 @@ const quick = (state: ReturnType<typeof seedMerchant>, kind: string, csv: string
   assert.equal(attempt.rows[0]!.message, "Instalment reference or ID (column instalment): No instalment has the reference or ID “NOPE-D” in this lender."); checks += 1;
 
   const unparsed = quick(state, "due-items", "row_id,name,customerId,amount,dueDate,owner\nr1,Unparsed,DEMO-C1001,12.5,2028-12-01,lms", { commit: false, amountUnit: "kobo" });
-  assert.equal(unparsed.rows[0]!.message, "Amount: Enter kobo as a whole number without commas or decimals, for example 100000. Choose Naira if the source uses naira."); checks += 1;
+  assert.equal(unparsed.rows[0]!.message, "Amount: Enter kobo as a whole number without commas or decimals, for example 100000. Choose Naira (₦) if the source uses naira."); checks += 1;
+  // Integration fix: payment evidence has no unit called Naira, and its row can name another currency. A minor-unit
+  // amount that is not a whole number names the kind's own option (amountUnitName) and the row's smallest unit.
+  const minor = quick(state, "observations", "row_id,name,reference,customerId,amount,source,currency\nr1,Naira decimals,QUICK-MINOR-1,DEMO-C1001,10.50,card,\nr2,Dollar decimals,QUICK-MINOR-2,DEMO-C1001,10.50,card,usd", { commit: false, amountUnit: "kobo" });
+  assert.deepEqual(minor.rows.map((row) => row.message), [
+    "Amount: Enter kobo as a whole number without commas or decimals, for example 100000. Choose Major units (₦, or the row's currency) if the source uses naira.",
+    "Amount: Enter the smallest unit of USD as a whole number without commas or decimals, for example 100000. Choose Major units (₦, or the row's currency) if the source gives amounts in USD rather than its smallest unit.",
+  ]); checks += 1;
 }
 
 {
@@ -187,7 +194,7 @@ const quick = (state: ReturnType<typeof seedMerchant>, kind: string, csv: string
   assert.equal(conflict.rows[0]!.message, "Loan software reference (column reference): This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped. Status: “archived” is not one of the choices. Use Active (active) or Inactive (inactive). Consent source or reference (column consentProvenance): Enter a value; it is blank on this row."); checks += 1;
   // A cell that cannot be read does not hide the reference conflict.
   const unreadable = quick(state, "due-items", "row_id,name,reference,customerId,amount,dueDate,owner\nr1,Unreadable,DEMO-LOAN-1001,DEMO-C1001,12.5,2028-12-01,lms", { commit: false });
-  assert.equal(unreadable.rows[0]!.message, "Amount: Enter kobo as a whole number without commas or decimals, for example 100000. Choose Naira if the source uses naira. Reference: This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped."); checks += 1;
+  assert.equal(unreadable.rows[0]!.message, "Amount: Enter kobo as a whole number without commas or decimals, for example 100000. Choose Naira (₦) if the source uses naira. Reference: This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped."); checks += 1;
   // A row ID imported before with different data reports the other rules too, and its own record's reference is no conflict.
   check(quick(state, "customers", "row_id,name,reference,consentProvenance\nk1,Keyed once,QUICK-KEYED-1,Synthetic consent").imported === 1, "a keyed row is imported");
   const changed = quick(state, "customers", "row_id,name,reference,consentProvenance,status\nk1,Keyed renamed,QUICK-KEYED-1,Synthetic consent,archived", { commit: false });

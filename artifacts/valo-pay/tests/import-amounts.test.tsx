@@ -113,6 +113,8 @@ describe('CSV amount units', () => {
     expect(within(preview).getAllByRole('row').slice(1).map(row => row.lastElementChild?.textContent)).toEqual(['JPY\u00a01,000', 'USD\u00a010.00', '₦18,000.50']);
     expect(document.getElementById('import-unit-help')?.textContent).toMatch(/The preview shows each converted amount in its currency\.$/);
     expect(within(preview).getByText(/^Source amounts: Major units \(₦, or the row's currency\)\./)).toBeTruthy();
+    // The sample file's unit is named as the unit control offers it, not by its raw value.
+    expect(screen.getByRole('button', { name: 'Download sample CSV' }).parentElement?.textContent).toMatch(/Download sample CSV to get started, with its amounts in the unit chosen above: Major units \(₦, or the row's currency\)\.$/);
   });
 
   it('reads and writes a form amount in its currency\'s major unit exactly', () => {

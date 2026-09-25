@@ -117,7 +117,7 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
         }
         let decoded:unknown=value;
         if (numeric.has(target) && target.endsWith('Kobo')) {
-          try { decoded = csvAmountToKobo(value, amountUnit, currencyColumn ? raw[currencyColumn] : undefined); }
+          try { decoded = csvAmountToKobo(value, amountUnit, currencyColumn ? raw[currencyColumn] : undefined, input.kind); }
           catch (error) { problems.push({ field: target, message: error instanceof Error ? error.message : 'Check this amount.' }); continue; }
           if (target === 'amountKobo') amounts.set(index + 2, decoded as number);
         } else if(numeric.has(target))decoded=Number(value);
