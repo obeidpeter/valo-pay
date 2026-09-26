@@ -15,7 +15,7 @@ localPort = 21599
 run = "pnpm --filter @workspace/valopay run dev"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/valopay", "run", "build" ]
+build = [ "bash", "scripts/deployment-node.sh", "build", "pnpm", "--filter", "@workspace/valopay", "run", "build" ]
 serve = "static"
 publicDir = "artifacts/valo-pay/dist/public"
 
