@@ -46,6 +46,7 @@ import { deleteRetainedExport } from './export-download';
 import { objectStorageClient } from './objectStorage';
 import { assertProviderEventChange } from '../providers/paystack-inbox';
 import { exceptionDecisionChanged, exceptionReviewSubjectChanged } from '../domain/exception-integrity';
+import { financialProjectionSchema, syncFinancialProjection } from './financial-projection';
 
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
@@ -2208,6 +2209,13 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   assertFinalState(before, state, merchantId, context.now, unchanged);
   const owned = await session.client.query(scopedMerchantQuery(), [merchantId, session.workspace.id, session.principal]);
   if (!owned.rows[0]) fail("Lender not found in this workspace.", 404);
+  // Explicit synthetic staging dual-write only. A typed failure rolls back the
+  // same transaction as the v1 write; no migration runs here or on startup.
+  const projectionMode = process.env.VALOPAY_FINANCIAL_PROJECTION || 'off';
+  if (!['off', 'staging'].includes(projectionMode)) throw new Error('VALOPAY_FINANCIAL_PROJECTION must be off or staging.');
+  if (projectionMode === 'staging') {
+    await syncFinancialProjection(session.client, financialProjectionSchema(process.env.VALOPAY_FINANCIAL_PROJECTION_SCHEMA || ''), session.workspace.id, state);
+  }
   const sorted = [...changed].sort((a, b) => {
     const priority = (record: ValopayRecord) => record.kind === "allocations" ? (record.status === "confirmed" ? 3 : 0) : record.kind === "audit" ? 4 : 1;
     return priority(a) - priority(b);

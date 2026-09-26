@@ -1,0 +1,71 @@
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { deliveryConfiguration, MissingSetting, probeService, schedulerExpectation } from './monitor-valopay.mjs';
+
+/** Read-only commissioning evidence. Presence, HTTP observations and operational acceptance stay separate. */
+export function commissioningReport(probe, env) {
+  const expected = schedulerExpectation(env.VALOPAY_MONITOR_EXPECT_SCHEDULER);
+  const hostMode = env.VALOPAY_OPERATIONS_HOST_MODE || 'unverified';
+  if (!['unverified', 'reserved-vm', 'autoscale', 'other'].includes(hostMode)) throw new MissingSetting('VALOPAY_OPERATIONS_HOST_MODE must be reserved-vm, autoscale or other when set.');
+  const delivery = deliveryConfiguration(env);
+  const blockers = [...probe.codes];
+  if (!expected) blockers.push('scheduler_expectation_not_configured');
+  if (expected === 'on' && hostMode === 'autoscale') blockers.push('scheduler_stops_when_host_scales_down');
+  if (hostMode === 'unverified') blockers.push('host_operating_mode_unverified');
+  if (delivery.status !== 'configured') blockers.push('alert_configuration_incomplete');
+  if (!env.VALOPAY_MONITOR_STATE_FILE?.trim()) blockers.push('monitor_state_not_configured');
+  const pendingAcceptance = [
+    'independent_monitor_schedule_and_state_durability',
+    'test_alert_received_and_acknowledged',
+    'isolated_host_database_objects_and_key_recovery',
+    'close_failure_and_recovery_rehearsal',
+  ];
+  if (expected === 'external') pendingAcceptance.unshift('external_close_job_completion_and_missed_run_detection');
+  return {
+    version: 1, kind: 'operational_commissioning', service: probe.service, observedAt: probe.observedAt,
+    status: blockers.length ? 'needs_configuration_or_repair' : 'observations_passed_acceptance_required',
+    configuration: {
+      hostMode: { value: hostMode, evidence: 'operator_setting_not_host_verification' },
+      expectedScheduler: expected || 'not_configured',
+      notification: delivery,
+      incidentState: env.VALOPAY_MONITOR_STATE_FILE?.trim() ? 'path_configured_durability_unverified' : 'not_configured',
+    },
+    observations: probe.observations,
+    blockers: [...new Set(blockers)].sort(), warnings: probe.warnings || [],
+    acceptance: { status: 'not_established', pending: pendingAcceptance },
+    effects: { alertsSent: false, closeRunStarted: false, databaseModified: false, liveOperationsEnabled: false },
+  };
+}
+
+/** A private report, replaced atomically. This is evidence of observations, never an activation instruction. */
+export async function writeCommissioningReport(path, report) {
+  const target = resolve(path);
+  await mkdir(dirname(target), { recursive: true });
+  const temporary = `${target}.${randomUUID()}.next`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    await rename(temporary, target);
+  } finally {
+    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
+}
+
+async function main() {
+  const args = process.argv.slice(2).filter((arg, index) => !(index === 0 && arg === '--'));
+  if (args.length) throw new Error('This command takes no arguments.');
+  if (!process.env.VALOPAY_MONITOR_ORIGIN) throw new MissingSetting('VALOPAY_MONITOR_ORIGIN is required for the read-only commissioning check.');
+  const expected = schedulerExpectation(process.env.VALOPAY_MONITOR_EXPECT_SCHEDULER);
+  const probe = await probeService({ origin: process.env.VALOPAY_MONITOR_ORIGIN, expectScheduler: expected });
+  const report = commissioningReport(probe, process.env);
+  if (process.env.VALOPAY_OPERATIONS_REPORT) await writeCommissioningReport(process.env.VALOPAY_OPERATIONS_REPORT, report);
+  console.log(JSON.stringify(report));
+  // 2 is a completed check that found work to do; 1 means no usable report could be produced.
+  process.exitCode = report.blockers.length ? 2 : 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => {
+  console.error(error instanceof MissingSetting ? error.message : 'Operational commissioning check failed. Check settings, connectivity and the private report path. Values and response bodies are not logged.');
+  process.exitCode = 1;
+});

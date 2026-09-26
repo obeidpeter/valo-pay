@@ -173,6 +173,10 @@ export function readStartupConfig(env: Record<string, string | undefined>, purpo
     problems.push("VALOPAY_KMS_PREVIOUS_KEYS must list Cloud KMS CryptoKey names, separated by commas.");
   }
   const runtimeIsolation = oneOf("VALOPAY_RUNTIME_ISOLATION", ["off", "staging"] as const, "off");
+  const financialProjection = oneOf("VALOPAY_FINANCIAL_PROJECTION", ["off", "staging"] as const, "off");
+  if (financialProjection === 'staging' && !/^valopay_finance_staging_[a-z0-9_]{1,32}$/.test(given('VALOPAY_FINANCIAL_PROJECTION_SCHEMA') ?? '')) {
+    problems.push('VALOPAY_FINANCIAL_PROJECTION_SCHEMA must name an isolated valopay_finance_staging_<suffix> schema when VALOPAY_FINANCIAL_PROJECTION is staging.');
+  }
   if (runtimeIsolation === "staging") {
     const needs = "when VALOPAY_RUNTIME_ISOLATION is staging";
     if (!RUNTIME_SCHEMA.test(given("VALOPAY_RUNTIME_SCHEMA") ?? "")) problems.push(`VALOPAY_RUNTIME_SCHEMA must name a valopay_runtime_staging_<suffix> schema ${needs}.`);

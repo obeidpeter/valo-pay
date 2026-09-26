@@ -147,7 +147,7 @@ export default function PilotPage() {
         <RecoveryNotice mutation={create} persistent={false} />
         {create.isSuccess && (
           <p role="status" className="text-sm">
-            Lender created. Select it above, then open Import batches.
+            Lender created. Open Import batches to add its sample records.
           </p>
         )}
       </PilotPanel>

@@ -38,13 +38,18 @@ export async function probeService({ origin, expectScheduler = false, fetchImpl 
   const get = async path => {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
-    try { return await readJson(await fetchImpl(`${base}${path}`, { signal: abort.signal, redirect: 'error', headers: { Accept: 'application/json' } })); }
+    try { return await readJson(await fetchImpl(`${base}${path}`, { signal: abort.signal, redirect: 'error', headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } })); }
     finally { clearTimeout(timer); }
   };
   const [health, ready] = await Promise.allSettled([get('/api/healthz'), get('/api/readyz')]);
   const codes = [];
+  const warnings = [];
   if (health.status !== 'fulfilled' || health.value?.status !== 'ok') codes.push('service_unavailable');
   if (ready.status !== 'fulfilled' || ready.value?.status !== 'ok' || ready.value?.checks?.database?.status !== 'ok') codes.push('database_unready');
+  if (ready.status === 'fulfilled' && ready.value?.checks?.database?.status === 'ok') {
+    if (ready.value?.checks?.schema?.status === 'indexes_missing') warnings.push('schema_indexes_missing');
+    else if (ready.value?.checks?.schema?.status !== 'ok') codes.push('schema_unready');
+  }
   if (expectScheduler === 'external' && health.status === 'fulfilled') {
     // The job's own runs are not visible here: they show in its run history and its close.one_shot lines.
     if (health.value?.scheduler?.state !== 'external') codes.push('scheduler_not_external');
@@ -56,8 +61,20 @@ export async function probeService({ origin, expectScheduler = false, fetchImpl 
     if (scheduler?.state !== 'running') codes.push('scheduler_not_running');
     else if (!Number.isFinite(interval) || interval <= 0 || !Number.isFinite(successAt) || now - successAt > 3 * interval || successAt > now + interval) codes.push('scheduler_stale');
     else if (Number.isFinite(failedAt) && failedAt >= successAt) codes.push('scheduler_failed');
+    // A pass can finish successfully while individual lenders failed. lastRun keeps the last pass with work,
+    // including its failures, across quiet ticks; only a later pass with work replaces it.
+    if (Number.isSafeInteger(scheduler?.lastRun?.failed) && scheduler.lastRun.failed > 0) codes.push('scheduler_close_failed');
   }
-  return { service: base, observedAt: new Date(now).toISOString(), codes: [...new Set(codes)].sort() };
+  const schedulerStates = ['not_started', 'running', 'off', 'external', 'stopped'];
+  return { service: base, observedAt: new Date(now).toISOString(), codes: [...new Set(codes)].sort(), warnings,
+    observations: {
+      liveness: health.status === 'fulfilled' && health.value?.status === 'ok' ? 'ok' : 'unavailable',
+      database: ready.status === 'fulfilled' && ready.value?.checks?.database?.status === 'ok' ? 'ok' : 'unavailable',
+      schema: ready.status === 'fulfilled' && ['ok', 'indexes_missing'].includes(ready.value?.checks?.schema?.status) ? ready.value.checks.schema.status : 'unverified',
+      scheduler: schedulerStates.includes(health.value?.scheduler?.state) ? health.value.scheduler.state : 'unverified',
+      schedulerEvidence: !expectScheduler ? 'not_requested' : expectScheduler === 'external' ? 'mode_only' : codes.some(code => code.startsWith('scheduler_')) || health.status !== 'fulfilled' ? 'failed' : 'fresh_process_heartbeat',
+    },
+  };
 }
 
 /** Stable incidents suppress repeated delivery; failed delivery never advances state. */
@@ -93,15 +110,15 @@ export async function sendEmail(event, { apiKey, from, to, fetchImpl = fetch, ti
   try {
     const response = await fetchImpl('https://api.resend.com/emails', { method: 'POST', redirect: 'error', signal: abort.signal,
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: [to], subject: `Valo Pay: ${event.kind === 'recovery' ? 'service recovered' : 'operational alert'}`,
-        text: `Service: ${event.service}\nChecked: ${event.observedAt}\nState: ${event.kind}\nChecks: ${event.codes.join(', ') || 'healthy'}\nOwner: ${event.owner}\n\nNo customer records or credentials are included. Check the operating runbook before changing service settings.` }) });
+      body: JSON.stringify({ from, to: [to], subject: `Valo Pay: ${event.kind === 'test' ? 'operational alert test' : event.kind === 'recovery' ? 'service recovered' : 'operational alert'}`,
+        text: `${event.kind === 'test' ? 'This is an authorised delivery test, not an incident. Confirm receipt with the operator; provider acceptance alone does not prove inbox delivery.\n\n' : ''}Service: ${event.service}\nChecked: ${event.observedAt}\nState: ${event.kind}\nChecks: ${event.codes.join(', ') || 'healthy'}\nOwner: ${event.owner}\n\nNo customer records or credentials are included. Check the operating runbook before changing service settings.` }) });
     await response.body?.cancel();
     if (!response.ok) throw new Error('Email not accepted');
   } catch { throw new Error('Email delivery was not accepted; the incident will be retried.'); }
   finally { clearTimeout(timer); }
 }
 
-const USAGE = 'Use: pnpm run check:operations [--deliver], with the origin and receiver in the environment (docs/operational-rehearsals.md).';
+const USAGE = 'Use: pnpm run check:operations [--deliver] [--test-alert], with the origin and receiver in the environment (docs/operational-rehearsals.md).';
 /** A mistake on the command line, described in its own words. */
 export class UsageError extends Error {}
 /** A setting the monitor cannot run without, or cannot read, named but never shown with a value. */
@@ -117,19 +134,47 @@ export function schedulerExpectation(value) {
   if (expected === 'on' || expected === 'external') return expected;
   throw new MissingSetting('VALOPAY_MONITOR_EXPECT_SCHEDULER must be on or external when it is set (docs/operational-rehearsals.md).');
 }
-/** The one option. A leading `--`, which `pnpm run check:operations -- --deliver` passes on, is skipped. An unknown option is named; any other word is only counted, since it could be a receiver address or a key pasted by mistake. */
+/** Delivery is opt-in. A test needs both flags, is labelled as a test and never changes incident history. */
 export function monitorArguments(argv) {
   const args = argv[0] === '--' ? argv.slice(1) : argv;
   for (const [index, arg] of args.entries()) {
     // An option is named, but not a value given with it (--name=value), which could be a credential.
     const option = /^(--?[A-Za-z][\w-]{0,40})(=?)/.exec(arg), named = option && (option[2] || option[0] === arg) ? option[1] : undefined;
-    if (arg !== '--deliver') throw new UsageError(named ? `${named === '--deliver' ? 'The option --deliver takes no value' : `Unknown option ${named}`}${option[2] ? ' (its value is not repeated here)' : ''}.` : `Argument ${index + 1} is not an option (not repeated here, in case it is a credential).`);
+    if (!['--deliver', '--test-alert'].includes(arg)) throw new UsageError(named ? `${['--deliver', '--test-alert'].includes(named) ? `The option ${named} takes no value` : `Unknown option ${named}`}${option[2] ? ' (its value is not repeated here)' : ''}.` : `Argument ${index + 1} is not an option (not repeated here, in case it is a credential).`);
+    if (args.indexOf(arg) !== index) throw new UsageError(`The option ${arg} was repeated.`);
   }
-  return { deliver: args.includes('--deliver') };
+  if (args.includes('--test-alert') && !args.includes('--deliver')) throw new UsageError('A test alert requires both --deliver and --test-alert.');
+  return { deliver: args.includes('--deliver'), testAlert: args.includes('--test-alert') };
+}
+
+/** Inspect setting presence and syntax without exposing credentials or contacting the delivery service. */
+export function deliveryConfiguration(env) {
+  const missing = [];
+  const address = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
+  const adapter = env.VALOPAY_MONITOR_ALERT_URL ? 'webhook' : 'email';
+  if (!env.VALOPAY_MONITOR_OWNER?.trim()) missing.push('VALOPAY_MONITOR_OWNER');
+  if (adapter === 'webhook') {
+    try {
+      const url = new URL(env.VALOPAY_MONITOR_ALERT_URL);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash) missing.push('VALOPAY_MONITOR_ALERT_URL');
+    } catch { missing.push('VALOPAY_MONITOR_ALERT_URL'); }
+  } else {
+    if (!env.VALOPAY_ALERT_RESEND_KEY?.trim()) missing.push('VALOPAY_ALERT_RESEND_KEY');
+    if (!address.test(env.VALOPAY_ALERT_FROM || '')) missing.push('VALOPAY_ALERT_FROM');
+    if (!address.test(env.VALOPAY_ALERT_TO || '')) missing.push('VALOPAY_ALERT_TO');
+  }
+  return { adapter, status: missing.length ? 'incomplete' : 'configured', missingOrInvalid: missing };
+}
+
+/** A single labelled test, with no incident threshold, incident state read or incident state write. */
+export async function deliverTest(probe, deliver, { owner } = {}) {
+  if (!owner?.trim()) throw new Error('An alert owner is required.');
+  await deliver({ version: 1, kind: 'test', owner, service: probe.service, observedAt: probe.observedAt, codes: ['commissioning_test'] });
+  return { service: probe.service, observedAt: probe.observedAt, mode: 'test-alert', delivery: 'accepted_by_receiver', recipientReceipt: 'unverified', incidentState: 'unchanged' };
 }
 
 async function main() {
-  const { deliver } = monitorArguments(process.argv.slice(2));
+  const { deliver, testAlert } = monitorArguments(process.argv.slice(2));
   const origin = process.env.VALOPAY_MONITOR_ORIGIN;
   if (!origin) throw new MissingSetting('VALOPAY_MONITOR_ORIGIN is not set: set it to the HTTPS origin of the service to probe (docs/operational-rehearsals.md).');
   const probe = await probeService({ origin, expectScheduler: schedulerExpectation(process.env.VALOPAY_MONITOR_EXPECT_SCHEDULER) });
@@ -140,12 +185,14 @@ async function main() {
   const emailKey = process.env.VALOPAY_ALERT_RESEND_KEY;
   const sender = process.env.VALOPAY_ALERT_FROM;
   const recipient = process.env.VALOPAY_ALERT_TO;
-  if ((!receiver && !(emailKey && sender && recipient)) || !owner || !statePath) throw new Error('Configure a receiver or email provider with sender and recipient, alert owner and monitor state file.');
+  if (deliveryConfiguration(process.env).status !== 'configured' || (!testAlert && !statePath)) throw new Error('Configure a receiver or email provider with sender and recipient, alert owner and monitor state file.');
+  const send = event => receiver ? sendWebhook(receiver, event) : sendEmail(event, { apiKey: emailKey, from: sender, to: recipient });
+  if (testAlert) { console.log(JSON.stringify(await deliverTest(probe, send, { owner }))); return; }
   const target = resolve(statePath);
   let previous;
   try { previous = JSON.parse(await readFile(target, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('The monitor state could not be read; refusing to reset incident history.'); }
-  const result = await deliverTransition(probe, previous, event => receiver ? sendWebhook(receiver, event) : sendEmail(event, { apiKey: emailKey, from: sender, to: recipient }), { owner });
+  const result = await deliverTransition(probe, previous, send, { owner });
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.next`;
   await writeFile(temporary, JSON.stringify(result.state), { mode: 0o600 });

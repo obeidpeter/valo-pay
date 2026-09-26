@@ -10,6 +10,8 @@ const repository = "artifacts/api-server/src/lib/valopay-store.ts";
 const exportRepository = "artifacts/api-server/src/lib/export-job-store.ts";
 // Opt-in restricted runtime transactions verify and bind the forced-RLS scope.
 const isolatedRuntime = "artifacts/api-server/src/lib/runtime-isolation.ts";
+// Explicit staging dual-write subordinate to the scoped repository; never owns a connection.
+const financialProjection = "artifacts/api-server/src/lib/financial-projection.ts";
 // The startup check reads DATABASE_URL only to refuse a missing or malformed value before anything starts;
 // like every other module, it may not import the database or query it.
 const startupCheck = "artifacts/api-server/src/lib/startup-config.ts";
@@ -32,7 +34,7 @@ for (const file of [...await walk(path.join(root, "artifacts")), ...await walk(p
   if (!relative.includes("/src/") || !/\.[cm]?[jt]sx?$/.test(relative) || relative.startsWith("lib/db/")) continue;
   const source = ts.createSourceFile(file, await readFile(file, "utf8"), ts.ScriptTarget.Latest, true);
   checked++;
-  const allowed = relative === repository || relative === exportRepository || relative === isolatedRuntime;
+  const allowed = relative === repository || relative === exportRepository || relative === isolatedRuntime || relative === financialProjection;
   function reject(node, message) {
     const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
     violations.push(`${relative}:${line + 1}: ${message}`);
