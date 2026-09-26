@@ -1,0 +1,82 @@
+# Valo Pay document register
+
+Version 1.0 · Reviewed 26 September 2026
+
+This register identifies the current core planning documents, repository guidance and dated supporting evidence. It distinguishes product intentions, implemented synthetic behaviour, deployed behaviour and outstanding acceptance. It covers the four supplied core documents and the repository documentation reviewed for this refresh, plus the supporting artifacts named below. It is not a claim that every historical download or external document has been reviewed.
+
+## Reading the status correctly
+
+- **Current planning baseline:** the maintained target, assumptions, requirements and release gates. A requirement is not complete merely because it appears in a document or a demonstration.
+- **Implemented synthetic:** code and recorded development tests support a sample workflow. This does not establish real-provider behaviour, real-data permission, production recovery, human usability or commercial acceptance.
+- **Latest verified deployment:** the exact revision and dated host checks in [build status](BUILD_STATUS.md). A later branch or successful CI run is not a deployment.
+- **Historical source:** retained evidence of what was planned, found or checked at its original date. Later fixes are recorded as dispositions; the original report is not rewritten to erase its findings.
+- **Review required:** an assumption, calculation or external dependency needs an accountable person's fresh evidence before operational or investor reliance.
+
+## Release and evidence baseline
+
+| Reference | Status at this review | Evidence and limit |
+| --- | --- | --- |
+| PR #64, merge `d8a6e7b9d7264b9d7d6e4237666053c76c848d04` | Latest verified deployed release | [Deployment record](BUILD_STATUS.md), checked 26 September 2026 at 14:30 UTC on [Valo Pay — Stage 1](https://valo-pay.replit.app). A dated check, not continuous monitoring. |
+| PR #65, source `a9106bff032b946577485cc16e3c721e2b14e7c6` | Draft, not deployed | [PR #65](https://github.com/obeidpeter/valo-pay/pull/65): state clarity, invitation recovery, role guidance and release/migration documentation. |
+| PR #66, source `859fc923779ed7bc2964fc2c3ec46a0caddfe4d4` | Draft on PR #65, not deployed | [PR #66](https://github.com/obeidpeter/valo-pay/pull/66): draft preservation, dialog focus and readiness-failure classification. Source baseline for this documentation refresh. |
+| This documentation refresh | Reviewable update on PR #66 | Updates the planning set and repository explanations. It changes no acceptance gate, permission or live integration. Record merge and deployment separately if subsequently approved. |
+
+The deployed application remains a synthetic sandbox. The complete rehearsable pilot journey is lender setup → saved import batches → reconciliation → coordinated exceptions/cases → independent close review → evidence export, supported by a persistent request journal and recovery checks. Pay-by-bank, Credit Desk, Cash Desk and purpose-specific permissions also have persisted synthetic workflows. These are narrower than the planned live products.
+
+The deployed scheduler remains **off**. Typed financial projection staging is opt-in and disabled on the deployed sandbox; v1 records remain authoritative. Migrations 010–012 belong to isolated staging or disposable recovery rehearsals and are not ordinary production deployment migrations. Paystack has no configured account or test key. Outbound alert delivery, an external scheduler, a hosted restore with independent object/key custody and an independent human operator session remain uncommissioned. Technical rehearsal results do not pass the separate G0, G-DATA, G-CORE, G-OB, G-A2A, G-CREDIT, G-MODEL, G-AUTO, G-ERP, G-PAYOUT, G-TAX, FUND-M9, RECOVERY or PORTABILITY gates.
+
+## Core planning documents
+
+The Word files are delivered as controlled artifacts outside the public source repository. The filenames below identify the current copies; older copies are retained as history and should not be circulated as the current implementation baseline. Role owners below are proposed responsibilities, not appointments or claims of sign-off. Assign a named person before formal approval.
+
+| Document and current filename | Version / date | Status and purpose | Proposed accountable role | Review trigger |
+| --- | --- | --- | --- | --- |
+| Business Plan — `Valo_Pay_Business_Plan_v3.1.docx` | 3.1 / 26 September 2026 | Current planning narrative. Separates working synthetic capabilities, remaining delivery, commissioning and commercial evidence. Supersedes v3.0 for current status; retains its dated financial assumptions. | Product owner with commercial/finance review | Product-scope change, funding discussion, price/cost evidence, provider contract or gate decision. |
+| Product Roadmap — `Valo_Pay_Product_Roadmap_v2.1.docx` | 2.1 / 26 September 2026 | Current delivery roadmap. Records implemented foundations without advancing funding-relative phases or declaring live gates passed. Supersedes v2.0. | Product owner and engineering lead | Release, dependency/estimate change, funded start date, capacity or gate decision. |
+| Marketing and Sales Strategy — `Valo_Pay_Marketing_and_Sales_Strategy_v2.1.docx` | 2.1 / 26 September 2026 | Current positioning and demonstration guidance. Claims remain tied to synthetic evidence and explicit live-product limits. Supersedes v2.0. | Commercial lead with product review | Public messaging, investor material, pilot offer, price/provider coverage or observed customer evidence. |
+| Technical Requirements — `Valo_Pay_Technical_Requirements_v2.1.docx` | 2.1 / 26 September 2026 | Current requirements baseline and implementation-status review. Retains the 251 requirement IDs, acceptance obligations and TypeScript modular-monolith direction. Supersedes v2.0 for currency, not by cancelling unaccepted requirements. | Engineering lead with product/security review | Architecture or API change, release, acceptance evidence, data/provider boundary or external rule change. |
+| Master Document Register — `Valo_Pay_Master_Document_Register_v1.0.docx` and this page | 1.0 / 26 September 2026 | Current index, evidence boundaries, owner roles and review triggers. The Word copy is a dated snapshot; maintain this repository page with subsequent releases. | Product owner / documentation coordinator | Any controlled-document revision, deployment, new audit or change of owner. |
+
+The 21 September source set was Business Plan v3.0, Roadmap v2.0, Marketing and Sales Strategy v2.0 and Technical Requirements v2.0. Earlier v1.x/v2.x documents remain historical unless explicitly retained for an unchanged source obligation. Requirement identifiers inherited from earlier specifications remain valid in the current Technical Requirements.
+
+## Financial, architectural and external source records
+
+| Artifact | Disposition at 26 September 2026 | Proposed accountable role / next review |
+| --- | --- | --- |
+| Connected Banking Financial Model v1.0 — `Valo_Pay_Connected_Banking_Financial_Model_v1.0.xlsx`, 21 September 2026 | Historical planning model retained unchanged. No formulas, costs, revenue, raise or staffing figures were recalculated in this refresh. The 208 engineer-week programme is the earlier scope estimate, not a freshly measured remaining-work estimate. Do not subtract delivered work mechanically or present the model as revalidated. | Finance/commercial owner with engineering: re-estimate remaining scope, dependencies, capacity and current costs before budget/funding reliance. Record a separately reviewed model revision. |
+| Architecture report — `Valo-Pay-Architecture-Report.docx`, 26 September 2026, with its appendices and evidence | Preserve the dated audit as issued. PR #63 subsequently addressed exact money, current authority, replay checks, domain effect boundaries and concurrency coverage. PR #64 added isolated typed-projection and independent-journal recovery rehearsals plus commissioning checks. These are partial dispositions, not acceptance of a production ledger, provider outbox or full hosted recovery. See [architecture safety](architecture-safety-release.md), [financial staging](financial-projection-staging.md) and [instruction recovery](synthetic-instruction-recovery.md). | Engineering/security owner: record further dispositions against findings, with code/test and deployment evidence; retain original audit text. |
+| Requirements traceability — `Valo-Pay-Requirements-Traceability.xlsx` and the architecture pack's requirement/feature JSON files | Historical architecture-review evidence. The refreshed Technical Requirements records the later implementation-status review. The earlier workbook is not silently rewritten or certified current by this document refresh. | Engineering/product owner: reconcile the workbook with the new baseline before using it as a current acceptance checklist. |
+| Financial/capacity review and model files in the architecture pack | Dated analytical evidence and scenario assumptions, not observed production economics or a new approved budget. | Engineering/finance owner: update when volumes, staffing, hosting quotes or measured cost evidence change. |
+| Legal, regulatory and provider research cited in the planning set | Preserve each original research date and citation. This refresh does not reverify laws, tariffs, Direct Debit access, bank coverage, legal opinions or provider contractual authority. | Appropriate legal/compliance/provider owner: recheck primary sources and obtain required approvals before reliance or activation. |
+| Usability audit, research kit and presentation materials | The audit and empty research templates document findings and a study plan. Browser tests and rehearsals are not participant results; no human acceptance, task success or satisfaction result is invented. | Product/research owner: conduct an independent operator session and update claims only with recorded consented evidence. |
+
+## Repository documents
+
+Repository guidance is versioned by Git commit rather than by a separate Word version. The source baseline above determines what these entries describe. The README's full documentation table remains the file-level navigation index.
+
+| Documents | Maintained purpose / status | Proposed accountable role | Review trigger |
+| --- | --- | --- | --- |
+| `README.md`, `replit.md`, this register and [documentation review](documentation-review.md) | Current entry points, commands, vocabulary, documentation controls and currency review. | Engineering lead / documentation coordinator | Every release or configuration/document addition. |
+| [Build status](BUILD_STATUS.md) | Current deployment record followed by immutable dated release history and current gaps; explicitly separates drafts. | Release owner | Merge, deployment, rollback or new verification evidence. |
+| [Connected Banking](connected-banking.md) and [frontend contract](frontend-contract.md) | Implemented synthetic module behaviour, user-state contracts, persisted imports, request recovery and API interaction boundaries. | Product and application engineering | Behaviour, permission, lifecycle or API change. |
+| [Console design](design/console.md), [investor presentation](investor-presentation.md), [usability index](usability/README.md), audit, role/task map, import/core/connected findings, research kit, measurement template and release note under `docs/usability/` | Design rationale and historical usability evidence; current demo instructions remain limited to observable synthetic journeys. | Product/design/research | UI release, demo change or recorded participant evidence. |
+| [Database security](DATABASE_SECURITY.md), [pilot database](pilot-database.md) and [pilot security](pilot-security.md) | Repository boundaries, optional forced RLS, staff/MFA checks and managed field-encryption foundations; commissioning still required. | Security and database owner | Access model, schema, custody, threat assessment or host change. |
+| [Pilot workflow release](pilot-workflow-release.md) and [pilot operations controls](pilot-operations-controls.md) | Saved operations/imports/cases, staff foundation, close review, source evidence and controlled retention. | Application engineering / operations | Workflow, authority, retention or recovery change. |
+| [Migration catalogue](database-migrations.md), [record identity](record-identity-migration.md) and [read indexes](record-list-index-deployment.md) | Required versus optional migrations, preflight, verification and rollback. The catalogue covers 001–012. | Database and release owner | Every migration or deployment-procedure change. |
+| [Deployment](deployment.md), [Node runtime](deployment-node.md), [GitHub sync](github-sync.md) | Current host/runtime/source-publication procedures; commands do not themselves prove commissioning. | Release/operations owner | Host, runtime, build, source-sync or scheduler change. |
+| [Observability](observability.md), [operational rehearsals](operational-rehearsals.md) and [operator validation](operator-validation.md) | Monitor interpretation, commissioning checks, synthetic recovery evidence and human-study preparation. External alert delivery and independent hosted/human acceptance remain open. | Operations owner with product/security review | Monitor/alert change, rehearsal, incident or acceptance session. |
+| [Paystack](paystack.md) and [saved-event verification](paystack-test-verification.md) | Test-only adapter, signed inbox and explicit read-only verification workflow. Offline fixtures pass; real account/test-key access and product acceptance are absent. | Provider integration owner | Credentials provisioned, provider behaviour/API change or acceptance evidence. |
+| [Security review](security-review.md) and [26 September remediation](audit-remediation-2026-09-26.md) | Findings and their dated dispositions, with independent/live checks kept separate. | Security and engineering owner | Remediation, new assessment, incident or boundary change. |
+| [Architecture safety release](architecture-safety-release.md), [financial projection staging](financial-projection-staging.md) and [synthetic instruction recovery](synthetic-instruction-recovery.md) | Implemented safety checks and bounded isolated rehearsals. No production ledger cutover or provider-side execution guarantee. | Engineering, database and operations owner | Financial-state transition, migration, journal/recovery or live-instruction proposal. |
+| `lib/api-spec/openapi.json` and `artifacts/api-server/src/fonts/README.md` | Generated API contract and export-font instructions respectively; regenerate the contract from its source and verify drift. | API/export engineering | Route/schema or export-rendering change. |
+
+## Maintenance and approval routine
+
+1. Identify the affected claim, requirement or procedure and its accountable role. Record the source commit, deployed revision where relevant, test evidence and any unresolved uncertainty.
+2. Update the relevant repository page and core planning document together when the change affects strategy, scope, timing, architecture or external claims. Preserve requirement IDs and distinguish implementation from acceptance.
+3. Record new versions and dispositions here. Keep dated audits, source research and previously issued versions available as history; do not rename historical evidence to imply a later review.
+4. Run the structural documentation check and review the substantive claims. The check validates paths, commands, contract coverage, document indexing and terminology; it cannot establish legal validity, provider acceptance or planning accuracy.
+5. Obtain the appropriate owner's approval for financial, legal, provider or production acceptance changes. A successful build, CI run or sandbox presentation cannot substitute for that evidence.
+6. After deployment, add the exact revision, host, verification time and remaining configuration limits to build status. Keep draft PRs labelled until their state is verified.
+
+Suggested review cadence: at each release and before external presentations or funding decisions, with a monthly currency review while piloting. This is a proposed maintenance routine, not an assertion that owners have already adopted or performed it. Named ownership, financial-model re-estimation, traceability-workbook reconciliation and external commissioning remain follow-up work.

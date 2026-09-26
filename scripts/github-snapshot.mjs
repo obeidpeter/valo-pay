@@ -18,6 +18,7 @@ docs.add('docs/architecture-safety-release.md');
 docs.add('docs/paystack-test-verification.md');
 docs.add('docs/financial-projection-staging.md');
 docs.add('docs/synthetic-instruction-recovery.md');
+docs.add('docs/document-register.md');
 // Workflows execute code on GitHub. Review each file before approving its export.
 const workflows = new Set([".github/workflows/ci.yml"]);
 const sourceExtension = /\.(?:ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|css|html|svg|sh|md|sql)$/;

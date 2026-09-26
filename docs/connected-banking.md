@@ -2,7 +2,7 @@
 
 This release adds three connected workspaces to the existing collections console: **Pay-by-bank**, **Credit Desk** and **Cash Desk**. They run on synthetic data and persist their records in the selected workspace. No action in these modules connects a bank, posts to accounting software, approves a real loan, files tax or moves money.
 
-The design baseline is the September 2026 planning set: _Valo Pay Business Plan v3.0_, _Technical Requirements v2.0_, _Product Roadmap v2.0_, _Marketing and Sales Strategy v2.0_ and _Connected Banking Financial Model v1.0_. Those documents describe a broader target product. This page describes the narrower functionality implemented in the repository; it is not evidence that all planned features or external release gates are complete.
+The current planning set is dated 26 September 2026: _Valo Pay Business Plan v3.1_, _Technical Requirements v2.1_, _Product Roadmap v2.1_ and _Marketing and Sales Strategy v2.1_. They retain the broader target product and now distinguish implemented synthetic workflows from outstanding production acceptance. _Connected Banking Financial Model v1.0_ remains the 21 September planning model; its estimates have not been recalculated for later engineering work. The [document register](document-register.md) records versions, review responsibilities and limits. This page describes the narrower functionality implemented in the repository; it is not evidence that all planned features or external release gates are complete.
 
 ## What works now
 
