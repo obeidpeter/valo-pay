@@ -1,10 +1,64 @@
 import { beforeEach, afterEach, it, expect } from "vitest";
-import { cleanup, fireEvent } from "@testing-library/react";
+import { act, cleanup, fireEvent } from "@testing-library/react";
+import { queryClient } from "@/App";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor } from "./harness";
 let api: FakeApi;
 beforeEach(()=>{ api=installFakeApi({now:"2026-09-22T08:00:00.000Z"}); });
 afterEach(()=>api.uninstall());
+
+it("keeps loading and failed source reads distinct from empty profiles, batches and connection status",async()=>{
+  const user=userEvent.setup(), release=api.hold(/^\/v1\/sources$/);
+  api.failNext(/^\/v1\/sources$/, "offline", "GET");
+  renderApp("/sources?businessDate=2026-09-22");
+  await screen.findByText("Loading source controls…");
+  expect(screen.queryByText(/No source profiles yet/)).toBeNull();
+  expect(screen.queryByText(/Saved batches will appear here/)).toBeNull();
+  expect(screen.queryByText("External connection not verified")).toBeNull();
+  expect(screen.queryByRole("button",{name:"Receive sample payment"})).toBeNull();
+  release();
+  await screen.findByText("Source profiles could not be loaded. Try again above.");
+  expect(screen.getByRole("alert").textContent).toMatch(/could not be loaded.*try again/i);
+  expect(screen.getByText("Saved batches could not be loaded. Try again above.")).toBeTruthy();
+  expect(screen.getByText("Connection status unavailable")).toBeTruthy();
+  expect(screen.queryByText(/No source profiles yet/)).toBeNull();
+  expect(screen.queryByText(/Saved batches will appear here/)).toBeNull();
+  expect(screen.queryByText("External connection not verified")).toBeNull();
+  await user.click(screen.getByRole("button",{name:"Try again"}));
+  await screen.findByText("No source profiles yet. Add one below, then reuse it in Import batches.");
+  expect(screen.getByText(/Saved batches will appear here/)).toBeTruthy();
+  expect(screen.getByText("External connection not verified")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  await waitFor(()=>expect(document.activeElement).toBe(screen.getByText("Source information reloaded.")));
+  const releaseNextDate=api.hold(/^\/v1\/sources$/);
+  fireEvent.change(screen.getByLabelText("Business date (WAT)"),{target:{value:"2026-09-23"}});
+  await screen.findByText("Loading source controls…");
+  expect(screen.queryByText("Source information reloaded.")).toBeNull();
+  releaseNextDate();
+  await screen.findByText("No source profiles yet. Add one below, then reuse it in Import batches.");
+  expect(screen.queryByText("Source information reloaded.")).toBeNull();
+});
+
+it.each(["Read-only", "Compliance reviewer"])("gives %s users an actionable source-profile handoff instead of a hidden creation form",async role=>{
+  api.role=role;renderApp("/sources");
+  await screen.findByText("No source profiles yet. Ask an Admin, Operations or Finance team member to add a source profile.");
+  expect(screen.queryByText(/Add one below/)).toBeNull();
+  expect(screen.queryByRole("button",{name:"Save source profile"})).toBeNull();
+});
+
+it("retains loaded source profiles and counts when refreshing fails",async()=>{
+  api.mutate((state,ctx)=>{state.records.push({id:'cached-profile',merchantId:state.merchant.id,kind:'source-profiles',name:'Previously loaded feed',status:'active',reference:'',amountKobo:0,customerId:'',createdAt:ctx.now,updatedAt:ctx.now,data:{source:'cached-source',kind:'customers',mapping:{},identityColumn:'source_row_id',amountUnit:'naira',firstExpectedAt:'2026-09-20T07:00:00.000Z',cadenceHours:24,graceMinutes:0}});});
+  renderApp("/sources");
+  await screen.findByRole("heading",{name:"Previously loaded feed"});
+  const lateCount=screen.getByText("Late sources").parentElement!;
+  expect(lateCount.textContent).toBe("Late sources1");
+  api.failNext(/^\/v1\/sources$/, "offline", "GET");
+  await act(()=>queryClient.refetchQueries({predicate:query=>query.queryKey[0]==="pilot"&&String(query.queryKey.at(-1)).startsWith("/sources?")}));
+  await screen.findByText("Showing the last loaded source information. Try again to check for updates.");
+  expect(screen.getByRole("heading",{name:"Previously loaded feed"})).toBeTruthy();
+  expect(lateCount.textContent).toBe("Late sources1");
+  expect(screen.queryByText(/No source profiles yet/)).toBeNull();
+});
 
 it("declares dated source files with control totals and keeps a missing delivery visible",async()=>{
   const user=userEvent.setup();renderApp("/sources?businessDate=2026-09-22");
