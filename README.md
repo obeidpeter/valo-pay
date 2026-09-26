@@ -1,8 +1,10 @@
 # Valo Pay
 
-The [22 September usability release](docs/usability/README.md) records operational improvements, the evidence-led audit, role/task map, validation limits and real-user research kit. Its five-component scorecards contain no invented participant results. Production and live-provider activation remain separate decisions.
+The [build status](docs/BUILD_STATUS.md) records the latest deployed release, PR #64 (26 September 2026), its verification and the remaining commissioning work. It includes operational checks, a repeatable pilot rehearsal and isolated financial recovery rehearsals. Financial staging remains disabled on the deployed sandbox, and automatic daily closes remain off.
 
 Observation-first collections operations and connected banking workflows for Nigerian lenders and SMEs. This application is a **synthetic sandbox**, not a live payment service or an approved system for real customer data. Pay-by-bank, Credit Desk, Cash Desk and purpose-specific permissions have working sample journeys; each live capability remains independently gated.
+
+The [22 September usability release](docs/usability/README.md) is the historical record of the evidence-led audit, role/task map and real-user research kit. Its five-component scorecards contain no invented participant results. Production and live-provider activation remain separate decisions.
 
 ## Source repository
 
@@ -31,7 +33,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 | `docs/pilot-security.md` | The access and MFA check every staging staff request passes, and the tenant-bound field-encryption helpers. |
 | `docs/pilot-workflow-release.md` | The pilot workflow release: the operations journal, saved import batches, coordinated cases, staff access, provisioning the first administrator and the pilot API. |
 | `docs/pilot-operations-controls.md` | The pilot operations controls: journey evidence, sources and personal work, staff lender grants, the restricted runtime, envelope encryption, retention and recovery. |
-| `docs/database-migrations.md` | The procedure for migrations 001 to 009: applicability, owner, command, verification, rollback, publishing and missing integrity guards. |
+| `docs/database-migrations.md` | The catalogue for migrations 001 to 012: required application changes, optional restricted-runtime commissioning, isolated financial staging and disposable synthetic recovery rehearsals; commands, verification, rollback and publishing boundaries. |
 | `docs/record-identity-migration.md` | Migration 009 preflight, provider-scoped event identity, unique customer references and safe handling of historical duplicates. |
 | `docs/audit-remediation-2026-09-26.md` | All twelve audit findings, their fixes, regression evidence and remaining deployment checks. |
 | `docs/architecture-safety-release.md` | Exact money, current grant authority, replay checks, domain effect boundaries and concurrency verification; remaining architecture and live acceptance work. |

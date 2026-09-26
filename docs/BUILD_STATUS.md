@@ -1,10 +1,33 @@
 # Valo Pay — build status
 
-## Comprehensive audit remediation · 26 September 2026
+## Latest deployed release · PR #64 · 26 September 2026
+
+[PR #64](https://github.com/obeidpeter/valo-pay/pull/64), **Prepare operational commissioning and financial recovery**, was merged as `d8a6e7b9d7264b9d7d6e4237666053c76c848d04` and deployed to [Valo Pay — Stage 1](https://valo-pay.replit.app). Verification at 14:30 UTC on 26 September 2026 found that revision serving: health, database and schema readiness were healthy, landing and sign-in pages answered successfully, and the corrected lender-onboarding guidance was present in the published frontend. This is a dated deployment record, not continuous monitoring.
+
+The release adds:
+
+- Operational monitoring that distinguishes a healthy process heartbeat from a failed lender close, a read-only commissioning report and an explicit labelled alert-delivery test. Configuration alone does not prove a scheduled job ran or an alert reached its recipient. See [operational rehearsals](operational-rehearsals.md).
+- An opt-in typed financial projection with exact money, scoped relationships, conservation checks and bounded parity review. Existing v1 records remain authoritative. Migration 010 is for isolated synthetic staging, is absent from the ordinary Drizzle schema and is never applied by deployment. See [financial staging](financial-projection-staging.md).
+- Synthetic instruction recovery with fenced claims, unknown-outcome handling and a pre-dispatch journal in a distinct disposable local database. Migrations 011 and 012 belong only to that rehearsal; there is no live adapter or production activation switch. See [synthetic instruction recovery](synthetic-instruction-recovery.md).
+- A repeatable real API/PostgreSQL pilot rehearsal, source fingerprint report, corrected onboarding guidance and a human observer worksheet. See [operator validation](operator-validation.md).
+
+The [CI run for the reviewed source](https://github.com/obeidpeter/valo-pay/actions/runs/36247650443) passed all eight jobs. That source passed TypeScript, builds and offline checks, 671 UI tests in 91 files, 35 PostgreSQL suites and four real API/PostgreSQL browser workflows. Financial projection checks included 36 PostgreSQL checks; instruction recovery passed 48 checks, including concurrent claims and application-database loss. The merge tree matched the reviewed source. These are synthetic development and CI results, not production recovery or human pilot acceptance.
+
+At deployment, financial staging remained disabled and the scheduler reported **off**. An external scheduler, outbound alert delivery, a hosted restore rehearsal with independently verified object/key custody and an independent human operator session remain uncommissioned. Paystack still has no configured account or test key. No provider call, alert delivery, staging migration or live financial activation was performed by this release. The [migration catalogue](database-migrations.md) separates required application changes from these optional rehearsals.
+
+## Earlier release notes
+
+These dated entries describe what each earlier release changed and verified. Their phrases such as “this release” and “before rollout” refer to that entry's release, not a new deployment instruction. Current implementation boundaries and open gates follow the history below.
+
+### Architecture safety · PR #63 · 26 September 2026
+
+[PR #63](https://github.com/obeidpeter/valo-pay/pull/63) was merged and deployed before PR #64. It added exact-money checks, current permission authority, replay checks, domain effect boundaries and concurrency coverage. The [architecture release record](architecture-safety-release.md) describes the changes and their remaining live acceptance limits; PR #64 adds the isolated staging and recovery rehearsals described above.
+
+### Comprehensive audit remediation · 26 September 2026
 
 The twelve findings from the audit of PR #60 are addressed in this release: financial decision integrity, provider-scoped identities, export queue fairness, sign-in recovery, accessible controls and navigation, sandbox identity, proxy limits and a dependency advisory. The [remediation record](audit-remediation-2026-09-26.md) maps each finding to its fix and regression coverage. Migration 009 must run before rollout; ambiguous historical reversal and settlement evidence remains held for reviewed resolution. External service commissioning and production data repair are separate owner steps, not outcomes of local tests.
 
-## Backlog and fourth review fixes · September 2026
+### Backlog and fourth review fixes · September 2026
 
 The open items of the usability backlog (`docs/usability/audit.md`) that this sandbox can close, the owner's decisions on the questions it left open, and the findings of the fourth review, of the fixes merged on 25 September, are fixed and covered by tests:
 
@@ -48,7 +71,7 @@ The open items of the usability backlog (`docs/usability/audit.md`) that this sa
 - **Integration fix: an instalment imported with a currency column is shown in naira.** Since the integration fix, a currency column changes only payment evidence amounts, so an instalment, a mandate or an attempt imported with one keeps the column as detail and its amount in kobo, but the customer page still showed that amount in the column's currency: "1,000,000" with JPY, saved as ₦1,000,000.00, read "JPY 100,000,000" beside "Outstanding: ₦1,000,000.00" (before that fix, "JPY 1,000,000" beside ₦10,000.00). `formatRecordMoney` now uses `data.currency` only for a kind with a currency field (`importFieldsOf`: payment evidence, payments, settlement batches and exceptions) and shows every other kind as naira, as the dispute pack already did, and the contract's `ValopayRecord` description says that a `data.currency` on any other kind is not its amount's currency. Nothing stored changes, so no re-import fingerprint does. Import batches still offers Currency as a destination for every kind, as it offers every kind's fields, and on a kind without the field the column stays detail. The console's timeline and currency digits tests pin it; both failed before the change.
 - **Integration fix: Sources and the completeness panel say that an older batch's total may add currencies.** Sources said that each total adds the naira rows and never money in another currency, and the completeness panel that a file with rows in another currency stays incomplete, but a batch committed before the integration fix keeps the totals it was committed with, which may add every row's smallest unit into one naira total (JPY 1,000, USD 10.00 and NGN 10.00 as "₦30.00"), and a declared file is still compared with that total. Both sentences, the contract's `SourceBatchQuality` and `SourceCompleteness` descriptions, `docs/frontend-contract.md` and the pilot controls now say that a batch committed by an earlier build keeps the totals it was committed with, which may add rows in other currencies. Nothing stored changes, so no completeness digest or recorded close does. The console's import amounts test pins both sentences and failed before the change.
 
-## Audit fixes, 23 September audit · September 2026
+### Audit fixes, 23 September audit · September 2026
 
 The findings of the 23 September 2026 audit are fixed and covered by tests:
 
@@ -209,7 +232,7 @@ The findings of the 23 September 2026 audit are fixed and covered by tests:
 - **Third review fix: an exception about money in another currency names that currency.** An exception raised for a payment or payment evidence in another currency held that money's minor units in amountKobo and named no currency, so the console showed it as naira: the Exceptions row, the resolve dialog and the case page said ₦1,000.00 for a USD 1,000.00 card payment, and the customer's history ₦20.00 for EUR 20.00. Such an exception now names the currency beside the amount (`data.currency`, the ISO 4217 code in capitals, absent for naira), taken from the money it is about: the payment or payment evidence it links to (a payment held for Finance, evidence held as a suspected duplicate, a reversal waiting for its payment) or the payment a report of a collection counted in two batches names. An exception an earlier build raised without it gains it at the next reconciliation, once, resolved or not (`exceptionCurrenciesRecorded` in its answer). Stored, the currency reaches every read as it is (the queues, the record lists, the history, the case page, search and the exports), where working it out at read time would need the linked money on each of those paths; the dispute pack, which reads each exception's linked records anyway, uses the same rule for one not yet corrected. Until that reconciliation, which every close runs, an earlier exception still shows as naira, so operators may run one after deploying. The console shows the amount in its own currency with the shared formatting (`formatRecordMoney`, which uses `formatMinor`) in the Exceptions row and resolve dialog, on the case page and in the customer's history, and a close's list of what remains open names the currency of each such amount too. The payment evidence golden (six kinds of exception in USD and EUR, the reads, a close's list, the correction of an earlier build's exceptions, once, and a property-run check that every exception names its money's currency), the exceptions and timeline tests and a browser run against the API pin it; each failed before the fix.
 - **Third review fix: the resolve dialog says a resolution settles a counted-twice report too.** Resolving a settlement batch's exception that carries the provider's report of a collection counted in two batches (`countedTwice`) settles that report as well, so it is not raised again, but the dialog said only that resolving records the outcome and reason. It now says so beside the outcome, before and after a code is chosen, naming how many reports the exception carries when there are several, and asks for both payouts to be checked with the provider first. The exceptions test builds such an exception through two reconciliations and checks the words; it failed before the fix.
 
-## Audit fixes, items 21 to 31 · September 2026
+### Audit fixes, items 21 to 31 · September 2026
 
 Items 21 to 31 of the 22 September 2026 audit are fixed and covered by tests:
 
@@ -226,7 +249,7 @@ Items 21 to 31 of the 22 September 2026 audit are fixed and covered by tests:
 - **Console polish.** A link to a section, such as Review matches on Reports, scrolls there once, when it arrives: paging any Reconciliation table afterwards keeps the view and focus on that table instead of returning to the match accuracy review, because the page area no longer resets its scroll when only the query string changes and each table keeps its rows, and its pager, on screen until the next page arrives. The allocation picker searches after a 300 ms pause, so typing a word sends one request rather than one a letter, and typing replaces the address instead of adding a history entry, so Back leaves the page rather than stepping through letters. The connected pages' forms (Pay-by-bank, Credit Desk, Cash Desk and Permissions & readiness) join the unsaved-changes guard: leaving a typed draft asks first, a sent draft, answered or recovered, releases it and keeps its inputs for the next run, and a cancelled one releases it too. A background refresh that fails on Overview, Reports (the close history included), Settings or a connected page keeps the figures already shown, with a small notice that they could not be refreshed, when they were last updated and Try again; the full error card is left for a first load with nothing to show.
 - **Console numbers.** Every count, total and percentage the console shows goes through the shared formatters: counts and totals through `formatNumber` or `formatCount`, so they are grouped the Nigerian way (1,234) and their nouns agree ("1 source", "1 day"), and ratios, basis points and percentages through the new `formatPercent` instead of `toFixed` and a `%`. Money is formatted in whole kobo: `formatKobo` splits naira and kobo with integer arithmetic, so an amount above about ₦70 trillion no longer shows a kobo off (9,007,199,254,740,991 kobo is ₦90,071,992,547,409.91, not .90), and ordinary amounts read exactly as before, negative zero aside, which now shows as ₦0.00.
 
-## Audit fixes, items 11 to 20 · September 2026
+### Audit fixes, items 11 to 20 · September 2026
 
 Items 11 to 20 of the 22 September 2026 audit are fixed and covered by tests:
 
@@ -241,7 +264,7 @@ Items 11 to 20 of the 22 September 2026 audit are fixed and covered by tests:
 - **Isolation self-check.** The restricted-database check compares every row-security policy's roles, mode and expressions, the scope helpers' definitions and the workspace guard with the reviewed set, not just their names: a policy loosened to `USING (true)`, a replaced helper or a disabled guard now refuses staff requests, and the readiness page reports the database as verified only when the request's own check passed.
 - **Console dead ends.** Reads are repeated only after a network failure or a 5xx or 408, at most twice, so a missing customer or case shows its not-found page at once instead of after about 7 s, and the case page now has one. A refusal that leaves a request's journal entry cancelled says `operation: "cancelled"`, and a cancelled entry can no longer complete, so the console releases a request it held as unconfirmed; every recovery notice, the team page's invitation revocation included, can also discard its original request after a warning, Settings' Discard draft and refresh works in that state, and a definitive refusal ends its key while a 401 or 429 keeps it. A refusal never marks a request whose key already has a receipt from before the journal. A corrected page number replaces the history entry, so Back leaves the list, and the import editor offers Load latest version after a colleague saves the batch, keeping the draft if that version cannot be loaded.
 
-## Audit fixes · September 2026
+### Audit fixes · September 2026
 
 The first ten items of the 22 September 2026 audit are fixed and covered by tests:
 
@@ -256,10 +279,10 @@ The first ten items of the 22 September 2026 audit are fixed and covered by test
 - **Collections queue.** Each failed attempt reads its instalment by key: a page for a 6,208-instalment lender takes about 80 ms instead of about 2.8 s.
 - **Error answers.** Malformed bodies, NUL characters, unavailable services and storage failures get their correct statuses, the security headers and origin rule run before the body is read, and a request whose transaction was rolled back says that nothing was saved.
 
-## Pilot operations controls · September 2026
+### Pilot operations controls · September 2026
 
 The [pilot operations release](pilot-operations-controls.md) adds evidence-based journey states, independent Finance close review, source mappings and delivery checks, a durable signed Paystack test inbox with local fixtures, personal work and handover receipts, explicit staff lender grants, optional full-runtime restricted database integration, managed encryption of raw import/recovery payloads, and retention previews/holds/deletion receipts. Recovery rehearsals now include ten database tables, generated private files and key/access configuration. These controls remain synthetic; host identity, managed keys and Paystack credentials are not configured, and external commissioning is not claimed.
-## Connected Banking extension · September 2026
+### Connected Banking extension · September 2026
 
 The platform now includes working synthetic Pay-by-bank, Credit Desk, Cash Desk and purpose-specific permission journeys. The new modules persist within the existing scoped transaction and audit boundary; sample payment receipts update the original reconciliation records. See [Connected Banking](connected-banking.md) for implemented behaviour, test coverage and live dependencies. Provider connectivity, production underwriting, accounting writes, tax submission and payouts remain disabled; no sample gate or permission can enable them.
 

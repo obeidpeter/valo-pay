@@ -18,6 +18,72 @@ function running(stage='confirming', expired=false, kind='customers') {
     return job.id;
   });
 }
+it('retries an unavailable exact export lookup without claiming it was not found',async()=>{
+  const id=running(),user=userEvent.setup(),base=globalThis.fetch;
+  running('uploading',false,'mandates');
+  let failLookup=true;
+  globalThis.fetch=async(input,init)=>{
+    const url=new URL(String(input),'http://localhost');
+    if(failLookup&&url.pathname==='/api/v1/records/exports'&&url.searchParams.get('id')===id)return new Response(JSON.stringify({error:''}),{status:503,headers:{'content-type':'application/json'}});
+    return base(input,init);
+  };
+  renderApp(`/exports?job=${id}`);
+  const selection=(await screen.findByRole('heading',{name:'Selected export'})).closest('section')!;
+  await within(selection).findByText('This export could not be checked. Check your connection and try again.');
+  expect(screen.queryByText(/This export was not found/)).toBeNull();
+  expect(screen.getByRole('link',{name:/Customers · JSON/})).toBeTruthy();
+  expect(api.calls.filter(call=>call.path===`/v1/exports/${id}`)).toHaveLength(0);
+  failLookup=false;
+  await user.click(within(selection).getByRole('button',{name:'Try again'}));
+  await screen.findByText('File saved · confirming its download receipt');
+  expect(within(selection).queryByRole('alert')).toBeNull();
+  await waitFor(()=>expect(document.activeElement).toBe(screen.getByText('Export lookup complete.')));
+  const releaseNextJob=api.hold(/^\/v1\/records\/exports$/);
+  await user.click(screen.getByRole('link',{name:/Mandates · JSON/}));
+  await screen.findByText('Checking this export’s lender access…');
+  expect(screen.queryByText('Export lookup complete.')).toBeNull();
+  releaseNextJob();
+  await screen.findByText('Saving the private file');
+  expect(screen.queryByText('Export lookup complete.')).toBeNull();
+});
+it('distinguishes export history loading and failure from a confirmed empty result',async()=>{
+  const user=userEvent.setup(),release=api.hold(/^\/v1\/records\/exports$/);
+  api.failNext(/^\/v1\/records\/exports$/,'offline','GET');
+  renderApp('/exports');
+  await screen.findByText('Loading saved export jobs…');
+  expect(screen.queryByText(/No exports on this page/)).toBeNull();
+  expect(screen.queryByText(/Select a saved export to see/)).toBeNull();
+  release();
+  await screen.findByText('Export history could not be loaded. Check your connection and try again.');
+  expect(screen.queryByText(/No exports on this page/)).toBeNull();
+  expect(screen.queryByText(/This export was not found/)).toBeNull();
+  await user.click(screen.getByRole('button',{name:'Try again'}));
+  await screen.findByText(/No exports on this page/);
+  expect(screen.getByText('Select a saved export to see its progress and available actions.')).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+  await waitFor(()=>expect(document.activeElement).toBe(screen.getByText('Export history reloaded.')));
+  const releaseNextFilter=api.hold(/^\/v1\/records\/exports$/);
+  await user.selectOptions(screen.getByRole('combobox',{name:'Export status'}),'ready');
+  await screen.findByText('Loading saved export jobs…');
+  expect(screen.queryByText('Export history reloaded.')).toBeNull();
+  releaseNextFilter();
+  await screen.findByText(/No exports on this page/);
+  expect(screen.queryByText('Export history reloaded.')).toBeNull();
+});
+it('retains export history and selected details when both refreshes fail',async()=>{
+  const id=running(),user=userEvent.setup();renderApp(`/exports?job=${id}`);
+  await screen.findByText('File saved · confirming its download receipt');
+  api.failNext(/^\/v1\/records\/exports$/,'offline','GET');
+  api.failNext(/^\/v1\/records\/exports$/,'offline','GET');
+  await user.click(screen.getByRole('button',{name:'Refresh saved exports'}));
+  await screen.findByText('Showing the last loaded export history. Try again to check for updates.');
+  expect(screen.getByText('Showing the last loaded export details. Try again to check for updates.')).toBeTruthy();
+  expect(screen.getByRole('link',{name:/Customers · JSON/})).toBeTruthy();
+  expect(screen.getByText(`Request: ${id}`)).toBeTruthy();
+  expect(screen.getAllByRole('alert')).toHaveLength(2);
+  expect(screen.queryByText(/This export was not found/)).toBeNull();
+  expect(screen.queryByText(/No exports on this page/)).toBeNull();
+});
 it('shows saved file confirmation progress and recovers an expired lease using the same job',async()=>{
   const id=running('confirming',true),user=userEvent.setup();renderApp(`/exports?job=${id}`);
   await screen.findByText('File saved · confirming its download receipt');
