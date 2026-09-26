@@ -36,7 +36,13 @@ import {
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useDialogFocusReturn } from "@/lib/focus";
-import { formatCompactDate, formatCount, formatDate, formatKobo, formatPercent } from "@/lib/formatters";
+import {
+  formatCompactDate,
+  formatCount,
+  formatDate,
+  formatKobo,
+  formatPercent,
+} from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
 import { useFormDraft } from "@/lib/unsaved-changes";
 
@@ -351,7 +357,8 @@ function ForecastChart({
   );
 }
 const TITLE = "Cash Desk",
-  DESCRIPTION = "A clearer view of business cash, commitments and the work ahead.";
+  DESCRIPTION =
+    "A clearer view of business cash, commitments and the work ahead.";
 export default function CashDeskPage() {
   const api = useConnected();
   const { data, isLoading, error, refetch, run, pending, canWrite } = api;
@@ -372,7 +379,12 @@ export default function CashDeskPage() {
   const result = useRef<HTMLParagraphElement>(null);
   const restoreFocus = useDialogFocusReturn(!!action, () => result.current);
   // Planning inputs, or a review note, typed but not saved are a draft: leaving asks first.
-  const draft = useFormDraft({ downside, delay, buffer, reason: action ? reason : "" });
+  const draft = useFormDraft({
+    downside,
+    delay,
+    buffer,
+    reason: action ? reason : "",
+  });
   useEffect(() => {
     setAction(null);
     setReason("");
@@ -412,6 +424,8 @@ export default function CashDeskPage() {
           "Sample source timestamps refreshed. Review the updated balances before preparing new work.",
         "cash.erp.prepare":
           "Sample accounting draft prepared. A different Finance reviewer must check it before export.",
+        "cash.erp.refresh":
+          "Accounting review refreshed using current evidence and permissions. A different Finance reviewer must approve it again before export.",
         "cash.erp.review":
           "Sample accounting review recorded. The draft can be prepared for export if its evidence is still current. Nothing has been posted.",
         "cash.erp.export":
@@ -1014,11 +1028,34 @@ export default function CashDeskPage() {
                   </p>
                   <p className="text-sm text-muted-foreground">
                     Prepared by {r.draft.input.maker}.
-                    {r.draft.review
-                      ? ` Reviewed by ${r.draft.review.reviewer}.`
-                      : " A different Finance reviewer is required."}
+                    {r.status === "review_required"
+                      ? " Permissions changed since this review. Refresh the accounting review, then obtain a new Finance approval."
+                      : r.draft.review
+                        ? ` Reviewed by ${r.draft.review.reviewer}.`
+                        : " A different Finance reviewer is required."}
                   </p>
                   <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      disabled={
+                        !canOperate ||
+                        !maker ||
+                        !cash.permissions.erp ||
+                        pending
+                      }
+                      onClick={() =>
+                        ask({
+                          action: "cash.erp.refresh",
+                          title: "Refresh accounting review",
+                          detail:
+                            "Recheck current permissions, invoice balances, mapping and period locks. Keep the same receipt identity and preserve the previous review as history; a different Finance reviewer must approve again.",
+                          recordId: r.id,
+                        })
+                      }
+                    >
+                      <RefreshCw />
+                      Refresh accounting review
+                    </Button>
                     <Button
                       disabled={
                         !canOperate ||
@@ -1333,6 +1370,13 @@ export default function CashDeskPage() {
                     estimated fees {amount(r.plan.estimatedFeesMinor)} · buffer{" "}
                     {amount(r.plan.bufferMinor)}
                   </p>
+                  {r.status === "review_required" && (
+                    <p className="text-sm text-muted-foreground">
+                      Permissions changed since this review. Refresh the funding
+                      review, then obtain a new Finance approval. Recorded item
+                      outcomes remain unchanged.
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     <Button
                       variant="outline"
@@ -1361,6 +1405,7 @@ export default function CashDeskPage() {
                         !cash.permissions.payroll ||
                         !finance ||
                         pending ||
+                        r.status === "review_required" ||
                         r.plan.approvalStatus === "approved" ||
                         r.plan.fundingStatus !== "ready_for_review"
                       }

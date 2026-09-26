@@ -1,5 +1,68 @@
 /** Money rules from the business plan v2.1 and TRD sections 5.3 and 5.15.  Amounts are integer kobo. */
 
+/** The v1 JSON number contract supports only exact, safe integer minor units.
+ * Intermediate arithmetic is bigint; no bigint escapes to JSON. Signed amounts
+ * are permitted for adjustments and balances, never implicitly coerced. */
+export class MoneyArithmeticError extends RangeError {
+  constructor(public readonly code: "INVALID_MONEY_AMOUNT" | "INVALID_MONEY_RATE" | "MONEY_OUT_OF_RANGE", message: string) {
+    super(message);
+    this.name = "MoneyArithmeticError";
+  }
+}
+/** Refuse fractional or unsafe minor-unit values before arithmetic. */
+export function integerMoney(value: number): number {
+  if (!Number.isSafeInteger(value)) throw new MoneyArithmeticError("INVALID_MONEY_AMOUNT", "Money must be a safe whole number of minor units.");
+  return value;
+}
+/** Validate a minor-unit amount that cannot represent a debit or correction. */
+export function nonnegativeMoney(value: number): number {
+  integerMoney(value);
+  if (value < 0) throw new MoneyArithmeticError("INVALID_MONEY_AMOUNT", "This amount must not be negative.");
+  return value;
+}
+/** Convert an exact result only when the v1 number contract can preserve it. */
+export function moneyFromBigInt(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new MoneyArithmeticError("MONEY_OUT_OF_RANGE", "The calculated amount exceeds the supported safe-integer minor-unit range.");
+  }
+  return Number(value);
+}
+/** Exact sum, including signed corrections. The final aggregate must fit v1. */
+export function sumMoney(values: Iterable<number>): number {
+  let sum = 0n;
+  for (const value of values) sum += BigInt(integerMoney(value));
+  return moneyFromBigInt(sum);
+}
+/** Exact signed product/division with explicitly selected historical rounding. */
+export function multiplyDivideMoney(value: number, multiplier: number, divisor: number, rounding: "floor" | "trunc" = "floor"): number {
+  integerMoney(value); integerMoney(multiplier); integerMoney(divisor);
+  if (divisor <= 0) throw new MoneyArithmeticError("INVALID_MONEY_RATE", "The divisor must be positive.");
+  const product = BigInt(value) * BigInt(multiplier), denominator = BigInt(divisor);
+  let quotient = product / denominator;
+  if (rounding === "floor" && product < 0n && product % denominator !== 0n) quotient -= 1n;
+  return moneyFromBigInt(quotient);
+}
+/** Validate a whole basis-point rate from zero through one hundred percent. */
+export function validMoneyBps(bps: number): number {
+  if (!Number.isSafeInteger(bps) || bps < 0 || bps > 10_000) {
+    throw new MoneyArithmeticError("INVALID_MONEY_RATE", "The rate must be whole basis points between 0 and 10,000.");
+  }
+  return bps;
+}
+/** Exact legacy decimal-rate multiplication, truncated towards zero. Historical
+ * adjustments store a decimal share rather than bps; do not silently reprice
+ * those records to a different precision or change their rounding. */
+export function legacyDiscountMoney(value: number, rate: number): number {
+  integerMoney(value);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 1) throw new MoneyArithmeticError("INVALID_MONEY_RATE", "The discount share must be between zero and one.");
+  const [coefficient, exponent = "0"] = rate.toString().split("e");
+  const [whole, fraction = ""] = coefficient!.split(".");
+  const scale = fraction.length - Number(exponent);
+  const numerator = BigInt(whole! + fraction) * (scale < 0 ? 10n ** BigInt(-scale) : 1n);
+  const denominator = scale > 0 ? 10n ** BigInt(scale) : 1n;
+  return moneyFromBigInt((BigInt(value) * numerator) / denominator);
+}
+
 /** Debits under ₦5,000 are refused with no override (MAN-07, gate change note change 11). */
 export const ABSOLUTE_TICKET_FLOOR_KOBO = 500_000;
 /** Merchant default minimum; between the floor and this value a recorded Admin override is needed. */
@@ -28,7 +91,7 @@ export const RECOVERY_FEE_KOBO = 15_000;
 export const DEFAULT_VAT_BPS = 750;
 /** VAT on a net amount at the given basis points, rounded down to a kobo. */
 export function vatKobo(netKobo: number, bps: number = DEFAULT_VAT_BPS): number {
-  return Math.floor((netKobo * bps) / 10_000);
+  return multiplyDivideMoney(netKobo, validMoneyBps(bps), 10_000);
 }
 
 /** Design partners pay half in 2027 and full public prices from 1 January 2028. */
@@ -46,8 +109,8 @@ export interface ProviderFeeSchedule { readonly bps: number; readonly capKobo: n
 export const DEFAULT_PROVIDER_FEE: ProviderFeeSchedule = { bps: 50, capKobo: 100_000 };
 /** The provider's fee on a gross collection under a schedule, rounded down and capped. */
 export function providerFeeKobo(grossKobo: number, schedule: ProviderFeeSchedule = DEFAULT_PROVIDER_FEE): number {
-  const fee = Math.floor((grossKobo * schedule.bps) / 10_000);
-  return Math.min(fee, schedule.capKobo);
+  nonnegativeMoney(grossKobo); nonnegativeMoney(schedule.capKobo);
+  return Math.min(multiplyDivideMoney(grossKobo, validMoneyBps(schedule.bps), 10_000), schedule.capKobo);
 }
 
 /**
@@ -80,7 +143,7 @@ export const DEFAULT_REVERSAL_WINDOW_DAYS = 7;
 
 /** The usage fee on a collected amount (BIL-02): 0.3%, rounded down and capped. */
 export function usageFeeKobo(collectedKobo: number): number {
-  return Math.min(USAGE_FEE_CAP_KOBO, Math.floor((collectedKobo * USAGE_FEE_BPS) / 10_000));
+  return Math.min(USAGE_FEE_CAP_KOBO, multiplyDivideMoney(nonnegativeMoney(collectedKobo), USAGE_FEE_BPS, 10_000));
 }
 
 /** True for a non-negative safe integer, the only shape an amount may take. */

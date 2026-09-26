@@ -1,3 +1,4 @@
+import { sumMoney } from "@workspace/valopay-schema";
 /**
  * NFR-OBS-02 alerts computed from the lender's state: the conditions the TRD
  * routes to the on-call phone that this sandbox can observe.  Alerts are
@@ -78,7 +79,7 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   if (deferred.length) alerts.push({ key: "attempts_deferred", severity: "medium", title: "Collection attempts delayed: notice evidence missing", detail: `${counted(deferred.length, "planned attempt passed its", "planned attempts passed their")} notice deadline without a record that the provider accepted the customer notice. Review the missing evidence before a retry.`, count: deferred.length, linkedRecordId: deferred[0]!.id });
   // This WAT month's message cost per collection: a direct debit collected by webhook or settlement line counts.
   const month = monthOf(now);
-  const cost = recordsOf(state, "notifications").filter((item) => monthOf(String(item.data.submittedAt || item.createdAt)) === month).reduce((sum, item) => sum + Number(item.data.costKobo || 0), 0);
+  const cost = sumMoney(recordsOf(state, "notifications").filter((item) => monthOf(String(item.data.submittedAt || item.createdAt)) === month).map((item) => Number(item.data.costKobo || 0)));
   const collections = recordsOf(state, "payments").filter((item) => monthOf(String(item.data.observedAt || item.createdAt)) === month && isBillableChannel(item.data.channel) && collectionSucceeded(item)).length;
   const costCeiling = setting(state, "notificationCostAlertKobo", alertRules.notificationCostPerCollectionKobo);
   if (collections > 0 && cost / collections > costCeiling) alerts.push({ key: "notification_cost", severity: "medium", title: "Message cost exceeds the alert limit", detail: `Message costs average NGN ${(cost / collections / 100).toFixed(2)} per successful collection this month. The alert limit is NGN ${(costCeiling / 100).toFixed(2)}. Review message costs and settings.`, count: collections });

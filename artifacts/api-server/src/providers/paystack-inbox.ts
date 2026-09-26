@@ -68,6 +68,7 @@ export function replayProviderEvent(state: DomainState, ctx: Context, id: string
   if (!record) refuse("Provider receipt not found in this lender.", 404);
   assertRecordVersion(record, version);
   if (record.status === "quarantined" || record.status === "rejected_fixture") refuse("This receipt cannot be replayed. Investigate its original conflict; replay cannot clear quarantine or repair a rejected signature.", 409);
+  if (record.status === "verified") refuse("This receipt already has an independently verified observation. Use normal reconciliation; replay must not create or replace its evidence.", 409);
   const decision = decisionFor(state, record.data.event, { connectionId: record.data.connectionId, mode: record.data.mode }, record.id);
   record.status = decision.status; record.data.message = decision.message;
   record.data.replayHistory = [...record.data.replayHistory, { at: ctx.now, actor: ctx.actor, reason, result: decision.status }];

@@ -55,6 +55,7 @@ for (const purpose of ["merchant_account_read", "erp_draft", "payroll_prepare"])
     createdAt: now,
     data: {
       purpose,
+      version: 1,
       subjectId: "sme",
       entityId: "lender-one:sme",
       expiresAt: "2026-10-21T10:00:00Z",
@@ -288,6 +289,7 @@ checks++;
       createdAt: early,
       data: {
         purpose,
+        version: 1,
         subjectId: "sme",
         entityId: "lender-one:sme",
         expiresAt: "2026-10-30T10:00:00Z",

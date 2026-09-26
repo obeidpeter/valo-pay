@@ -492,7 +492,7 @@ export const recordDataSchemas = {
     averageTicketKobo: kobo.optional(),
     implementationKobo: kobo.optional(),
     licenceKobo: kobo.optional(),
-    usageBps: z.number().int().min(0).optional(),
+    usageBps: z.number().int().min(0).max(10_000).optional(),
     usageCapKobo: kobo.optional(),
     signed: z.boolean().optional(),
     signedFullPriceTerms: z.boolean().optional(),

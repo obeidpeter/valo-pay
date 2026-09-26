@@ -158,7 +158,10 @@ function externalScheduled(r: ValopayRecord) {
 }
 export function consentActive(r: ValopayRecord, now: string) {
   return (
-    r.status === "active" && Date.parse(r.data.expiresAt) > Date.parse(now)
+    r.status === "active" &&
+    Date.parse(String(r.data.validFrom ?? r.createdAt)) <= Date.parse(now) &&
+    Date.parse(r.data.expiresAt) > Date.parse(now) &&
+    Number.isSafeInteger(r.data.version) && Number(r.data.version) > 0
   );
 }
 function addConsent(
@@ -672,6 +675,7 @@ function connectedAction(
     consent.data.revokedAt = ctx.now;
     consent.data.revokedBy = ctx.actor;
     consent.data.revocationReason = input.reason;
+    consent.data.version = Number(consent.data.version || 0) + 1;
     touch(consent, ctx.now);
     return consent;
   }

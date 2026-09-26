@@ -17,7 +17,7 @@ import { markKeyed, markKeyUnused, markOperationClosed, operationClosed, registe
 import { parsePublishableKey } from "@clerk/shared/keys";
 import { ClerkAPIResponseError, ClerkRuntimeError } from "@clerk/shared/error";
 import { ResponseContractError, replayedAnswer } from "../src/lib/contract.js";
-import { connectedActionResultFor } from "@workspace/valopay-schema";
+import { connectedActionResultFor, MoneyArithmeticError } from "@workspace/valopay-schema";
 
 let checks = 0;
 type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
@@ -40,6 +40,12 @@ function answer(error: unknown): Answer {
   assert.equal(typeError.status, 500, "a programming error is a 500");
   assert.equal((typeError.body as { error: string }).error, "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", "a programming error's message stays out of the response and does not claim an unconfirmed write was rolled back");
   assert.equal(answer(new ReferenceError("x is not defined")).status, 500);
+  const moneyRefusal = answer(new MoneyArithmeticError("MONEY_OUT_OF_RANGE", "private calculation context must not escape"));
+  assert.equal(moneyRefusal.status, 422);
+  assert.equal((moneyRefusal.body as { code: string }).code, "MONEY_OUT_OF_RANGE");
+  assert.doesNotMatch(JSON.stringify(moneyRefusal), /private calculation/);
+  assert.equal(answer(Object.assign(new RangeError("private runtime failure"), { code: "MONEY_OUT_OF_RANGE" })).status, 500);
+  checks += 4;
   assert.equal(answer("a string thrown by mistake").status, 500, "something that is not an Error is a 500");
   assert.equal(answer(Object.assign(new Error("duplicate key"), { code: "23505" })).status, 409, "a database safety constraint is a conflict");
   assert.equal(answer(Object.assign(new Error("resource busy"), { code: "EBUSY" })).status, 500, "an error with a code the application does not own is a 500");

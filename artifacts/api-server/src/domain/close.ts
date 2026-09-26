@@ -1,4 +1,4 @@
-import { WAT_OFFSET_MS, closeRules, closeTimeOf, deadlinePassed, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
+import { sumMoney, WAT_OFFSET_MS, closeRules, closeTimeOf, deadlinePassed, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, currencyOf, paymentObservedAt } from "./reconciliation";
@@ -180,14 +180,14 @@ function positionIndex(state: DomainState) {
   }
   for (const record of state.records) {
     const position = positions.get(record.customerId);
-    if (record.kind === "due-items" && record.status !== "cancelled" && position) position.obligationsKobo += record.amountKobo;
+    if (record.kind === "due-items" && record.status !== "cancelled" && position) position.obligationsKobo = sumMoney([position.obligationsKobo, record.amountKobo]);
     if (record.kind === "allocations" && record.status === "confirmed") {
-      if (position) position.allocatedKobo += record.amountKobo;
+      if (position) position.allocatedKobo = sumMoney([position.allocatedKobo, record.amountKobo]);
       const dueId = record.data.dueItemId;
-      if (typeof dueId === "string") appliedByDue.set(dueId, (appliedByDue.get(dueId) ?? 0) + record.amountKobo);
+      if (typeof dueId === "string") appliedByDue.set(dueId, sumMoney([appliedByDue.get(dueId) ?? 0, record.amountKobo]));
     }
     // Instalments are owed in naira: money in another currency is held for Finance, never a customer's naira credit.
-    if (record.kind === "payments" && position && currencyOf(record) === "NGN") position.unallocatedKobo += paymentUnappliedKobo(record);
+    if (record.kind === "payments" && position && currencyOf(record) === "NGN") position.unallocatedKobo = sumMoney([position.unallocatedKobo, paymentUnappliedKobo(record)]);
   }
   for (const position of positions.values()) position.outstandingKobo = Math.max(0, position.obligationsKobo - position.allocatedKobo);
   return { positions, appliedByDue };
@@ -195,9 +195,9 @@ function positionIndex(state: DomainState) {
 
 export function positionFor(state: DomainState, customerId: string): CustomerPosition {
   const related = state.records.filter((record) => record.customerId === customerId);
-  const obligationsKobo = related.filter((record) => record.kind === "due-items" && record.status !== "cancelled").reduce((sum, record) => sum + record.amountKobo, 0);
-  const allocatedKobo = related.filter((record) => record.kind === "allocations" && record.status === "confirmed").reduce((sum, record) => sum + record.amountKobo, 0);
-  const unallocatedKobo = related.filter((record) => record.kind === "payments" && currencyOf(record) === "NGN").reduce((sum, record) => sum + paymentUnappliedKobo(record), 0);
+  const obligationsKobo = sumMoney(related.filter((record) => record.kind === "due-items" && record.status !== "cancelled").map((record) => record.amountKobo));
+  const allocatedKobo = sumMoney(related.filter((record) => record.kind === "allocations" && record.status === "confirmed").map((record) => record.amountKobo));
+  const unallocatedKobo = sumMoney(related.filter((record) => record.kind === "payments" && currencyOf(record) === "NGN").map((record) => paymentUnappliedKobo(record)));
   return { customerId, obligationsKobo, allocatedKobo, outstandingKobo: Math.max(0, obligationsKobo - allocatedKobo), unallocatedKobo };
 }
 
@@ -215,7 +215,7 @@ export function positionSnapshot(state: DomainState): Map<string, CustomerPositi
   return positionIndex(state).positions;
 }
 
-const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
+const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: sumMoney(items.map((item) => item.amountKobo)) });
 /** Money in another currency than naira, by currency code: how many payments and their amount in that currency's minor unit, as the payment stores it. */
 export type OtherCurrencies = Record<string, { count: number; amount: number }>;
 /**
@@ -231,9 +231,9 @@ export function inNaira(items: readonly ValopayRecord[], amount: (item: ValopayR
   const other = new Map<string, { count: number; amount: number }>();
   for (const item of items) {
     const currency = currencyOf(item);
-    if (currency === "NGN") { kobo += amount(item); continue; }
+    if (currency === "NGN") { kobo = sumMoney([kobo, amount(item)]); continue; }
     const row = other.get(currency) ?? { count: 0, amount: 0 };
-    row.count += 1; row.amount += amount(item);
+    row.count += 1; row.amount = sumMoney([row.amount, amount(item)]);
     other.set(currency, row);
   }
   return { count: items.length, kobo, ...(other.size ? { otherCurrencies: Object.fromEntries([...other].sort(([a], [b]) => (a < b ? -1 : 1))) } : {}) };
@@ -294,7 +294,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
   const allocatedByRule: Record<string, { count: number; kobo: number; automatic: number }> = {};
   for (const allocation of confirmed) {
     const row = (allocatedByRule[String(allocation.data.rule)] ||= { count: 0, kobo: 0, automatic: 0 });
-    row.count += 1; row.kobo += allocation.amountKobo; if (allocation.data.automatic === true) row.automatic += 1;
+    row.count += 1; row.kobo = sumMoney([row.kobo, allocation.amountKobo]); if (allocation.data.automatic === true) row.automatic += 1;
   }
 
   const unallocated = payments.filter(paymentAwaitsAllocation);

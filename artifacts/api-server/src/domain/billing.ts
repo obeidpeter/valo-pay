@@ -6,7 +6,7 @@
  * an issued one.  The recovery fee (BIL-03) stays behind its gate.
  */
 import {
-  counted,
+  counted, sumMoney, multiplyDivideMoney, legacyDiscountMoney, nonnegativeMoney, validMoneyBps, MoneyArithmeticError,
   DEFAULT_REVERSAL_WINDOW_DAYS, DEFAULT_VAT_BPS, DESIGN_PARTNER_DISCOUNT, DESIGN_PARTNER_DISCOUNT_YEAR, RECOVERY_FEE_KOBO, USAGE_FEE_BPS, USAGE_FEE_CAP_KOBO,
   billableChannels, experimentRules, isBillableChannel, isKobo, licenceTierFor, nairaText, paymentAppliedKobo, usageFeeKobo, vatKobo, type AdjustmentReason,
 } from "@workspace/valopay-schema";
@@ -78,8 +78,7 @@ export function billableCollection(state: DomainState, payment: TypedRecord<"pay
 }
 
 export function vatBpsFor(state: DomainState): number {
-  const configured = Number(state.settings.vatBps);
-  return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_VAT_BPS;
+  return state.settings.vatBps === undefined ? DEFAULT_VAT_BPS : validMoneyBps(state.settings.vatBps as number);
 }
 
 const issuedInvoices = (state: DomainState): TypedRecord<"invoices">[] =>
@@ -107,7 +106,10 @@ export function collectionFeeNow(state: DomainState, payment: TypedRecord<"payme
 }
 
 /** What a line charges after a design-partner discount of `rate` (the share taken off), in whole basis points, rounded down in the lender's favour. */
-export const chargedAtRate = (kobo: number, rate: number): number => Math.floor((kobo * (10_000 - Math.round(rate * 10_000))) / 10_000);
+export function chargedAtRate(kobo: number, rate: number): number {
+  if (!Number.isFinite(rate) || rate < 0 || rate > 1) throw new MoneyArithmeticError("INVALID_MONEY_RATE", "The discount share must be between zero and one.");
+  return multiplyDivideMoney(nonnegativeMoney(kobo), 10_000 - Math.round(rate * 10_000), 10_000);
+}
 /** A stored discount rate, or the fallback when it is missing or out of range. */
 const rateOf = (value: unknown, fallback: number): number => typeof value === "number" && value >= 0 && value <= 1 ? value : fallback;
 
@@ -128,15 +130,15 @@ export function billedLedger(state: DomainState): Map<string, LedgerEntry> {
     for (const line of (invoice.data.usageLines || []) as Array<{ paymentId: string; feeKobo: number; allocatedKobo: number; discountRate?: number; chargedKobo?: number }>) {
       const rate = rateOf(line.discountRate, invoiceRate), feeKobo = Number(line.feeKobo || 0);
       const entry = entryFor(line.paymentId, rate);
-      entry.netFeeKobo += feeKobo; entry.netChargedKobo += isKobo(line.chargedKobo) ? line.chargedKobo : chargedAtRate(feeKobo, rate);
+      entry.netFeeKobo = sumMoney([entry.netFeeKobo, feeKobo]); entry.netChargedKobo = sumMoney([entry.netChargedKobo, isKobo(line.chargedKobo) ? line.chargedKobo : chargedAtRate(feeKobo, rate)]);
       entry.allocatedKobo = Number(line.allocatedKobo || 0); entry.invoiceIds.push(invoice.id);
       ledger.set(line.paymentId, entry);
     }
     for (const line of (invoice.data.adjustments || []) as Array<{ paymentId: string; kobo: number; feeDeltaKobo?: number; currentAllocatedKobo?: number }>) {
       const entry = entryFor(line.paymentId, invoiceRate), kobo = Number(line.kobo || 0);
-      if (line.feeDeltaKobo !== undefined) { entry.netFeeKobo += Number(line.feeDeltaKobo); entry.netChargedKobo += kobo; }
+      if (line.feeDeltaKobo !== undefined) { entry.netFeeKobo = sumMoney([entry.netFeeKobo, Number(line.feeDeltaKobo)]); entry.netChargedKobo = sumMoney([entry.netChargedKobo, kobo]); }
       // An earlier line carried the public-price change, and its invoice's discount applied to it with everything else.
-      else { entry.netFeeKobo += kobo; entry.netChargedKobo += kobo - Math.trunc(kobo * invoiceRate); }
+      else { entry.netFeeKobo = sumMoney([entry.netFeeKobo, kobo]); entry.netChargedKobo = sumMoney([entry.netChargedKobo, kobo, -legacyDiscountMoney(kobo, invoiceRate)]); }
       if (line.currentAllocatedKobo !== undefined) entry.allocatedKobo = Number(line.currentAllocatedKobo);
       entry.invoiceIds.push(invoice.id);
       ledger.set(line.paymentId, entry);
@@ -201,13 +203,13 @@ export function pendingAdjustments(state: DomainState): AdjustmentLine[] {
     const payment = payments.get(paymentId);
     if (!payment) continue;
     const fee = collectionFeeNow(state, payment);
-    const kobo = chargedAtRate(fee.feeKobo, entry.discountRate) - entry.netChargedKobo;
+    const kobo = sumMoney([chargedAtRate(fee.feeKobo, entry.discountRate), -entry.netChargedKobo]);
     if (kobo === 0) continue;
     const reason: AdjustmentReason = kobo > 0 ? "re_allocation" : (fee.reason ?? "wrong_allocation");
     const discount = entry.discountRate > 0 ? ` at the ${Math.round(entry.discountRate * 100)}% design-partner discount` : "";
     lines.push({
       reason, paymentId, paymentReference: payment.reference, originalInvoiceId: entry.originalInvoiceId, originalInvoiceReference: entry.originalInvoiceReference, kobo,
-      feeDeltaKobo: fee.feeKobo - entry.netFeeKobo, discountRate: entry.discountRate, billedChargedKobo: entry.netChargedKobo,
+      feeDeltaKobo: sumMoney([fee.feeKobo, -entry.netFeeKobo]), discountRate: entry.discountRate, billedChargedKobo: entry.netChargedKobo,
       billedFeeKobo: entry.netFeeKobo, currentFeeKobo: fee.feeKobo, billedAllocatedKobo: entry.allocatedKobo, currentAllocatedKobo: fee.allocatedKobo,
       allocationIds: recordsOf(state, "allocations").filter((item) => item.data.paymentId === paymentId).map((item) => item.id),
       explanation: `Collection ${payment.reference} (${nairaText(entry.allocatedKobo)} billed ${nairaText(entry.netChargedKobo)} on ${entry.originalInvoiceReference}${discount}) ${reasonText[reason]}; ${kobo < 0 ? "credit" : "debit"} of ${nairaText(Math.abs(kobo))}.`,
@@ -233,7 +235,7 @@ export function recoveryFeeLines(state: DomainState, period: string) {
     if (!retry) return []; // recovered by another channel, not under an engine-scheduled retry
     return [{ dueItemId: due.id, reference: due.reference, attemptId: retry.id, firstFailureAt: due.data.firstFailureAt, windowClosedAt: new Date(close).toISOString(), feeKobo: RECOVERY_FEE_KOBO }];
   });
-  return { enabled, lines, kobo: lines.reduce((sum, line) => sum + line.feeKobo, 0), note };
+  return { enabled, lines, kobo: sumMoney(lines.map((line) => line.feeKobo)), note };
 }
 
 /** When terms take effect; terms that name no date have applied from the start. */
@@ -288,8 +290,8 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const terms = termsFor(state, period);
   const inPeriod = payments.filter((item) => monthOf(String(item.data.observedAt || item.createdAt)) === period);
   const billablePayments = inPeriod.filter((item) => billableCollection(state, item, now));
-  const usageBase = billablePayments.reduce((sum, item) => sum + paymentAppliedKobo(item), 0);
-  const usageFee = billablePayments.reduce((sum, item) => sum + usageFeeKobo(paymentAppliedKobo(item)), 0);
+  const usageBase = sumMoney(billablePayments.map(paymentAppliedKobo));
+  const usageFee = sumMoney(billablePayments.map((item) => usageFeeKobo(paymentAppliedKobo(item))));
   const tier = licenceTierFor(billablePayments.length);
   // Receipts by channel, as the close counts money: every receipt counts, kobo sums naira only, and money in another currency is listed beside it.
   const channelBreakdown: Record<string, { count: number; kobo: number; otherCurrencies?: OtherCurrencies; billable: number; reason: string }> = {};
@@ -304,10 +306,10 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const withheld = inPeriod.filter((item) => billableCollection(state, item, now, false) && !billableCollection(state, item, now));
   const lines = terms ? [(() => {
     const rate = discountRateFor(terms, period);
-    const usage = billablePayments.reduce((sum, item) => sum + chargedAtRate(usageFeeKobo(paymentAppliedKobo(item)), rate), 0);
-    const contractedLicence = Number(terms.data.licenceKobo || 0);
+    const usage = sumMoney(billablePayments.map((item) => chargedAtRate(usageFeeKobo(paymentAppliedKobo(item)), rate)));
+    const contractedLicence = nonnegativeMoney(terms.data.licenceKobo ?? 0);
     const licence = chargedAtRate(contractedLicence, rate);
-    return { commercialId: terms.id, prospect: terms.name, implementationKobo: 0, licenceKobo: licence, contractedLicenceKobo: contractedLicence, volumeTier: tier.name, volumeTierLicenceKobo: tier.licenceKobo, tierMismatch: contractedLicence !== tier.licenceKobo, usageKobo: usage, totalKobo: licence + usage, designPartnerDiscount: rate > 0 };
+    return { commercialId: terms.id, prospect: terms.name, implementationKobo: 0, licenceKobo: licence, contractedLicenceKobo: contractedLicence, volumeTier: tier.name, volumeTierLicenceKobo: tier.licenceKobo, tierMismatch: contractedLicence !== tier.licenceKobo, usageKobo: usage, totalKobo: sumMoney([licence, usage]), designPartnerDiscount: rate > 0 };
   })()] : [];
   const invoices = issuedInvoices(state).map((invoice) => ({
     id: invoice.id, reference: invoice.reference, period: invoice.data.period, issuedAt: invoice.data.issuedAt, issuedBy: invoice.data.issuedBy, collectionsCounted: invoice.data.collectionsCounted,
@@ -320,9 +322,9 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
     billableChannels: [...billableChannels], billableRule: "A collection can be billed when the direct debit succeeded (its webhook or its settlement line says so), the payment is settled and still has applied money that was not reversed or refunded at the invoice date, and the provider's reversal window has passed since it settled.",
     eligibleAllocatedKobo: usageBase, successfulCollections: billablePayments.length, usageFeeKobo: usageFee, volumeTier: tier.name,
     channelBreakdown, withheldInsideReversalWindow: withheld.length,
-    lines, totalKobo: lines.reduce((sum, line) => sum + line.totalKobo, 0),
+    lines, totalKobo: sumMoney(lines.map((line) => line.totalKobo)),
     invoices, nextInvoicePeriod: nextInvoicePeriod(state, now),
-    pendingAdjustments: adjustments, pendingAdjustmentsKobo: adjustments.reduce((sum, line) => sum + line.kobo, 0),
+    pendingAdjustments: adjustments, pendingAdjustmentsKobo: sumMoney(adjustments.map((line) => line.kobo)),
     adjustmentRule: "If a billed collection is reversed, refunded, confirmed as a duplicate or affected by an invalidated allocation, the correction appears as a credit or debit on the next invoice. Issued invoices are never changed. A correction is priced at the rate of the invoice that first billed the collection.",
     recoveryFee: recoveryFeeLines(state, period).note,
     implementationExcludedFromRecurring: true, synthetic: true,
@@ -368,15 +370,15 @@ export function issueInvoice(state: DomainState, ctx: Context, input: { period?:
   const adjustments = pendingAdjustments(state);
   const recoveryFee = recoveryFeeLines(state, period);
   const tier = licenceTierFor(usageLines.length);
-  const contractedLicence = Number(terms?.data.licenceKobo || 0);
-  const usageKobo = usageLines.reduce((sum, line) => sum + line.feeKobo, 0);
+  const contractedLicence = nonnegativeMoney(terms?.data.licenceKobo ?? 0);
+  const usageKobo = sumMoney(usageLines.map((line) => line.feeKobo));
   // Adjustment lines already carry the rate their collection was first billed under, so the discount leaves them alone.
-  const adjustmentsKobo = adjustments.reduce((sum, line) => sum + line.kobo, 0);
-  const discountKobo = 0 - ((contractedLicence - chargedAtRate(contractedLicence, rate)) + usageLines.reduce((sum, line) => sum + line.feeKobo - line.chargedKobo, 0));
-  const netKobo = contractedLicence + usageKobo + adjustmentsKobo + discountKobo + recoveryFee.kobo;
+  const adjustmentsKobo = sumMoney(adjustments.map((line) => line.kobo));
+  const discountKobo = 0 - sumMoney([contractedLicence, -chargedAtRate(contractedLicence, rate), ...usageLines.map((line) => sumMoney([line.feeKobo, -line.chargedKobo]))]);
+  const netKobo = sumMoney([contractedLicence, usageKobo, adjustmentsKobo, discountKobo, recoveryFee.kobo]);
   const vatBps = vatBpsFor(state);
-  const vat = Math.trunc((netKobo * vatBps) / 10_000);
-  const totalKobo = netKobo + vat;
+  const vat = multiplyDivideMoney(netKobo, validMoneyBps(vatBps), 10_000, "trunc");
+  const totalKobo = sumMoney([netKobo, vat]);
   const sequence = existing.length + 1;
   return makeRecord(state, "invoices", {
     name: `Invoice ${period}`, status: "issued", reference: `INV-${period}-${String(sequence).padStart(3, "0")}`, amountKobo: Math.max(0, totalKobo), createdAt: now,

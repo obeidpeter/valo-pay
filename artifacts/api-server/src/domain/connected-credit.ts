@@ -1102,7 +1102,7 @@ export function assessCredit(
         .map(([month, amountKobo]) => ({
           month,
           amountKobo,
-          stressedAfterPaymentKobo: stressedResidual - amountKobo,
+          stressedAfterPaymentKobo: sum([stressedResidual, -amountKobo]),
         })),
       scheduleAffordable: peak <= capacity,
     };
