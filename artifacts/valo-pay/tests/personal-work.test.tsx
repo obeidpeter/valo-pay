@@ -76,6 +76,50 @@ it('records reading without resolving the case and retains history', async () =>
   expect(screen.getByRole('heading', { name: 'Read sample case' })).toBeTruthy();
 });
 
+it.each(['Cancel', 'Escape'] as const)('returns keyboard focus to the handover opener after %s', async close => {
+  assigned('Clerk:alice', 'Handover to review', true);
+  const user = userEvent.setup(); mount();
+  const opener = await screen.findByRole('button', { name: 'Review handover' });
+  opener.focus();
+  await user.keyboard('{Enter}');
+  const dialog = screen.getByRole('dialog');
+  await user.click(within(dialog).getByRole('checkbox'));
+  if (close === 'Cancel') await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  else await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(opener));
+  expect(requests).toHaveLength(0);
+  await user.keyboard('{Enter}');
+  expect((within(screen.getByRole('dialog')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+});
+
+it.each([false, true])('handles a delayed acknowledged-queue refresh without losing or stealing focus (moved on: %s)', async movedOn => {
+  assigned('Clerk:alice', 'Delayed handover refresh', true);
+  const user = userEvent.setup(); mount();
+  const opener = await screen.findByRole('button', { name: 'Review handover' });
+  opener.focus();
+  await user.keyboard('{Enter}');
+  const dialog = screen.getByRole('dialog');
+  await user.click(within(dialog).getByRole('checkbox'));
+  const send = globalThis.fetch;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  globalThis.fetch = async (input, options) => {
+    if (String(input).includes('/api/v1/work?') && !options?.method) await held;
+    return send(input, options);
+  };
+  await user.click(within(dialog).getByRole('button', { name: 'Acknowledge handover' }));
+  const confirmation = await screen.findByText(/Handover acknowledged\. The case/);
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(opener));
+  const filter = screen.getByRole('combobox', { name: 'Show' });
+  if (movedOn) filter.focus();
+  release();
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Review handover' })).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(movedOn ? filter : confirmation));
+  expect(requests).toHaveLength(1);
+});
+
 it.each(['lost', 'malformed'] as const)('recovers %s handover responses with the original body/key and no duplicate acknowledgement', async mode => {
   const record = assigned('Clerk:alice', 'Handover sample', true);
   responseMode = mode;
@@ -97,6 +141,7 @@ it.each(['lost', 'malformed'] as const)('recovers %s handover responses with the
   expect(state.records.filter(item => item.kind === 'work-events' && item.data.action === 'acknowledge')).toHaveLength(1);
   expect(record.status).toBe('in_progress');
   expect(screen.queryByRole('dialog')).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByText(/Handover acknowledged\. The case/)));
 });
 
 it('rejects a handover changed after the review opened and explains the current assignment check', async () => {

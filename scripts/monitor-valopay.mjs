@@ -12,8 +12,21 @@ export function checkedOrigin(value, allowLocal = false) {
   return url.origin;
 }
 
-async function readJson(response) {
-  if (!response.ok || !response.body) throw new Error('Unavailable');
+/** A degraded readiness answer is diagnostic evidence, never a healthy HTTP response. */
+function checkReadiness(value, httpStatus) {
+  const database = value?.checks?.database, schema = value?.checks?.schema?.status;
+  const ready = database?.status === 'ok' && ['ok', 'indexes_missing'].includes(schema);
+  const degraded = (database?.status === 'ok' && schema === 'incomplete') || (database?.status === 'failed' && schema === 'unchecked');
+  if (typeof value?.build !== 'string' || !Number.isSafeInteger(database?.latencyMs) || database.latencyMs < 0 ||
+      !((httpStatus === 200 && value.status === 'ok' && ready) || (httpStatus === 503 && value.status === 'degraded' && degraded))) throw new Error('Unverified readiness');
+  return value;
+}
+
+async function readJson(response, readiness = false) {
+  if ((!response.ok && !(readiness && response.status === 503)) || !response.body) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error('Unavailable');
+  }
   const reader = response.body.getReader();
   const chunks = []; let length = 0;
   try {
@@ -24,7 +37,8 @@ async function readJson(response) {
       if (length > MAX_BYTES) throw new Error('Oversized response');
       chunks.push(value);
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return readiness ? checkReadiness(value, response.status) : value;
   } finally { await reader.cancel().catch(() => {}); }
 }
 
@@ -38,14 +52,14 @@ export async function probeService({ origin, expectScheduler = false, fetchImpl 
   const get = async path => {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
-    try { return await readJson(await fetchImpl(`${base}${path}`, { signal: abort.signal, redirect: 'error', headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } })); }
+    try { return await readJson(await fetchImpl(`${base}${path}`, { signal: abort.signal, redirect: 'error', headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } }), path === '/api/readyz'); }
     finally { clearTimeout(timer); }
   };
   const [health, ready] = await Promise.allSettled([get('/api/healthz'), get('/api/readyz')]);
   const codes = [];
   const warnings = [];
   if (health.status !== 'fulfilled' || health.value?.status !== 'ok') codes.push('service_unavailable');
-  if (ready.status !== 'fulfilled' || ready.value?.status !== 'ok' || ready.value?.checks?.database?.status !== 'ok') codes.push('database_unready');
+  if (ready.status !== 'fulfilled' || ready.value?.checks?.database?.status !== 'ok') codes.push('database_unready');
   if (ready.status === 'fulfilled' && ready.value?.checks?.database?.status === 'ok') {
     if (ready.value?.checks?.schema?.status === 'indexes_missing') warnings.push('schema_indexes_missing');
     else if (ready.value?.checks?.schema?.status !== 'ok') codes.push('schema_unready');
@@ -70,7 +84,7 @@ export async function probeService({ origin, expectScheduler = false, fetchImpl 
     observations: {
       liveness: health.status === 'fulfilled' && health.value?.status === 'ok' ? 'ok' : 'unavailable',
       database: ready.status === 'fulfilled' && ready.value?.checks?.database?.status === 'ok' ? 'ok' : 'unavailable',
-      schema: ready.status === 'fulfilled' && ['ok', 'indexes_missing'].includes(ready.value?.checks?.schema?.status) ? ready.value.checks.schema.status : 'unverified',
+      schema: ready.status === 'fulfilled' && ['ok', 'indexes_missing', 'incomplete'].includes(ready.value?.checks?.schema?.status) ? ready.value.checks.schema.status : 'unverified',
       scheduler: schedulerStates.includes(health.value?.scheduler?.state) ? health.value.scheduler.state : 'unverified',
       schedulerEvidence: !expectScheduler ? 'not_requested' : expectScheduler === 'external' ? 'mode_only' : codes.some(code => code.startsWith('scheduler_')) || health.status !== 'fulfilled' ? 'failed' : 'fresh_process_heartbeat',
     },

@@ -4,7 +4,7 @@ import { CheckCircle2, FileCheck2, ShieldCheck } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
 import { closeReviewListSchema } from "@workspace/valopay-schema";
-import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { confirmUnsavedChanges, useUnsavedChanges } from "@/lib/unsaved-changes";
 import { PilotError, PilotHeading, PilotPanel, RecoveryNotice, pilotField } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
 import { formatCount, formatDate, formatNumber } from "@/lib/formatters";
@@ -22,7 +22,10 @@ export default function CloseReviewPage() {
     {query.data?.accessMode !== "staff" && query.data && <section className="rounded-xl border bg-secondary/20 p-4 text-sm"><p className="font-semibold">Independent approval needs two people</p><p className="mt-1 text-muted-foreground">Demo roles belong to the same person. You can prepare the synthetic evidence here, but changing demo roles cannot approve your own close. Configure separate staff accounts to rehearse independent approval.</p></section>}
     {query.data && !items.length && <PilotPanel title="No close to review"><p className="text-sm text-muted-foreground">Reconcile the sample payments and run a daily close from Reports. Its exact results will appear here for preparation.</p><Link href="/reports" className="inline-flex min-h-11 items-center text-primary underline">Open Reports</Link></PilotPanel>}
     {!!items.length && <div className="grid min-w-0 gap-6 lg:grid-cols-[15rem_minmax(0,1fr)]">
-      <nav aria-label="Close snapshots" tabIndex={0} className="max-h-80 space-y-2 overflow-y-auto p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring lg:max-h-[48rem]"><p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent snapshots</p>{items.map((item: any, index: number) => <Link key={item.close.id} href={`/close-review?close=${encodeURIComponent(item.close.id)}`} aria-current={selected?.close.id === item.close.id ? "page" : undefined} className={`block rounded-lg border p-3 text-sm ${selected?.close.id === item.close.id ? "border-primary/50 bg-primary/5" : "bg-card"}`}><p className="font-semibold">{index === 0 ? "Latest close" : "Earlier close"}</p><p className="mt-1 text-muted-foreground">{formatDate(item.close.createdAt)}</p><p className="mt-2">{item.reviews[0]?.status === "approved" ? item.reviews[0]?.current ? "Approved · current" : "Approved · historical" : item.reviews[0]?.status === "awaiting_review" ? "Awaiting Finance" : item.reviews[0]?.status === "changes_requested" ? "Changes requested" : "Ready to prepare"}</p></Link>)}{(query.data?.total ?? 0) > items.length && <p className="text-xs text-muted-foreground">Showing the {formatNumber(items.length)} most recent closes. Full close history is in Reports.</p>}</nav>
+      <nav aria-label="Close snapshots" tabIndex={0} className="max-h-80 space-y-2 overflow-y-auto p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring lg:max-h-[48rem]"><p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent snapshots</p>{items.map((item: any, index: number) => <Link key={item.close.id} href={`/close-review?close=${encodeURIComponent(item.close.id)}`} onClick={event => {
+        // A different query remounts the form without changing the page. Link leaves modified/new-tab clicks native.
+        if (selected?.close.id !== item.close.id && !confirmUnsavedChanges()) event.preventDefault();
+      }} aria-current={selected?.close.id === item.close.id ? "page" : undefined} className={`block rounded-lg border p-3 text-sm ${selected?.close.id === item.close.id ? "border-primary/50 bg-primary/5" : "bg-card"}`}><p className="font-semibold">{index === 0 ? "Latest close" : "Earlier close"}</p><p className="mt-1 text-muted-foreground">{formatDate(item.close.createdAt)}</p><p className="mt-2">{item.reviews[0]?.status === "approved" ? item.reviews[0]?.current ? "Approved · current" : "Approved · historical" : item.reviews[0]?.status === "awaiting_review" ? "Awaiting Finance" : item.reviews[0]?.status === "changes_requested" ? "Changes requested" : "Ready to prepare"}</p></Link>)}{(query.data?.total ?? 0) > items.length && <p className="text-xs text-muted-foreground">Showing the {formatNumber(items.length)} most recent closes. Full close history is in Reports.</p>}</nav>
       {selected ? <CloseWork key={`${merchantId}:${selected.close.id}`} item={selected} data={query.data} refresh={() => query.refetch()} /> : <PilotPanel title="This close is not in the recent list"><p className="text-sm">Select a recent snapshot, or open Reports to inspect the full close history.</p></PilotPanel>}
     </div>}
   </div>;
@@ -58,8 +61,8 @@ function CloseWork({ item, data, refresh }: { item: any; data: any; refresh(): P
 
 function PrepareForm({ item, reviewers }: { item: any; reviewers: any[] }) {
   const { workspace } = useWorkspace(), [reviewer, setReviewer] = useState(""), [note, setNote] = useState(""), [acceptance, setAcceptance] = useState(""), [explanations, setExplanations] = useState<Record<string, string>>({});
-  const mutation = usePilotMutation(() => { setNote(""); setAcceptance(""); setExplanations({}); });
-  useUnsavedChanges(Boolean(note || acceptance || Object.values(explanations).some(Boolean)) && !mutation.isSuccess);
+  const mutation = usePilotMutation(() => { setReviewer(""); setNote(""); setAcceptance(""); setExplanations({}); });
+  useUnsavedChanges(Boolean(reviewer || note || acceptance || Object.values(explanations).some(Boolean)));
   const permitted = ["Admin", "Operations", "Finance"].includes(workspace?.role || ""), busy = mutation.isPending || mutation.hasUnconfirmedOutcome;
   return <PilotPanel title="2. Prepare for Finance"><p className="text-sm text-muted-foreground">Explain each issue and name the person who will review your work. Approval records acceptance of this evidence; it does not resolve exceptions or move money.</p>
     <form className="space-y-4" onSubmit={event => { event.preventDefault(); mutation.mutate({ path: "/pilot/close-reviews/prepare", data: { closeId: item.close.id, expectedUpdatedAt: item.close.updatedAt, reviewer, preparationNote: note, discrepancyResponses: item.issues.map((issue: any) => ({ issueId: issue.id, explanation: explanations[issue.id] || "" })), unresolvedAcceptance: acceptance } }); }}>
@@ -75,9 +78,11 @@ function PrepareForm({ item, reviewers }: { item: any; reviewers: any[] }) {
   </PilotPanel>;
 }
 function DecisionForm({ review }: { review: any }) {
-  const [note, setNote] = useState(""), [decision, setDecision] = useState(review.current ? "approve" : "return"), [checked, setChecked] = useState(false), mutation = usePilotMutation(() => setNote(""));
+  const [initialDecision] = useState(review.current ? "approve" : "return");
+  const [note, setNote] = useState(""), [decision, setDecision] = useState(initialDecision), [checked, setChecked] = useState(false);
   const sourceIssues:any[] = review.data.snapshot.data.reviewBasis?.sourceCompleteness?.issues || [], [exceptions,setExceptions]=useState<Record<string,{reason:string;evidence:string}>>({});
-  useUnsavedChanges(Boolean(note || Object.values(exceptions).some(item=>item.reason||item.evidence)) && !mutation.isSuccess);
+  const mutation = usePilotMutation(() => { setNote(""); setDecision(initialDecision); setChecked(false); setExceptions({}); });
+  useUnsavedChanges(Boolean(note || checked || decision !== initialDecision || Object.values(exceptions).some(item=>item.reason||item.evidence)));
   const busy = mutation.isPending || mutation.hasUnconfirmedOutcome;
   return <form className="space-y-4 border-t pt-4" onSubmit={event => { event.preventDefault(); mutation.mutate({ path: `/pilot/close-reviews/${review.id}/decision`, data: { expectedUpdatedAt: review.updatedAt, action: decision, note, sourceExceptions:decision==='approve'?sourceIssues.map(issue=>({issueId:issue.id,reason:exceptions[issue.id]?.reason||'',evidence:exceptions[issue.id]?.evidence||''})):[] } }); }}>
     <fieldset disabled={busy} className="space-y-4"><legend className="mb-3 text-sm font-semibold">Your independent Finance decision</legend>
