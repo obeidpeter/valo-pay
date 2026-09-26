@@ -38,23 +38,27 @@ for (const file of [...await walk(path.join(root, "artifacts")), ...await walk(p
     violations.push(`${relative}:${line + 1}: ${message}`);
   }
   function visit(node) {
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
       if (databaseImport.test(node.moduleSpecifier.text) && !allowed) reject(node, "Database imports belong only in the scoped repository.");
+    }
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const specifier = node.moduleReference.expression;
+      if (specifier && ts.isStringLiteralLike(specifier) && databaseImport.test(specifier.text) && !allowed) reject(node, "Database import-equals declarations belong only in the scoped repository.");
     }
     if (ts.isCallExpression(node)) {
       const target = node.expression;
       if ((target.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(target) && target.text === "require"))
-        && node.arguments[0] && ts.isStringLiteral(node.arguments[0])
+        && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])
         && databaseImport.test(node.arguments[0].text) && !allowed) {
         reject(node, "Dynamic database imports bypass the scoped repository.");
       }
       const member = ts.isPropertyAccessExpression(target) ? target.name.text
-        : ts.isElementAccessExpression(target) && ts.isStringLiteral(target.argumentExpression) ? target.argumentExpression.text : "";
+        : ts.isElementAccessExpression(target) && ts.isStringLiteralLike(target.argumentExpression) ? target.argumentExpression.text : "";
       if (member === "query" && !allowed) reject(node, "Raw query calls belong only in the scoped repository.");
     }
     const namesConnection = allowed || relative === startupCheck;
     if (!namesConnection && ts.isPropertyAccessExpression(node) && connectionKey.test(node.name.text)) reject(node, "Database connection settings belong only in the repository.");
-    if (!namesConnection && ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)
+    if (!namesConnection && ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)
       && connectionKey.test(node.argumentExpression.text)) reject(node, "Database connection settings belong only in the repository.");
     ts.forEachChild(node, visit);
   }

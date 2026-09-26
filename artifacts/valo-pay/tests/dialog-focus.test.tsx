@@ -115,7 +115,7 @@ describe('connected review dialogs hand focus back after confirming', () => {
     api = installFakeApi({ role: 'Operations', now: '2026-09-21T10:00:00Z' });
     api.mutate((state) => {
       for (const purpose of ['merchant_account_read', 'erp_draft', 'payroll_prepare']) makeRecord(state, 'connected-consents', {
-        status: 'active', createdAt: api.now, data: { purpose, subjectId: 'sme', entityId: `${state.merchant.id}:sme`, expiresAt: '2026-10-21T10:00:00Z' },
+        status: 'active', createdAt: api.now, data: { purpose, subjectId: 'sme', entityId: `${state.merchant.id}:sme`, version: 1, validFrom: api.now, expiresAt: '2026-10-21T10:00:00Z' },
       });
     });
     const user = userEvent.setup();

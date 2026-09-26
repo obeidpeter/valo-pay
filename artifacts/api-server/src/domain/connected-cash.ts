@@ -1,4 +1,4 @@
-import { counted } from "@workspace/valopay-schema";
+import { counted, sumMoney, MoneyArithmeticError } from "@workspace/valopay-schema";
 import { canonicalDigest } from "../lib/digests";
 
 /** Synthetic/import planning domain. These functions never connect to a bank, post to an ERP,
@@ -32,11 +32,11 @@ function money(value: number, label: string, signed = false): number {
   return value;
 }
 function total(values: number[]): number {
-  return money(
-    values.reduce((sum, value) => sum + value, 0),
-    "Total",
-    true,
-  );
+  try { return sumMoney(values); }
+  catch (error) {
+    if (error instanceof MoneyArithmeticError) fail("invalid_amount", error.message);
+    throw error;
+  }
 }
 function instant(value: string, label: string): number {
   const parsed = Date.parse(value);
@@ -409,7 +409,7 @@ export function forecastCash(
         closingMinor,
         afterPlanningBufferMinor: total([closingMinor, -buffer]),
         shortfallMinor: money(
-          Math.max(0, buffer - closingMinor),
+          Math.max(0, total([buffer, -closingMinor])),
           "Forecast shortfall",
         ),
       };
@@ -1159,7 +1159,7 @@ export function preparePayrollFundingPlan(
   const shortfallMinor =
     availableMinor === null
       ? null
-      : money(Math.max(0, requiredMinor - availableMinor), "Payroll shortfall");
+      : money(Math.max(0, total([requiredMinor, -availableMinor])), "Payroll shortfall");
   const plan: PayrollPlan = {
     kind: "payroll_funding_plan",
     scope: structuredClone(input.scope),
@@ -1265,7 +1265,7 @@ export function refreshPayrollFundingPlan(
   const shortfallMinor =
     availableMinor === null
       ? null
-      : money(Math.max(0, requiredMinor - availableMinor), "Payroll shortfall");
+      : money(Math.max(0, total([requiredMinor, -availableMinor])), "Payroll shortfall");
   const refreshed: PayrollPlan = {
     ...structuredClone(plan),
     maker,

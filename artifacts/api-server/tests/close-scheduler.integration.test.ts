@@ -168,7 +168,7 @@ try {
   assert.ok(closedIds(mixed).includes(a), "the healthy lender is closed");
   const failure = mixed.failed.find((item) => item.merchantId === b);
   assert.ok(failure, "the broken lender is reported");
-  assert.match(failure.error, /Outstanding balance is invalid/);
+  assert.match(failure.error, /exceeds the supported safe-integer minor-unit range/);
   assert.equal((await closesOf(b)).length, 0, "nothing of the failed close was committed");
   // The failure is recorded on the lender for this close time, with a two-minute wait before the next attempt.
   assert.equal(failure.failures, 1);

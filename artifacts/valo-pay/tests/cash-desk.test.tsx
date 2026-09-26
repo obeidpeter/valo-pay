@@ -39,6 +39,7 @@ function setUp() {
         createdAt: api.now,
         data: {
           purpose,
+          version: 1,
           subjectId: "sme",
           entityId: `${state.merchant.id}:sme`,
           expiresAt: "2026-10-21T10:00:00Z",
@@ -63,6 +64,52 @@ async function confirm(
 }
 
 describe("Cash Desk", () => {
+  it("withdraws a stale accounting download and offers a maker refresh after permission changes", async () => {
+    setUp();
+    api.mutate((state) => {
+      const record = action(state, "cash.erp.prepare").record!;
+      action(state, "cash.erp.review", "Finance", record.id);
+      action(state, "cash.erp.export", "Finance", record.id);
+      state.records.find(
+        (r) =>
+          r.kind === "connected-consents" && r.data.purpose === "erp_draft",
+      )!.data.version = 2;
+    });
+    const user = userEvent.setup();
+    renderApp("/cash-desk");
+    await user.click(await screen.findByRole("button", { name: "Accounting" }));
+    expect(
+      screen.queryByRole("button", { name: "Download review file" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(/Permissions changed since this review/),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Prepare export",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    await user.click(
+      screen.getByRole("button", { name: "Refresh accounting review" }),
+    );
+    await confirm(user);
+    expect(
+      await screen.findByText(
+        /Accounting review refreshed using current evidence/,
+      ),
+    ).toBeTruthy();
+    const record = api
+      .state()
+      .records.find((r) => r.kind === "connected-cash-erp")!;
+    expect(record.status).toBe("proposed");
+    expect(record.data.draft.review).toBeUndefined();
+    expect(record.data.revisions).toHaveLength(1);
+    expect(record.data.manifest).toBeUndefined();
+    expect(record.data.revisions[0].manifest.status).toBe("not_posted");
+  });
+
   it("recovers a lost forecast response inside its locked review dialog without creating another version", async () => {
     setUp();
     const send = globalThis.fetch;

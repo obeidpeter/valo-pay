@@ -40,21 +40,90 @@ const entityScope = (state: DomainState): CurrencyScope => ({
   currency: "NGN",
 });
 type Purpose = "merchant_account_read" | "erp_draft" | "payroll_prepare";
+type AuthoritySnapshot = Array<{
+  purpose: Purpose;
+  id: string;
+  version: number;
+  hash: string;
+}>;
+const erpPurposes: Purpose[] = ["merchant_account_read", "erp_draft"];
+const payrollPurposes: Purpose[] = ["merchant_account_read", "payroll_prepare"];
+/** Bind a review to the exact current scoped grants, not merely to another grant
+ * with the same purpose. Unknown dates, versions and overlapping grants fail closed. */
+function authoritySnapshot(
+  state: DomainState,
+  purposes: Purpose[],
+  now: string,
+): AuthoritySnapshot | undefined {
+  const at = Date.parse(now);
+  if (!Number.isFinite(at)) return undefined;
+  const snapshot: AuthoritySnapshot = [];
+  for (const purpose of purposes) {
+    const grants = state.records.filter(
+      (r) =>
+        r.merchantId === state.merchant.id &&
+        r.kind === "connected-consents" &&
+        r.status === "active" &&
+        r.data.purpose === purpose &&
+        r.data.subjectId === "sme" &&
+        r.data.entityId === entityScope(state).legalEntityId &&
+        Date.parse(String(r.data.validFrom ?? r.createdAt)) <= at &&
+        Date.parse(String(r.data.expiresAt)) > at &&
+        Number.isSafeInteger(r.data.version) &&
+        Number(r.data.version) > 0,
+    );
+    if (grants.length !== 1) return undefined;
+    const grant = grants[0]!;
+    snapshot.push({
+      purpose,
+      id: grant.id,
+      version: Number(grant.data.version),
+      hash: cashEvidenceHash({
+        merchantId: grant.merchantId,
+        createdAt: grant.createdAt,
+        data: grant.data,
+      }),
+    });
+  }
+  return snapshot;
+}
+function authorityCurrent(
+  state: DomainState,
+  saved: unknown,
+  purposes: Purpose[],
+  now: string,
+): boolean {
+  const current = authoritySnapshot(state, purposes, now);
+  return (
+    Array.isArray(saved) &&
+    !!current &&
+    cashEvidenceHash(saved) === cashEvidenceHash(current)
+  );
+}
+function requireBoundAuthority(
+  state: DomainState,
+  record: ValopayRecord,
+  key: "preparationAuthority" | "reviewAuthority",
+  purposes: Purpose[],
+  now: string,
+): void {
+  if (key === "reviewAuthority" && !record.data[key])
+    throw refusal(
+      "A current Finance checker approval is required before export.",
+      409,
+    );
+  if (!authorityCurrent(state, record.data[key], purposes, now))
+    throw refusal(
+      "The permission used for this review changed or expired. Refresh the review under current permissions, then obtain a new Finance approval.",
+      409,
+    );
+}
 function permission(
   state: DomainState,
   purpose: Purpose,
   now: string,
 ): boolean {
-  return state.records.some(
-    (r) =>
-      r.merchantId === state.merchant.id &&
-      r.kind === "connected-consents" &&
-      r.status === "active" &&
-      r.data.purpose === purpose &&
-      r.data.subjectId === "sme" &&
-      r.data.entityId === entityScope(state).legalEntityId &&
-      Date.parse(String(r.data.expiresAt)) > Date.parse(now),
-  );
+  return !!authoritySnapshot(state, [purpose], now);
 }
 /** A refusal the HTTP layer answers with its own status; a plain error would read as a 400. */
 const refusal = (message: string, status: number): Error =>
@@ -381,6 +450,29 @@ function workspace(state: DomainState, ctx: Context): CashWorkspace {
     sample(state, ctx.now)
   );
 }
+function payrollFundingCurrent(
+  accounts: CashAccount[],
+  plan: PayrollPlan,
+  now: string,
+): boolean {
+  const source = accounts.find(
+    (account) => account.id === plan.sourceAccountId,
+  );
+  const age = Date.parse(now) - Date.parse(plan.balanceAsOf);
+  return (
+    !!source &&
+    source.balanceAsOf === plan.balanceAsOf &&
+    source.availableMinor === plan.availableMinor &&
+    source.authorised &&
+    source.coverageComplete &&
+    source.tenantId === plan.scope.tenantId &&
+    source.legalEntityId === plan.scope.legalEntityId &&
+    source.currency === plan.scope.currency &&
+    Number.isFinite(age) &&
+    age >= 0 &&
+    age <= 60 * 60_000
+  );
+}
 export function cashView(state: DomainState, ctx: Context) {
   const data = workspace(state, ctx);
   const read = permission(state, "merchant_account_read", ctx.now);
@@ -427,14 +519,48 @@ export function cashView(state: DomainState, ctx: Context) {
     forecast,
     erpDrafts:
       read && erp
-        ? ownRecords(state, "connected-cash-erp").map((r) => ({
-            id: r.id,
-            status: r.status,
-            name: r.name,
-            createdAt: r.createdAt,
-            draft: r.data.draft,
-            manifest: r.data.manifest,
-          }))
+        ? ownRecords(state, "connected-cash-erp").map((r) => {
+            const prepared = authorityCurrent(
+              state,
+              r.data.preparationAuthority,
+              erpPurposes,
+              ctx.now,
+            );
+            const reviewed = authorityCurrent(
+              state,
+              r.data.reviewAuthority,
+              erpPurposes,
+              ctx.now,
+            );
+            const draft = r.data.draft as ErpDraft;
+            const guard = guardErpDispatch(
+              draft,
+              {
+                scope: data.scope,
+                mapping: data.erpInput.mapping,
+                invoices: data.erpInput.invoices,
+                closedThrough: data.erpInput.closedThrough,
+                alreadyRecordedReceiptIds:
+                  data.erpInput.alreadyRecordedReceiptIds,
+                readAuthorised: read && erp,
+              },
+              [],
+            );
+            return {
+              id: r.id,
+              status:
+                !prepared || (draft.review && !reviewed)
+                  ? "review_required"
+                  : r.status,
+              name: r.name,
+              createdAt: r.createdAt,
+              draft,
+              manifest:
+                prepared && reviewed && guard.exportAllowed
+                  ? r.data.manifest
+                  : undefined,
+            };
+          })
         : [],
     vat,
     vatExports:
@@ -448,13 +574,44 @@ export function cashView(state: DomainState, ctx: Context) {
         : [],
     payrollPlans:
       read && payroll
-        ? ownRecords(state, "connected-cash-payroll").map((r) => ({
-            id: r.id,
-            status: r.status,
-            plan: r.data.plan as PayrollPlan,
-            summary: payrollPlanSummary(r.data.plan as PayrollPlan),
-            manifest: r.data.manifest,
-          }))
+        ? ownRecords(state, "connected-cash-payroll").map((r) => {
+            const prepared = authorityCurrent(
+              state,
+              r.data.preparationAuthority,
+              payrollPurposes,
+              ctx.now,
+            );
+            const reviewed = authorityCurrent(
+              state,
+              r.data.reviewAuthority,
+              payrollPurposes,
+              ctx.now,
+            );
+            const current = prepared && reviewed;
+            const plan = r.data.plan as PayrollPlan;
+            return {
+              id: r.id,
+              status:
+                !prepared || (plan.approvalStatus === "approved" && !reviewed)
+                  ? "review_required"
+                  : r.status,
+              // The original approval and outcomes remain stored as history. The
+              // ordinary desk must not offer an invalidated file as current.
+              plan: current
+                ? plan
+                : {
+                    ...plan,
+                    approvalStatus: "draft" as const,
+                    approvedHash: undefined,
+                    checker: undefined,
+                  },
+              summary: payrollPlanSummary(plan),
+              manifest:
+                current && payrollFundingCurrent(data.accounts, plan, ctx.now)
+                  ? r.data.manifest
+                  : undefined,
+            };
+          })
         : [],
     payrollReconciliation:
       ctx.role === "Finance" && !(read && payroll)
@@ -601,10 +758,47 @@ export function runCashAction(
         "connected-cash-erp",
         "Invoice receipt · INV-SAMPLE-204",
         draft.status,
-        { draft },
+        {
+          draft,
+          preparationAuthority: authoritySnapshot(state, erpPurposes, ctx.now),
+        },
       );
       message =
         "The receipt, fee and credit note reconcile. A different Finance reviewer must approve the export.";
+    } else if (input.action === "cash.erp.refresh") {
+      requireRole(ctx, ["Admin", "Operations"]);
+      requirePermission(state, "erp_draft", ctx.now);
+      record = ownRecord(state, "connected-cash-erp", input.recordId);
+      const previous = record.data.draft as ErpDraft;
+      const draft = buildErpDraft({ ...data.erpInput, maker: ctx.actor });
+      if (draft.idempotencyKey !== previous.idempotencyKey)
+        throw refusal(
+          "The receipt identity changed. Review a separately identified correction before continuing.",
+          409,
+        );
+      record.data.revisions = [
+        ...(Array.isArray(record.data.revisions) ? record.data.revisions : []),
+        {
+          draft: structuredClone(previous),
+          manifest: record.data.manifest,
+          preparationAuthority: record.data.preparationAuthority,
+          reviewAuthority: record.data.reviewAuthority,
+          replacedAt: ctx.now,
+          reason: input.reason,
+        },
+      ];
+      record.data.draft = draft;
+      record.data.preparationAuthority = authoritySnapshot(
+        state,
+        erpPurposes,
+        ctx.now,
+      );
+      delete record.data.reviewAuthority;
+      delete record.data.manifest;
+      record.status = draft.status;
+      touch(record, ctx.now);
+      message =
+        "Accounting review refreshed. The receipt identity is unchanged and a different Finance reviewer must approve the current evidence.";
     } else if (
       input.action === "cash.erp.review" ||
       input.action === "cash.erp.export"
@@ -612,25 +806,46 @@ export function runCashAction(
       requireRole(ctx, ["Finance"]);
       requirePermission(state, "erp_draft", ctx.now);
       record = ownRecord(state, "connected-cash-erp", input.recordId);
+      requireBoundAuthority(
+        state,
+        record,
+        "preparationAuthority",
+        erpPurposes,
+        ctx.now,
+      );
+      const current = {
+        scope,
+        mapping: data.erpInput.mapping,
+        invoices: data.erpInput.invoices,
+        closedThrough: data.erpInput.closedThrough,
+        alreadyRecordedReceiptIds: data.erpInput.alreadyRecordedReceiptIds,
+        readAuthorised: true,
+      };
       if (input.action === "cash.erp.review") {
-        record.data.draft = reviewErpDraft(
+        const reviewed = reviewErpDraft(
           record.data.draft as ErpDraft,
           ctx.actor,
+        );
+        const guard = guardErpDispatch(reviewed, current, []);
+        if (!guard.exportAllowed) throw refusal(guard.reasons.join(" "), 409);
+        record.data.draft = reviewed;
+        record.data.reviewAuthority = authoritySnapshot(
+          state,
+          erpPurposes,
+          ctx.now,
         );
         record.status = "reviewed";
         message = "Finance review recorded. The ERP has not been changed.";
       } else {
-        const draft = record.data.draft as ErpDraft;
-        const guard = guardErpDispatch(
-          draft,
-          {
-            scope,
-            mapping: data.erpInput.mapping,
-            invoices: data.erpInput.invoices,
-            readAuthorised: true,
-          },
-          [],
+        requireBoundAuthority(
+          state,
+          record,
+          "reviewAuthority",
+          erpPurposes,
+          ctx.now,
         );
+        const draft = record.data.draft as ErpDraft;
+        const guard = guardErpDispatch(draft, current, []);
         if (!guard.exportAllowed) throw new Error(guard.reasons.join(" "));
         const manifest = {
           schema: "valo.erp.review-export.v1",
@@ -699,7 +914,14 @@ export function runCashAction(
         "connected-cash-payroll",
         "Approved net-pay funding plan",
         plan.fundingStatus,
-        { plan },
+        {
+          plan,
+          preparationAuthority: authoritySnapshot(
+            state,
+            payrollPurposes,
+            ctx.now,
+          ),
+        },
       );
       message =
         "Funding plan prepared from approved net pay. Ask a different Finance reviewer to check it.";
@@ -722,11 +944,19 @@ export function runCashAction(
         ...(Array.isArray(record.data.revisions) ? record.data.revisions : []),
         {
           plan: structuredClone(oldPlan),
+          preparationAuthority: record.data.preparationAuthority,
+          reviewAuthority: record.data.reviewAuthority,
           replacedAt: ctx.now,
           reason: input.reason,
         },
       ];
       record.data.plan = revised;
+      record.data.preparationAuthority = authoritySnapshot(
+        state,
+        payrollPurposes,
+        ctx.now,
+      );
+      delete record.data.reviewAuthority;
       delete record.data.manifest;
       record.status = revised.fundingStatus;
       touch(record, ctx.now);
@@ -743,26 +973,44 @@ export function runCashAction(
       record = ownRecord(state, "connected-cash-payroll", input.recordId);
       let plan = record.data.plan as PayrollPlan;
       const checkCurrentFunding = () => {
-        const source = data.accounts.find((a) => a.id === plan.sourceAccountId);
-        if (
-          !source ||
-          source.balanceAsOf !== plan.balanceAsOf ||
-          source.availableMinor !== plan.availableMinor ||
-          !source.authorised ||
-          !source.coverageComplete ||
-          Date.parse(ctx.now) - Date.parse(plan.balanceAsOf) > 60 * 60_000
-        )
+        if (!payrollFundingCurrent(data.accounts, plan, ctx.now))
           throw new Error(
             "The funding snapshot is stale or changed. Refresh sample balances and the payroll review, then obtain a new checker approval.",
           );
       };
       if (input.action === "cash.payroll.approve") {
+        requireBoundAuthority(
+          state,
+          record,
+          "preparationAuthority",
+          payrollPurposes,
+          ctx.now,
+        );
         checkCurrentFunding();
         plan = approvePayrollPlan(plan, ctx.actor);
+        record.data.reviewAuthority = authoritySnapshot(
+          state,
+          payrollPurposes,
+          ctx.now,
+        );
         record.status = "approved";
         message =
           "Checker approval saved. Bank authorisation is still separate.";
       } else if (input.action === "cash.payroll.export") {
+        requireBoundAuthority(
+          state,
+          record,
+          "preparationAuthority",
+          payrollPurposes,
+          ctx.now,
+        );
+        requireBoundAuthority(
+          state,
+          record,
+          "reviewAuthority",
+          payrollPurposes,
+          ctx.now,
+        );
         // Check freshness again at export; a prior green funding snapshot is not permanent authority.
         checkCurrentFunding();
         const manifest = exportPayrollManifest(plan);

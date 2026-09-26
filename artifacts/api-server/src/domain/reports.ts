@@ -1,4 +1,4 @@
-import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, counted, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
+import { sumMoney, multiplyDivideMoney, PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, counted, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt, paymentReversed } from "./reconciliation";
@@ -17,13 +17,13 @@ const round = (value: number, places = 6) => Number(value.toFixed(places));
 export function buildOverview(state: DomainState, now: string, alerts: Alert[] = []) {
   const by = <K extends RecordKind>(kind: K) => recordsOf(state, kind);
   const settled = by("payments").filter((item) => item.data.settlementStatus === "settled" && item.status !== "possible_duplicate" && !paymentReversed(item));
-  const outstanding = by("due-items").reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0);
+  const outstanding = sumMoney(by("due-items").map((item) => Number(item.data.outstandingKobo ?? item.amountKobo)));
   const certainPayments = new Set(by("allocations").filter((item) => item.status === "confirmed" && item.data.confidence === "certain").map((item) => item.data.paymentId));
   const open = by("exceptions").filter((item) => isOpenException(item.status));
   const schedule = closeSchedule(state, now);
   return {
     metrics: [
-      metric("settled", "Reconciled collections", settled.reduce((sum, item) => sum + paymentAppliedKobo(item), 0), "kobo", "Settled payments matched to instalments, counted once. Sample data only."),
+      metric("settled", "Reconciled collections", sumMoney(settled.map(paymentAppliedKobo)), "kobo", "Settled payments matched to instalments, counted once. Sample data only."),
       metric("outstanding", "Outstanding amount", outstanding, "kobo", "Amount still due on instalments. Valo Pay does not hold these funds."),
       metric("match_rate", "High-confidence match rate", settled.length ? Math.round((settled.filter((item) => certainPayments.has(item.id)).length / settled.length) * 100) : 0, "percent", "Share of settled payments with a confirmed, high-confidence match. Sample data only."),
       metric("exceptions", "Open exceptions", open.length, "count", "Unresolved issues that need someone to follow up."),
@@ -72,7 +72,7 @@ function outcomeWithinWindow(state: DomainState, due: TypedRecord<"due-items">):
     const payment = payments.find((p) => p.id === allocation.data.paymentId);
     if (!payment || payment.data.settlementStatus !== "settled" || paymentAppliedKobo(payment) <= 0) return total;
     const settled = Date.parse(String(payment.data.settledAt || payment.data.observedAt || payment.createdAt));
-    return settled >= start && settled <= end ? total + allocation.amountKobo : total;
+    return settled >= start && settled <= end ? sumMoney([total, allocation.amountKobo]) : total;
   }, 0);
   const recoveredKobo = Math.min(due.amountKobo, recovered);
   return { due, recoveredKobo, settledInFull: recoveredKobo >= due.amountKobo };
@@ -82,8 +82,8 @@ export function armStatistics(state: DomainState, items: TypedRecord<"due-items"
   const matured = items.filter((due) => Date.parse(now) >= Date.parse(String(due.data.firstFailureAt || due.createdAt)) + experimentRules.outcomeWindowDays * DAY_MS);
   const outcomes = matured.map((due) => outcomeWithinWindow(state, due));
   const n = outcomes.length;
-  const totalDueKobo = outcomes.reduce((sum, item) => sum + item.due.amountKobo, 0);
-  const recoveredKobo = outcomes.reduce((sum, item) => sum + item.recoveredKobo, 0);
+  const totalDueKobo = sumMoney(outcomes.map((item) => item.due.amountKobo));
+  const recoveredKobo = sumMoney(outcomes.map((item) => item.recoveredKobo));
   const settledInFull = outcomes.filter((item) => item.settledInFull).length;
   const byValue = totalDueKobo ? recoveredKobo / totalDueKobo : 0;
   const byCount = n ? settledInFull / n : 0;
@@ -223,21 +223,21 @@ export function test5Report(state: DomainState, now: string) {
 export function unitEconomics(state: DomainState, now: string, statement: Record<string, any>) {
   const period = String(statement.period);
   const collections = Number(statement.successfulCollections || 0);
-  const licenceKobo = statement.lines.reduce((sum: number, line: any) => sum + Number(line.licenceKobo || 0), 0);
-  const usageKobo = statement.lines.reduce((sum: number, line: any) => sum + Number(line.usageKobo || 0), 0);
-  const recurringKobo = licenceKobo + usageKobo;
+  const licenceKobo = sumMoney(statement.lines.map((line: any) => Number(line.licenceKobo || 0)));
+  const usageKobo = sumMoney(statement.lines.map((line: any) => Number(line.usageKobo || 0)));
+  const recurringKobo = sumMoney([licenceKobo, usageKobo]);
   const recorded = recordsOf(state, "costs").filter((item) => String(item.data.period || "") === period);
-  const byName = recorded.reduce<Record<string, number>>((acc, item) => { acc[item.name] = (acc[item.name] || 0) + item.amountKobo; return acc; }, {});
-  const recordedKobo = recorded.reduce((sum, item) => sum + item.amountKobo, 0);
+  const byName = recorded.reduce<Record<string, number>>((acc, item) => { acc[item.name] = sumMoney([acc[item.name] || 0, item.amountKobo]); return acc; }, {});
+  const recordedKobo = sumMoney(recorded.map((item) => item.amountKobo));
   const estimated = recorded.length === 0;
-  const variableCostKobo = estimated ? collections * VARIABLE_COST_PER_COLLECTION_KOBO : recordedKobo;
+  const variableCostKobo = estimated ? multiplyDivideMoney(collections, VARIABLE_COST_PER_COLLECTION_KOBO, 1) : recordedKobo;
   const costPerCollectionKobo = collections ? Math.round(variableCostKobo / collections) : null;
   const grossMargin = recurringKobo > 0 ? Number(((recurringKobo - variableCostKobo) / recurringKobo).toFixed(4)) : null;
   return {
     period, successfulCollections: collections, usageFeeKobo: usageKobo, licenceKobo, volumeTier: statement.volumeTier, recurringKobo,
     variableCostKobo, costsRecorded: byName, estimated, costPerCollectionKobo, planCostPerCollectionKobo: VARIABLE_COST_PER_COLLECTION_KOBO,
     grossMargin, planGrossMargin: PLAN_GROSS_MARGIN,
-    annualisedRecurringRevenueKobo: recurringKobo * 12, implementationExcluded: true, recoveryFeeIncluded: false,
+    annualisedRecurringRevenueKobo: multiplyDivideMoney(recurringKobo, 12, 1), implementationExcluded: true, recoveryFeeIncluded: false,
     checks: { costPerCollectionWithinPlan: costPerCollectionKobo === null ? null : costPerCollectionKobo <= VARIABLE_COST_PER_COLLECTION_KOBO, marginWithinPlan: grossMargin === null ? null : grossMargin >= PLAN_GROSS_MARGIN.low },
     note: estimated ? "No costs have been recorded for this period. The estimate uses NGN 15 per collection until infrastructure, notification and support costs are entered." : "Based on the costs recorded for this period.",
     synthetic: true,
@@ -263,7 +263,7 @@ export function buildReports(state: DomainState, now: string): Report {
     metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${counted(payments.length, "payment")} ${allocated.length === 1 ? "is" : "are"} fully or partly allocated, or ${allocated.length === 1 ? "exceeds" : "exceed"} the amount due.`),
     metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", reviewedAll.length ? `${counted(reviewedAll.length, "allocation")} reviewed. Unreviewed allocations are excluded from this accuracy measure.` : "No payment matches have been reviewed yet."),
     metric("open_exceptions", "Open exceptions", openExceptions.length, "count", "Unresolved issues in this sample workspace."),
-    metric("outstanding_kobo", "Outstanding amount", dueItems.reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0), "kobo", "Amount still due on instalments. We never hold money."),
+    metric("outstanding_kobo", "Outstanding amount", sumMoney(dueItems.map((item) => Number(item.data.outstandingKobo ?? item.amountKobo))), "kobo", "Amount still due on instalments. We never hold money."),
   ];
 
   const billing = buildBillingStatement(state, now);

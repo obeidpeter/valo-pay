@@ -24,6 +24,7 @@ import {
 import { withAuditNote } from "../domain/reconciliation";
 import { ConnectedCashError } from "../domain/connected-cash";
 import { CreditDomainError } from "../domain/connected-credit";
+import { assertConnectedReplayAllowed, bindConnectedReplayAuthority } from "../domain/connected-replay";
 import { routerOptions } from "./router-options";
 const router: IRouter = Router(routerOptions);
 router.get("/v1/connected", async (req, res) => {
@@ -59,10 +60,18 @@ router.post("/v1/connected/actions", async (req, res) => {
             fail("This request key was already used for different input.", 409);
           // The action was saved with this receipt: never answered as saving nothing, even when it no longer matches.
           const saved = replayedAnswer(req, answer, prior.response);
+          if (input.action.startsWith("cash.") || input.action.startsWith("credit.")) {
+            // Hold the current lender snapshot while checking permission and
+            // frozen output validity. Replaying never executes the action.
+            const current = await loadState(ctx, merchantId, "share");
+            assertConnectedReplayAllowed(current, ctx, input.action, saved);
+          }
           await completeOperation(ctx, saved);
           return saved;
         };
-        // A repeat is answered from its receipt without loading the lender; the lookup is made again once the journal entry is held.
+        // Locate a prior outcome first; sensitive connected responses also
+        // require current authority before replay. The lookup is repeated once
+        // the journal entry is held for a command that has not completed yet.
         const stored = await findStoredAnswer(ctx, merchantId, receipt.id, receipt.earlier);
         if (stored) return replay(stored);
         const state = await loadState(ctx, merchantId, "update");
@@ -71,6 +80,7 @@ router.post("/v1/connected/actions", async (req, res) => {
         let outcome;
         try {
           outcome = runConnectedActionWithNote(state, ctx, input);
+          bindConnectedReplayAuthority(state, ctx, input.action, outcome.result);
         } catch (error) {
           if (error instanceof CreditDomainError)
             fail(error.message, error.status);

@@ -1,6 +1,6 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
-import { ERROR_DETAIL_LIMIT } from "@workspace/valopay-schema";
+import { ERROR_DETAIL_LIMIT, MoneyArithmeticError } from "@workspace/valopay-schema";
 import { PilotAccessError } from './pilot-access';
 import { closeRefusedOperation, operationStateOf, requestKey, type OperationState } from './refused-operations';
 import { wasRolledBack } from './transaction-outcome';
@@ -136,6 +136,12 @@ function raisedByDependency(error: Error): boolean {
 function describe(error: unknown, req: Parameters<ErrorRequestHandler>[1]): Answer {
   const requestId = req.id;
   if (error instanceof PilotAccessError) return { status: error.status, body: { error: error.message, code: error.code, requestId } };
+  // Only the typed financial refusal is exposed. A generic RangeError is still
+  // a programming failure, even if someone attaches a matching code to it.
+  if (error instanceof MoneyArithmeticError) {
+    req.log.warn({ event: "money.calculation_refused", code: error.code }, "An amount or calculation exceeded the supported financial limits");
+    return { status: 422, body: { error: "This calculation cannot be completed within the supported amount or rate limits. Review the amounts and billing settings before trying again.", code: error.code, requestId } };
+  }
   if (error instanceof ZodError) {
     req.log.info({ event: "request.rejected", status: 400, issues: error.issues.length }, "Validation failed");
     const details = error.issues.slice(0, ERROR_DETAIL_LIMIT).map((issue) => ({ field: issue.path.join("."), message: issue.message }));

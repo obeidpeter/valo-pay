@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { providerConnectionKey } from "@workspace/valopay-schema";
+import { providerConnectionKey, sumMoney, nonnegativeMoney, validMoneyBps } from "@workspace/valopay-schema";
 import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, WAT_OFFSET_MS, allocationClosedStatuses, conditionClearedCode, counted, exceptionCatalogue, hasFeeSchedule, heldEvidenceCodes, heldEvidenceCondition, heldEvidenceOf, isKobo, isOpenException, moneyText, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, otherCurrenciesText, paymentAwaitsAllocation, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, unseenReversalCodes, unseenReversalCondition, unseenReversalOf, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import { indexedPass, recordById, recordsOfKind, recordsWhere } from "./record-index";
@@ -48,12 +48,10 @@ export function paymentDimensions(payment: TypedRecord<"payments">): void {
 export function feeScheduleFor(state: DomainState, provider: unknown): ProviderFeeSchedule {
   const schedules = (state.settings.providerFeeSchedule || {}) as Record<string, { bps?: unknown; capKobo?: unknown }>;
   const configured = schedules[String(provider)] || schedules[state.merchant.provider];
-  if (configured && Number.isFinite(Number(configured.bps))) {
-    const cap = Number(configured.capKobo);
-    return { bps: Number(configured.bps), capKobo: Number.isSafeInteger(cap) && cap >= 0 ? cap : Number.MAX_SAFE_INTEGER };
+  if (configured) {
+    return { bps: validMoneyBps(configured.bps as number), capKobo: configured.capKobo === undefined ? Number.MAX_SAFE_INTEGER : nonnegativeMoney(configured.capKobo as number) };
   }
-  const legacy = Number(state.settings.providerFeeBps);
-  if (Number.isFinite(legacy) && state.settings.providerFeeBps !== undefined) return { bps: legacy, capKobo: Number.MAX_SAFE_INTEGER };
+  if (state.settings.providerFeeBps !== undefined) return { bps: validMoneyBps(state.settings.providerFeeBps as number), capKobo: Number.MAX_SAFE_INTEGER };
   return DEFAULT_PROVIDER_FEE;
 }
 
@@ -372,7 +370,7 @@ function lineTotals(line: TypedRecord<"observations">, payment: TypedRecord<"pay
   const stated = isKobo(line.data.feeKobo) ? line.data.feeKobo : undefined;
   const scheduleFee = (grossKobo: number) => schedule ? providerFeeKobo(grossKobo, schedule) : 0;
   if (line.data.grossAmountKobo === undefined && payment.data.grossUnstated === true) {
-    const grossKobo = line.amountKobo + (stated ?? 0);
+    const grossKobo = sumMoney([line.amountKobo, stated ?? 0]);
     return { grossKobo, feeKobo: stated ?? 0, expectedFeeKobo: stated === undefined ? 0 : scheduleFee(grossKobo) };
   }
   const grossKobo = payment.amountKobo, expectedFeeKobo = scheduleFee(grossKobo);
@@ -390,17 +388,17 @@ const feesChecked = (batch: ValopayRecord): boolean => hasFeeSchedule(currencyOf
  * fee variance.
  */
 function countLine(batch: TypedRecord<"settlement-batches">, line: TypedRecord<"observations">, now: LineTotals, was: LineTotals): void {
-  batch.data.grossKobo = Number(batch.data.grossKobo || 0) + now.grossKobo - was.grossKobo;
-  batch.data.feeKobo = Number(batch.data.feeKobo || 0) + now.feeKobo - was.feeKobo;
-  if (feesChecked(batch)) batch.data.expectedFeeKobo = Number(batch.data.expectedFeeKobo || 0) + now.expectedFeeKobo - was.expectedFeeKobo;
-  batch.data.netKobo = Number(batch.data.grossKobo) - Number(batch.data.feeKobo);
+  batch.data.grossKobo = sumMoney([Number(batch.data.grossKobo || 0), now.grossKobo, -was.grossKobo]);
+  batch.data.feeKobo = sumMoney([Number(batch.data.feeKobo || 0), now.feeKobo, -was.feeKobo]);
+  if (feesChecked(batch)) batch.data.expectedFeeKobo = sumMoney([Number(batch.data.expectedFeeKobo || 0), now.expectedFeeKobo, -was.expectedFeeKobo]);
+  batch.data.netKobo = sumMoney([Number(batch.data.grossKobo), -Number(batch.data.feeKobo)]);
   line.data.countedGrossKobo = now.grossKobo;
   line.data.assumedFeeKobo = now.feeKobo;
   if (!feesChecked(batch)) {
     for (const record of [batch, line]) { delete record.data.expectedFeeKobo; delete record.data.feeVarianceKobo; }
     return;
   }
-  batch.data.feeVarianceKobo = Number(batch.data.feeKobo) - Number(batch.data.expectedFeeKobo);
+  batch.data.feeVarianceKobo = sumMoney([Number(batch.data.feeKobo), -Number(batch.data.expectedFeeKobo)]);
   line.data.expectedFeeKobo = now.expectedFeeKobo;
   if (Math.abs(now.feeKobo - now.expectedFeeKobo) > SETTLEMENT_ITEM_TOLERANCE_KOBO) line.data.feeVarianceKobo = now.feeKobo - now.expectedFeeKobo;
   else delete line.data.feeVarianceKobo;
@@ -448,7 +446,7 @@ function totalsFromLines(batch: TypedRecord<"settlement-batches">, lines: readon
   for (const line of lines) {
     if (!line || !isKobo(line.data.assumedFeeKobo)) return false;
     const added = lineAdded(line, paymentOf);
-    grossKobo += added.grossKobo; feeKobo += added.feeKobo; expectedFeeKobo += added.expectedFeeKobo;
+    grossKobo = sumMoney([grossKobo, added.grossKobo]); feeKobo = sumMoney([feeKobo, added.feeKobo]); expectedFeeKobo = sumMoney([expectedFeeKobo, added.expectedFeeKobo]);
   }
   return grossKobo === batch.data.grossKobo && feeKobo === batch.data.feeKobo && expectedFeeKobo === Number(batch.data.expectedFeeKobo ?? 0);
 }
@@ -537,8 +535,8 @@ function separateEarlierCurrencies(state: DomainState, ctx: Context): SeparatedL
         if (!kept && payment) displaced.push(separated.at(-1)!);
       }
       if (fromLines) {
-        batch.data.netKobo = Number(batch.data.grossKobo) - Number(batch.data.feeKobo);
-        if (batch.data.expectedFeeKobo !== undefined) batch.data.feeVarianceKobo = Number(batch.data.feeKobo) - Number(batch.data.expectedFeeKobo);
+        batch.data.netKobo = sumMoney([Number(batch.data.grossKobo), -Number(batch.data.feeKobo)]);
+        if (batch.data.expectedFeeKobo !== undefined) batch.data.feeVarianceKobo = sumMoney([Number(batch.data.feeKobo), -Number(batch.data.expectedFeeKobo)]);
       }
     }
     if (!feesChecked(batch) && ["expectedFeeKobo", "feeVarianceKobo", "feeSchedule"].some((key) => batch.data[key] !== undefined)) {
@@ -850,7 +848,7 @@ function evaluateSettlementBatches(state: DomainState, ctx: Context, credits: Re
     let changed = false;
     // A batch edited by hand keeps its fee variance in step with its stated and expected fees, where they are checked.
     if (!batch.data.providerIdentityReview && feesChecked(batch) && Number.isSafeInteger(batch.data.feeKobo) && Number.isSafeInteger(batch.data.expectedFeeKobo)) {
-      const variance = Number(batch.data.feeKobo) - Number(batch.data.expectedFeeKobo);
+      const variance = sumMoney([Number(batch.data.feeKobo), -Number(batch.data.expectedFeeKobo)]);
       if (batch.data.feeVarianceKobo !== variance) { batch.data.feeVarianceKobo = variance; changed = true; }
     }
     const next = settlementBatchState(batch, credits.get(batch.id));
@@ -906,7 +904,7 @@ function evaluateSettlementBatches(state: DomainState, ctx: Context, credits: Re
 /** Money by currency code, as otherCurrencies lists it: how many records and their amount in that currency's minor unit; undefined for none. */
 function inCurrencies(records: readonly ValopayRecord[]): Record<string, { count: number; amount: number }> | undefined {
   const rows = new Map<string, { count: number; amount: number }>();
-  for (const record of records) { const row = rows.get(currencyOf(record)) ?? { count: 0, amount: 0 }; row.count += 1; row.amount += record.amountKobo; rows.set(currencyOf(record), row); }
+  for (const record of records) { const row = rows.get(currencyOf(record)) ?? { count: 0, amount: 0 }; row.count += 1; row.amount = sumMoney([row.amount, record.amountKobo]); rows.set(currencyOf(record), row); }
   return rows.size ? Object.fromEntries([...rows].sort(([a], [b]) => (a < b ? -1 : 1))) : undefined;
 }
 
@@ -943,7 +941,7 @@ function linkSettlementStatements(state: DomainState, ctx: Context): { linked: n
       }
       if (!repeat) distinct.push(credit);
     }
-    const total = counted.reduce((sum, item) => sum + item.amountKobo, 0), other = inCurrencies(elsewhere);
+    const total = sumMoney(counted.map((item) => item.amountKobo)), other = inCurrencies(elsewhere);
     credits.set(batchId, counted.length);
     if (!isDeepStrictEqual(batch.data.statementOtherCurrencies, other)) {
       if (other) batch.data.statementOtherCurrencies = other; else delete batch.data.statementOtherCurrencies;
@@ -1138,7 +1136,7 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   allocation.status = "confirmed";
   allocation.data.confirmedAt ||= ctx.now;
   paymentDimensions(payment);
-  payment.data.allocatedKobo = Number(payment.data.allocatedKobo || 0) + amount;
+  payment.data.allocatedKobo = sumMoney([Number(payment.data.allocatedKobo || 0), amount]);
   const remaining = Math.max(0, outstanding(due) - amount);
   due.data.outstandingKobo = remaining;
   due.status = remaining === 0 ? "paid" : "partially_paid";
@@ -1169,7 +1167,7 @@ export function supersedeAllocation(state: DomainState, ctx: Context, allocation
   allocation.status = "superseded";
   allocation.data.supersededReason = reason;
   payment.data.allocatedKobo = Math.max(0, Number(payment.data.allocatedKobo || 0) - allocation.amountKobo);
-  const restored = Math.min(due.amountKobo, outstanding(due) + allocation.amountKobo);
+  const restored = Math.min(due.amountKobo, sumMoney([outstanding(due), allocation.amountKobo]));
   due.data.outstandingKobo = restored;
   settleDueStatus(state, ctx, due, true);
   touch(allocation, ctx.now); touch(due, ctx.now);
@@ -1263,7 +1261,7 @@ export function settleDueStatus(state: DomainState, ctx: Context, due: TypedReco
  * validation, which refuses a status set by the caller.
  */
 export function amendDueItem(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, input: TypedRecord<"due-items">): TypedRecord<"due-items"> {
-  const allocated = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).reduce((sum, item) => sum + item.amountKobo, 0);
+  const allocated = sumMoney(recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).map((item) => item.amountKobo));
   if (input.amountKobo < allocated) throw new Error("Due amount cannot be reduced below confirmed allocations.");
   for (const key of ["experimentId", "experimentArm", "firstFailureAt"] as const) {
     if (JSON.stringify(input.data[key]) !== JSON.stringify(due.data[key])) throw new Error("Experiment assignment is immutable.");
@@ -1439,7 +1437,7 @@ export function reversePayment(state: DomainState, ctx: Context, payment: TypedR
   payment.data.reversalApplied = true;
   recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "confirmed").forEach((allocation) => {
     const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
-    due.data.outstandingKobo = Math.min(due.amountKobo, outstanding(due) + allocation.amountKobo);
+    due.data.outstandingKobo = Math.min(due.amountKobo, sumMoney([outstanding(due), allocation.amountKobo]));
     allocation.status = "superseded";
     allocation.data.supersededReason = reason;
     touch(allocation, ctx.now); touch(due, ctx.now);

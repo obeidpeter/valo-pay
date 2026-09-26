@@ -10,7 +10,8 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson, observationEventKey } from "@workspace/valopay-schema";
+import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson, observationEventKey, sumMoney } from "@workspace/valopay-schema";
+import { databaseMoney } from './database-money';
 import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, chainSequence, AUDIT_GENESIS, type AuditPoint } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
@@ -981,7 +982,7 @@ function rowsAffected(result: { rowCount: number | null }): boolean { return (re
 function rowToRecord(row: RecordRow): ValopayRecord {
   return {
     id: row.id, merchantId: row.merchant_id, kind: row.kind, name: row.name, status: row.status,
-    reference: row.reference, amountKobo: Number(row.amount_kobo), customerId: row.customer_id,
+    reference: row.reference, amountKobo: databaseMoney(row.amount_kobo), customerId: row.customer_id,
     data: row.data, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
   };
 }
@@ -1858,12 +1859,12 @@ export async function getCustomerHistory(context: StoreContext, merchantId: stri
     pages[section] = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${base} AND r.customer_id=$4 ${predicate} ORDER BY r.created_at DESC,r.id DESC OFFSET $5 LIMIT $6`,[...values,offsets[section],limit])).rows.map(rowToRecord);
   }
   const focusedRow = query.record ? (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${base} AND r.customer_id=$4 AND r.id=$5`,[...values,query.record])).rows[0] : undefined;
-  const obligationsKobo = Number(totalsRow.obligations), allocatedKobo = Number(totalsRow.allocated);
+  const obligationsKobo = databaseMoney(totalsRow.obligations!), allocatedKobo = databaseMoney(totalsRow.allocated!);
   // Money in another currency that the customer's payments hold unapplied, by currency, beside the naira credit (unallocatedOtherCurrencies).
   const elsewhere = (await session.client.query<{currency:string;count:string;amount:string}>(`SELECT ${paymentCurrencySql} AS currency,count(*) AS count,sum(${paymentUnappliedSql}) AS amount
     ${base} AND r.customer_id=$4 AND r.kind='payments' AND NOT ${paymentInNairaSql} AND ${paymentUnappliedSql}>0 GROUP BY 1`,values)).rows.sort((a,b)=>a.currency<b.currency?-1:a.currency>b.currency?1:0);
-  const unallocatedOtherCurrencies = elsewhere.length ? Object.fromEntries(elsewhere.map(row=>[row.currency,{count:Number(row.count),amount:Number(row.amount)}])) : undefined;
-  return {customer:rowToRecord(customerRow),position:{obligationsKobo,allocatedKobo,outstandingKobo:Math.max(0,obligationsKobo-allocatedKobo),unallocatedKobo:Number(totalsRow.credit),...(unallocatedOtherCurrencies?{unallocatedOtherCurrencies}:{}),note:positionNote},...pages,totals,offsets,...(focusedRow?{focusedRecord:rowToRecord(focusedRow)}:{})};
+  const unallocatedOtherCurrencies = elsewhere.length ? Object.fromEntries(elsewhere.map(row=>[row.currency,{count:Number(row.count),amount:databaseMoney(row.amount)}])) : undefined;
+  return {customer:rowToRecord(customerRow),position:{obligationsKobo,allocatedKobo,outstandingKobo:Math.max(0,sumMoney([obligationsKobo,-allocatedKobo])),unallocatedKobo:databaseMoney(totalsRow.credit!),...(unallocatedOtherCurrencies?{unallocatedOtherCurrencies}:{}),note:positionNote},...pages,totals,offsets,...(focusedRow?{focusedRecord:rowToRecord(focusedRow)}:{})};
 }
 
 /** Complete customer history and balances without every other customer's data.
@@ -2169,8 +2170,8 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       if (record.status === "confirmed") {
         // Evidence that named no payer is applied only once Finance has identified the payer.
         if (!payment.customerId || record.customerId !== payment.customerId) conflict("A payment is applied to an instalment only once its payer is identified.");
-        allocatedPayments.set(payment.id, (allocatedPayments.get(payment.id) || 0) + record.amountKobo);
-        allocatedDues.set(due.id, (allocatedDues.get(due.id) || 0) + record.amountKobo);
+        allocatedPayments.set(payment.id, sumMoney([allocatedPayments.get(payment.id) || 0, record.amountKobo]));
+        allocatedDues.set(due.id, sumMoney([allocatedDues.get(due.id) || 0, record.amountKobo]));
       }
     }
   }

@@ -52,6 +52,7 @@ it("allows Compliance to review revocation while keeping permission grants unava
       createdAt: api.now,
       data: {
         purpose: "merchant_account_read",
+        version: 1,
         subjectId: "sme",
         entityId: `${state.merchant.id}:sme`,
         expiresAt: "2026-10-21T10:00:00Z",
