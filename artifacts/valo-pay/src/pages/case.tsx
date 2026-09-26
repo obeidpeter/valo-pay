@@ -105,28 +105,41 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
   const [nextAction, setNextAction] = useState(
     record.data.case?.nextAction || "",
   );
-  const [when, setWhen] = useState(
+  const [when, setWhen] = useState(() =>
     watInput(
       record.data.case?.nextActionAt ||
         new Date(Date.now() + 86400000).toISOString(),
     ),
   );
+  // The suggested time is fixed when the form opens, not recalculated as the clock moves.
+  const [savedWhen, setSavedWhen] = useState(when);
   const [evidence, setEvidence] = useState<string[]>(
       record.data.case?.evidenceIds || [],
     ),
     [search, setSearch] = useState("");
   const { confirmDiscard } = useUnsavedChanges(
     Boolean(note.trim()) ||
+      when !== savedWhen ||
       nextAction !== (record.data.case?.nextAction || "") ||
       assignee !== (record.data.case?.assignee || workspace?.actor || "") ||
       JSON.stringify(evidence) !==
         JSON.stringify(record.data.case?.evidenceIds || []),
   );
-  const mutation = usePilotMutation((saved) => {
-    setRecord(saved);
+  const resetDraft = (latest: any) => {
+    const followUp = watInput(
+      latest.data.case?.nextActionAt ||
+        new Date(Date.now() + 86400000).toISOString(),
+    );
+    setRecord(latest);
     setNote("");
-    setAssignee(saved.data.case?.assignee || "");
-  });
+    setErrors({});
+    setAssignee(latest.data.case?.assignee || workspace?.actor || "");
+    setNextAction(latest.data.case?.nextAction || "");
+    setEvidence(latest.data.case?.evidenceIds || []);
+    setWhen(followUp);
+    setSavedWhen(followUp);
+  };
+  const mutation = usePilotMutation(resetDraft);
   const assignees: Assignee[] = data.assignees;
   const holder = record.data.case?.assignee as string | undefined;
   const holderName = record.data.case?.assigneeName || holder;
@@ -420,23 +433,8 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
                 onClick={() => {
                   if (!confirmDiscard()) return;
                   void refresh().then((result) => {
-                    if (result.data) {
-                      const latest = result.data.record;
-                      setRecord(latest);
-                      setNote("");
-                      setErrors({});
-                      setNextAction(latest.data.case?.nextAction || "");
-                      setAssignee(
-                        latest.data.case?.assignee || workspace?.actor,
-                      );
-                      setEvidence(latest.data.case?.evidenceIds || []);
-                      setWhen(
-                        watInput(
-                          latest.data.case?.nextActionAt ||
-                            new Date(Date.now() + 86400000).toISOString(),
-                        ),
-                      );
-                    }
+                    // A failed refetch can still contain cached data. Keep the draft until a fresh read succeeds.
+                    if (result.isSuccess && result.data) resetDraft(result.data.record);
                   });
                 }}
               >

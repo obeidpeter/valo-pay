@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fireEvent } from "@testing-library/react";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
@@ -20,6 +20,123 @@ function assign(id: string, assignee: string, assigneeName: string) {
   });
 }
 const writes = () => api.calls.filter((call) => call.method !== "GET");
+const leaving = () => {
+  const unload = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(unload);
+  return unload.defaultPrevented;
+};
+
+it("protects a follow-up-only edit on navigation and releases the guard when it is reverted", async () => {
+  const user = userEvent.setup();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const item = exception();
+  assign(item.id, "Sandbox Admin", "Sandbox Admin");
+  renderApp(`/cases/${item.id}`);
+  const followUp = await screen.findByLabelText<HTMLInputElement>("Follow-up time (WAT)");
+  const original = followUp.value;
+  expect(leaving()).toBe(false);
+  fireEvent.change(followUp, { target: { value: "2030-01-02T11:30" } });
+  expect(leaving()).toBe(true);
+  await user.click(screen.getByRole("link", { name: "Back to exceptions" }));
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(window.location.pathname).toBe(`/cases/${item.id}`);
+  expect(followUp.value).toBe("2030-01-02T11:30");
+  fireEvent.change(followUp, { target: { value: original } });
+  expect(leaving()).toBe(false);
+  fireEvent.change(followUp, { target: { value: "2030-01-02T11:30" } });
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole("link", { name: "Back to exceptions" }));
+  await screen.findByRole("heading", { name: "Exceptions" });
+  expect(window.location.pathname).toBe("/exceptions");
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(writes()).toEqual([]);
+});
+
+it("keeps a follow-up-only draft when refresh is cancelled and adopts the latest time on confirmed refresh", async () => {
+  const user = userEvent.setup();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const item = exception();
+  assign(item.id, "Sandbox Admin", "Sandbox Admin");
+  renderApp(`/cases/${item.id}`);
+  const followUp = await screen.findByLabelText<HTMLInputElement>("Follow-up time (WAT)");
+  fireEvent.change(followUp, { target: { value: "2030-01-02T11:30" } });
+  const reads = () => api.calls.filter((call) => call.method === "GET" && call.path === `/v1/pilot/cases/${item.id}`).length;
+  const before = reads();
+  await user.click(screen.getByRole("button", { name: "Refresh case" }));
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(reads()).toBe(before);
+  expect(followUp.value).toBe("2030-01-02T11:30");
+  api.mutate((state) => {
+    state.records.find((record) => record.id === item.id)!.data.case.nextActionAt = "2030-01-03T12:00:00.000Z";
+  });
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole("button", { name: "Refresh case" }));
+  await waitFor(() => expect(followUp.value).toBe("2030-01-03T13:00"));
+  expect(leaving()).toBe(false);
+  fireEvent.change(followUp, { target: { value: "2030-01-04T13:00" } });
+  expect(leaving()).toBe(true);
+  fireEvent.change(followUp, { target: { value: "2030-01-03T13:00" } });
+  expect(leaving()).toBe(false);
+  expect(writes()).toEqual([]);
+});
+
+it("retains the follow-up draft and its guard when a confirmed refresh fails", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const item = exception();
+  assign(item.id, "Sandbox Admin", "Sandbox Admin");
+  renderApp(`/cases/${item.id}`);
+  const followUp = await screen.findByLabelText<HTMLInputElement>("Follow-up time (WAT)");
+  fireEvent.change(followUp, { target: { value: "2030-01-02T11:30" } });
+  api.failNext(/^\/v1\/pilot\/cases\//, { status: 503, error: "The case could not be refreshed. Try again." }, "GET");
+  await user.click(screen.getByRole("button", { name: "Refresh case" }));
+  await screen.findByText(/^The case could not be refreshed\. Try again\./);
+  expect(followUp.value).toBe("2030-01-02T11:30");
+  expect(leaving()).toBe(true);
+  expect(writes()).toEqual([]);
+});
+
+it("keeps the default follow-up baseline stable as time passes and resets it after refresh", async () => {
+  const user = userEvent.setup();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2029-01-01T08:00:00.000Z"));
+  const item = exception();
+  renderApp(`/cases/${item.id}`);
+  const followUp = await screen.findByLabelText<HTMLInputElement>("Follow-up time (WAT)");
+  expect(followUp.value).toBe("2029-01-02T09:00");
+  clock.mockReturnValue(Date.parse("2029-01-01T10:00:00.000Z"));
+  fireEvent.change(screen.getByPlaceholderText("Name, reference or record type"), { target: { value: "payment" } });
+  expect(followUp.value).toBe("2029-01-02T09:00");
+  expect(leaving()).toBe(false);
+  await user.click(screen.getByRole("button", { name: "Refresh case" }));
+  await waitFor(() => expect(followUp.value).toBe("2029-01-02T11:00"));
+  expect(confirm).not.toHaveBeenCalled();
+  expect(leaving()).toBe(false);
+});
+
+it("uses the saved follow-up as the new baseline, then guards further date-only edits", async () => {
+  const user = userEvent.setup();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const item = exception();
+  assign(item.id, "Sandbox Admin", "Sandbox Admin");
+  renderApp(`/cases/${item.id}`);
+  const followUp = await screen.findByLabelText<HTMLInputElement>("Follow-up time (WAT)");
+  fireEvent.change(followUp, { target: { value: "2030-01-02T11:30" } });
+  await user.type(screen.getByLabelText("Handover or progress note"), "Moved the follow-up after confirming availability.");
+  await user.click(screen.getByRole("button", { name: "Save next step" }));
+  await screen.findByText("Case update saved with its handover history.");
+  expect(writes().filter((call) => call.path === `/v1/pilot/cases/${item.id}`)).toHaveLength(1);
+  expect(api.state().records.find((record) => record.id === item.id)?.data.case.nextActionAt).toBe("2030-01-02T10:30:00.000Z");
+  expect(followUp.value).toBe("2030-01-02T11:30");
+  expect(leaving()).toBe(false);
+  fireEvent.change(followUp, { target: { value: "2030-01-03T11:30" } });
+  expect(leaving()).toBe(true);
+  fireEvent.change(followUp, { target: { value: "2030-01-02T11:30" } });
+  expect(leaving()).toBe(false);
+  await user.click(screen.getByRole("link", { name: "Back to exceptions" }));
+  await screen.findByRole("heading", { name: "Exceptions" });
+  expect(confirm).not.toHaveBeenCalled();
+});
 
 it("explains that only the assignee or an Admin can change a case someone else holds", async () => {
   const item = exception();

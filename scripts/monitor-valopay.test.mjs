@@ -4,7 +4,8 @@ import { once } from 'node:events';
 import { checkedOrigin, probeService, deliverTransition, deliverTest, deliveryConfiguration, monitorArguments, sendWebhook, sendEmail, schedulerExpectation, MissingSetting } from './monitor-valopay.mjs';
 
 const received = [];
-let healthy = true, rejectDelivery = false;
+let healthy = true, rejectDelivery = false, schemaStatus = 'ok';
+const readiness = (database = 'ok', schema = 'ok') => ({ status: database === 'ok' && ['ok', 'indexes_missing'].includes(schema) ? 'ok' : 'degraded', build: 'synthetic-test', checks: { database: { status: database, latencyMs: 1 }, schema: { status: schema } } });
 const server = createServer(async (req, res) => {
   if (req.url === '/alerts') {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -12,7 +13,10 @@ const server = createServer(async (req, res) => {
     received.push(JSON.parse(Buffer.concat(chunks).toString())); res.writeHead(204).end(); return;
   }
   res.setHeader('Content-Type', 'application/json');
-  if (req.url === '/api/readyz') res.writeHead(healthy ? 200 : 503).end(JSON.stringify({ status: healthy ? 'ok' : 'degraded', checks: { database: { status: healthy ? 'ok' : 'error' }, schema: { status: 'ok' } } }));
+  if (req.url === '/api/readyz') {
+    const body = readiness(healthy ? 'ok' : 'failed', healthy ? schemaStatus : 'unchecked');
+    res.writeHead(body.status === 'ok' ? 200 : 503).end(JSON.stringify(body));
+  }
   else res.end(JSON.stringify({ status: 'ok', scheduler: { state: 'off' } }));
 });
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -41,9 +45,20 @@ try {
   assert.equal((await tick()).delivered, false);
   assert.deepEqual(received.map(event => event.kind), ['incident', 'recovery']);
   assert.deepEqual(received[0].codes, ['database_unready']);
+  schemaStatus = 'incomplete';
+  const incomplete = await probe();
+  assert.deepEqual(incomplete.codes, ['schema_unready'], 'the actual readiness HTTP 503 response distinguishes an incomplete schema from a database outage');
+  assert.equal(incomplete.observations.database, 'ok');
+  assert.equal(incomplete.observations.schema, 'incomplete');
+  assert.equal((await tick()).delivered, false);
+  assert.equal((await tick()).delivered, true);
+  assert.deepEqual(received.at(-1).codes, ['schema_unready']);
+  schemaStatus = 'ok';
+  assert.equal((await tick()).delivered, true);
+  assert.equal(received.at(-1).kind, 'recovery');
   assert.deepEqual((await probeService({ origin, expectScheduler: true, allowLocal: true })).codes, ['scheduler_not_running']);
   const now = Date.now();
-  const fake = (scheduler, schema = 'ok') => async url => new Response(JSON.stringify(url.endsWith('readyz') ? { status: 'ok', checks: { database: { status: 'ok' }, schema: { status: schema } } } : { status: 'ok', scheduler }));
+  const fake = (scheduler, schema = 'ok') => async url => new Response(JSON.stringify(url.endsWith('readyz') ? readiness('ok', schema) : { status: 'ok', scheduler }), { status: url.endsWith('readyz') && schema === 'incomplete' ? 503 : 200 });
   assert.deepEqual((await probeService({ origin: 'https://example.com', expectScheduler: true, now, fetchImpl: fake({ state: 'running', intervalMs: 1000, lastSuccessAt: new Date(now - 4000).toISOString() }) })).codes, ['scheduler_stale']);
   // A host whose closes run from a scheduled job (VALOPAY_CLOSE_SCHEDULER=external) must say so: reporting off would
   // hide missed closes again, and running would run them in the web instances too.
@@ -53,7 +68,27 @@ try {
   const running = { state: 'running', intervalMs: 1000, lastSuccessAt: new Date(now).toISOString(), lastRun: { failed: 1 } };
   assert.deepEqual((await probeService({ origin: 'https://example.com', expectScheduler: 'on', now, fetchImpl: fake(running) })).codes, ['scheduler_close_failed'], 'a successful pass does not hide failed lender closes');
   assert.deepEqual((await probeService({ origin: 'https://example.com', expectScheduler: 'on', now, fetchImpl: fake({ ...running, lastRun: { failed: 0 } }) })).codes, [], 'a later successful pass with work clears the failed-close signal');
-  assert.deepEqual((await probeService({ origin: 'https://example.com', now, fetchImpl: fake({ state: 'off' }, 'incomplete') })).codes, ['schema_unready'], 'HTTP 200 and a database connection are not proof the required schema exists');
+  assert.deepEqual((await probeService({ origin: 'https://example.com', now, fetchImpl: fake({ state: 'off' }, 'incomplete') })).codes, ['schema_unready']);
+  for (const [label, status, body] of [
+    ['malformed JSON', 503, '{"private":"synthetic-private-diagnostic",'],
+    ['gateway HTML', 503, '<h1>Unavailable</h1>'],
+    ['oversized response', 503, JSON.stringify({ ...readiness('ok', 'incomplete'), extra: 'x'.repeat(256 * 1024) })],
+    ['missing checks', 503, JSON.stringify({ status: 'degraded' })],
+    ['invalid database state', 503, JSON.stringify(readiness('unknown', 'incomplete'))],
+    ['contradictory success', 503, JSON.stringify(readiness())],
+    ['unverified schema', 503, JSON.stringify(readiness('ok', 'unchecked'))],
+    ['mislabelled failure', 200, JSON.stringify(readiness('ok', 'incomplete'))],
+    ['rate limited', 429, JSON.stringify(readiness())],
+    ['upstream failure', 502, JSON.stringify(readiness('ok', 'incomplete'))],
+  ]) {
+    const result = await probeService({ origin: 'https://example.com', now, fetchImpl: async url => url.endsWith('readyz') ? new Response(body, { status }) : new Response(JSON.stringify({ status: 'ok', scheduler: { state: 'off' } })) });
+    assert.deepEqual(result.codes, ['database_unready'], label);
+    assert.equal(result.observations.database, 'unavailable', label);
+    assert.equal(result.observations.schema, 'unverified', label);
+    assert.ok(!JSON.stringify(result).includes(body), 'response bodies are never copied into reports');
+  }
+  const livenessFailure = await probeService({ origin: 'https://example.com', now, fetchImpl: async url => url.endsWith('readyz') ? new Response(JSON.stringify(readiness())) : new Response(JSON.stringify({ status: 'ok' }), { status: 503 }) });
+  assert.deepEqual(livenessFailure.codes, ['service_unavailable'], 'only readiness accepts a verified degraded 503 envelope');
   const indexes = await probeService({ origin: 'https://example.com', now, fetchImpl: fake({ state: 'off' }, 'indexes_missing') });
   assert.deepEqual(indexes.codes, []);
   assert.deepEqual(indexes.warnings, ['schema_indexes_missing'], 'a missing performance index is visible without turning readiness into an outage');
