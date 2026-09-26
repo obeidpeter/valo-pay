@@ -637,7 +637,7 @@ for (const recovered of [false, true]) it(`selects a new lender without asking t
   await user.type(await screen.findByLabelText("Lender name"), "Selected pilot lender");
   await user.click(screen.getByRole("button", { name: "Create lender" }));
   if (recovered) await user.click(await screen.findByRole("button", { name: "Check original request" }));
-  await screen.findByText("Lender created. Select it above, then open Import batches.");
+  await screen.findByText("Lender created. Open Import batches to add its sample records.");
   expect(confirm).not.toHaveBeenCalled();
   await waitFor(() => expect(Object.keys(sessionStorage).filter((key) => key.startsWith("valopay-lender:")).map((key) => sessionStorage.getItem(key))).toContain("lender-new"));
 });

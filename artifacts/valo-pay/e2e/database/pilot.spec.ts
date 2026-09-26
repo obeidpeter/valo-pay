@@ -11,7 +11,7 @@ test("onboards an empty lender, persists imports and discovers a lost acknowledg
     .click();
   await expect(
     page.getByText(
-      "Lender created. Select it above, then open Import batches.",
+      "Lender created. Open Import batches to add its sample records.",
     ),
   ).toBeVisible();
   const select = page.locator('select[id^="lender-"]:visible');

@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import { seedMerchant } from '../src/lib/valopay-seed';
+import { FINANCIAL_PROJECTION_LIMIT, financialProjectionSchema, projectFinancialState } from '../src/lib/financial-projection';
+
+const state=seedMerchant('projection-unit');
+const projection=projectFinancialState(state);
+assert.deepEqual([projection.receipts.length,projection.obligations.length,projection.allocations.length],[4,8,2]);
+assert.match(projection.sourceDigest,/^[a-f0-9]{64}$/);
+const change=(fn:(copy:typeof state)=>void,message:RegExp)=>{ const copy=structuredClone(state);fn(copy);assert.throws(()=>projectFinancialState(copy),message); };
+change(copy=>{copy.settings.environment='pilot';},/sandbox/);
+change(copy=>{copy.records.push(copy.records.find(r=>r.kind==='payments')!);},/unique/);
+change(copy=>{copy.records.find(r=>r.kind==='payments')!.merchantId='other';},/unique/);
+change(copy=>{copy.records.find(r=>r.kind==='payments')!.amountKobo=0.1;},/integer/);
+change(copy=>{copy.records.find(r=>r.kind==='payments')!.amountKobo=Number.MAX_SAFE_INTEGER+1;},/integer/);
+change(copy=>{copy.records.find(r=>r.kind==='payments')!.data.allocatedKobo=0;},/counter/);
+change(copy=>{copy.records.find(r=>r.kind==='due-items')!.data.outstandingKobo=1;},/counter/);
+change(copy=>{copy.records.find(r=>r.kind==='payments')!.data.currency='USD';},/currency/);
+change(copy=>{copy.records.find(r=>r.kind==='payments')!.customerId='foreign';},/same lender/);
+change(copy=>{const p=copy.records.find(r=>r.kind==='payments')!;p.data.refundStatus='refunded';p.data.refundedKobo=1;},/returned money/);
+change(copy=>{copy.records=Array.from({length:FINANCIAL_PROJECTION_LIMIT+1},(_,i)=>({...copy.records.find(r=>r.kind==='payments')!,id:`p${i}`}));},/bounded/);
+const reversed=structuredClone(state),payment=reversed.records.find(r=>r.kind==='payments')!;
+payment.data.reversalStatus='reversed';payment.data.allocatedKobo=0;
+const allocation=reversed.records.find(r=>r.kind==='allocations'&&r.data.paymentId===payment.id)!;
+allocation.status='superseded';const due=reversed.records.find(r=>r.id===allocation.data.dueItemId)!;due.data.outstandingKobo=due.amountKobo;
+assert.equal(projectFinancialState(reversed).receipts.find(r=>r.id===payment.id)!.returned_kobo,String(payment.amountKobo));
+assert.equal(projectFinancialState(reversed).allocations.length,1);
+for(const invalid of ['public','valopay_runtime_staging_x','valopay_finance_staging_x";DROP SCHEMA public;--','']) assert.throws(()=>financialProjectionSchema(invalid),/isolated/);
+console.log('Financial projection passed 19 checks: exact source mapping, counters, scope, currency, returns, bounded backfill and schema names.');

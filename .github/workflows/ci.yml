@@ -262,6 +262,24 @@ jobs:
       - name: Run the repository and scheduled-close suites
         run: pnpm run test:integration
 
+      # The focused acceptance run also produces a shareable, credential-free
+      # source fingerprint and outcomes; ordinary integration logs do not.
+      - name: Record the synthetic pilot acceptance rehearsal
+        if: ${{ !cancelled() }}
+        run: pnpm run check:pilot-rehearsal
+        env:
+          VALOPAY_RUN_PILOT_REHEARSAL: "1"
+          VALOPAY_PILOT_REHEARSAL_REPORT: ${{ runner.temp }}/valo-pay-pilot-rehearsal.json
+
+      - name: Preserve synthetic pilot acceptance evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: synthetic-pilot-rehearsal-evidence
+          path: ${{ runner.temp }}/valo-pay-pilot-rehearsal.json
+          if-no-files-found: error
+          retention-days: 14
+
       # Runs even when a suite above failed, so the recovery is still measured. Under CI it fails,
       # rather than passing, when its opt-ins are missing, and a failed rehearsal leaves a report too.
       - name: Rehearse a measured synthetic backup and restore

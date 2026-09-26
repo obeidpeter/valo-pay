@@ -16,6 +16,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import path from "node:path";
 import { InvalidConfiguration, invalidConfigurationLine, readStartupConfig } from "../src/lib/startup-config";
+import { financialProjectionSchema } from "../src/lib/financial-projection";
 
 let checks = 0;
 const database = "postgres://unused:unused@127.0.0.1:1/unused";
@@ -38,6 +39,34 @@ assert.equal(readStartupConfig({ DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER
 for (const value of ["false", "0", "no", "disabled", "of", "extern", "job"]) assert.deepEqual(problems({ ...base, VALOPAY_CLOSE_SCHEDULER: value }), ["VALOPAY_CLOSE_SCHEDULER must be on, off or external (in any case)."], value);
 assert.deepEqual(problems({ DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "false" }, "close-pass"), ["VALOPAY_CLOSE_SCHEDULER must be on, off or external (in any case)."], "and refuses what the server refuses");
 checks += 17;
+
+// Financial dual writes are opt-in. Default/empty/off must preserve the existing
+// startup result and must not require (or validate) an inactive schema setting.
+const financialSchemaProblem = 'VALOPAY_FINANCIAL_PROJECTION_SCHEMA must name an isolated valopay_finance_staging_<suffix> schema when VALOPAY_FINANCIAL_PROJECTION is staging.';
+for (const mode of [undefined, '', 'off']) {
+  for (const schema of [undefined, '', 'public', 'synthetic-secret']) {
+    assert.deepEqual(readStartupConfig({...base,VALOPAY_FINANCIAL_PROJECTION:mode,VALOPAY_FINANCIAL_PROJECTION_SCHEMA:schema},'server'),defaults);
+    checks++;
+  }
+}
+for (const mode of ['on','true','false','STAGING','OFF',' staging','staging ','synthetic-secret']) {
+  const found=problems({...base,VALOPAY_FINANCIAL_PROJECTION:mode});
+  assert.deepEqual(found,['VALOPAY_FINANCIAL_PROJECTION must be off or staging.']);
+  assert.ok(!found.join(' ').includes('synthetic-secret'),'invalid financial mode values are not echoed');checks+=2;
+}
+for (const schema of [undefined,'','public','valopay_finance_staging_','valopay_runtime_staging_pilot','valopay_finance_staging_UPPER',`valopay_finance_staging_${'a'.repeat(33)}`,'valopay_finance_staging_pilot;DROP SCHEMA public','synthetic-secret']) {
+  assert.throws(()=>financialProjectionSchema(schema || ''),/isolated/);
+  for (const purpose of ['server','close-pass'] as const) {
+    const found=problems({...base,VALOPAY_FINANCIAL_PROJECTION:'staging',VALOPAY_FINANCIAL_PROJECTION_SCHEMA:schema},purpose);
+    assert.deepEqual(found,[financialSchemaProblem]);assert.ok(!found.join(' ').includes('synthetic-secret'));checks+=2;
+  }
+  checks++;
+}
+for (const schema of ['valopay_finance_staging_a','valopay_finance_staging_pilot_2026',`valopay_finance_staging_${'a'.repeat(32)}`]) {
+  assert.equal(financialProjectionSchema(schema),schema);
+  for (const purpose of ['server','close-pass'] as const) assert.deepEqual(problems({...base,VALOPAY_FINANCIAL_PROJECTION:'staging',VALOPAY_FINANCIAL_PROJECTION_SCHEMA:schema},purpose),[]);
+  checks+=3;
+}
 
 // ---- Each rule, named without the value ----
 const rules: Array<[Record<string, string>, string]> = [
@@ -240,6 +269,9 @@ const refusals: Array<[string, Record<string, string>, string]> = [
   ["index.ts", { PORT: "18093" }, "DATABASE_URL is required: the PostgreSQL connection URL."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, CLERK_JWT_KEY: jwtKey.trim().replaceAll("\n", "\\n") }, escaped],
   ["close-pass.ts", { DATABASE_URL: database, VALOPAY_RUNTIME_ISOLATION: "on" }, "VALOPAY_RUNTIME_ISOLATION must be off or staging."],
+  ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_FINANCIAL_PROJECTION: "synthetic-secret" }, "VALOPAY_FINANCIAL_PROJECTION must be off or staging."],
+  ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_FINANCIAL_PROJECTION: "staging" }, financialSchemaProblem],
+  ["close-pass.ts", { DATABASE_URL: database, VALOPAY_FINANCIAL_PROJECTION: "staging", VALOPAY_FINANCIAL_PROJECTION_SCHEMA: "public" }, financialSchemaProblem],
 ];
 for (const [entry, env, problem] of refusals) {
   const refused = start(entry, env);

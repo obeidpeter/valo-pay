@@ -15,6 +15,8 @@ import { pathToFileURL } from "node:url";
 const root = path.resolve(import.meta.dirname, "..");
 const tsx = path.join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs");
 export const suites = [
+  'artifacts/api-server/tests/financial-projection.integration.test.ts',
+  'artifacts/api-server/tests/instruction-recovery.integration.test.ts',
   'artifacts/api-server/tests/connected-replay.integration.test.ts',
   'artifacts/api-server/tests/financial-concurrency.integration.test.ts',
   'artifacts/api-server/tests/source-close-controls.integration.test.ts',
