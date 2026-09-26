@@ -26,6 +26,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 | Document | What it is for |
 | --- | --- |
 | `README.md` | This file: what the application is, how to install, run, check and change it. |
+| `docs/document-register.md` | Current planning-document versions, repository guidance, dated audits, responsible roles, review triggers and the distinction between deployed and draft work. |
 | `docs/BUILD_STATUS.md` | What this build delivers, the deviations from the specification, the closed production gates and the verification boundary. |
 | `docs/connected-banking.md` | Connected Banking implementation, sample journeys, authority boundaries, API and remaining live dependencies. |
 | `docs/DATABASE_SECURITY.md` | The security boundary: what the scoped repository enforces, what it does not, the opt-in database layers, and the publishing rules. |
@@ -77,7 +78,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 - **Exception**: a case the catalogue says a person must work, with an owner, a deadline and controlled resolution codes.
 - **Daily close**: the once-a-day run that fixes the books, records every retry decision and produces the REC-07 report; scheduled per lender, or run by hand.
 - **Pack and gate**: a dispute pack is a customer's evidence as PDF, CSV and JSON; a gate is a production prerequisite or decision, always unproven on synthetic data.
-- Requirement codes such as RET-03, REC-07 or NFR-OBS-02 refer to the Technical Requirements Document v1.1 that governs the scope.
+- Requirement codes such as RET-03, REC-07 or NFR-OBS-02 are retained in Technical Requirements v2.1 (26 September 2026), alongside the Connected Banking requirements introduced in v2.0. The [document register](docs/document-register.md) identifies the current planning set and its evidence boundaries; a requirement's presence does not mean its full acceptance criteria are met.
 
 ## Prerequisites and installation
 

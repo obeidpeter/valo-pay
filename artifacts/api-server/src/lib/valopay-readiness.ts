@@ -9,8 +9,8 @@ export const limitations=[
   "P4 — Security: mandatory multi-factor authentication and fresh checks for sensitive actions, independent penetration testing, a backup restore drill, operating procedures, a web application firewall and live monitoring have not been verified.",
   "P5 — Lender agreements: two qualifying signed contracts and a confirmed collection handover for each instalment are still required.",
   "Text messages are simulated. There is no live Nigerian transactional messaging route, support for do-not-disturb routing or evidence of provider acceptance.",
-  "The current implementation differs from the technical requirements: it uses TypeScript, Express and Drizzle in a hosted workspace. The planned Python, FastAPI, SQLAlchemy and Terraform-managed container infrastructure are not in place.",
-  "The production system still needs an outgoing instruction dispatcher, signed provider webhook connections, automated instruction scheduling, field encryption and secure key deletion, retention-locked storage, and time-limited staff access.",
+  "The technical requirements retain the current TypeScript application. Using the agreed technology does not mean its production hosting, security controls or performance have been approved.",
+  "Staff access with expiry, optional field encryption and a signed Paystack test inbox have been implemented and tested with sample data. Their live configuration and provider acceptance remain unverified. Live instruction dispatch and scheduling, secure key deletion and retention-locked storage remain outstanding.",
   "Load capacity, uptime, backup restoration, message delivery and live response times have not been certified. Sample results cannot prove the recovery, commercial or operational readiness tests (Tests 2, 3 and 5).",
 ];
 /** The readiness gates: prerequisites and decisions, always unproven on synthetic data. */

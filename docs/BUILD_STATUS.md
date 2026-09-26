@@ -15,6 +15,15 @@ The [CI run for the reviewed source](https://github.com/obeidpeter/valo-pay/acti
 
 At deployment, financial staging remained disabled and the scheduler reported **off**. An external scheduler, outbound alert delivery, a hosted restore rehearsal with independently verified object/key custody and an independent human operator session remain uncommissioned. Paystack still has no configured account or test key. No provider call, alert delivery, staging migration or live financial activation was performed by this release. The [migration catalogue](database-migrations.md) separates required application changes from these optional rehearsals.
 
+## Draft changes awaiting release · 26 September 2026
+
+The current documentation review includes two later source branches. Neither is part of the deployed PR #64 record above:
+
+- [PR #65](https://github.com/obeidpeter/valo-pay/pull/65), at `a9106bff032b946577485cc16e3c721e2b14e7c6`, improves loading, error and empty states, invitation recovery, role-specific guidance and the migration/release documentation. Its [CI run](https://github.com/obeidpeter/valo-pay/actions/runs/36250247528) passed all eight jobs, including 684 UI tests.
+- [PR #66](https://github.com/obeidpeter/valo-pay/pull/66), at `859fc923779ed7bc2964fc2c3ec46a0caddfe4d4`, builds on PR #65. It protects close-review and case follow-up drafts, restores dialog focus and corrects monitor classification of schema-readiness failures. Its [CI run](https://github.com/obeidpeter/valo-pay/actions/runs/36253528763) passed all eight jobs, including 698 UI tests in 92 files.
+
+The documentation refresh is based on PR #66. Review and merge these stacked changes in dependency order before any later deployment, then record the deployed revision and fresh verification separately. The [document register](document-register.md) tracks the accompanying Word documents. These checks and document updates do not commission live services or change production gates.
+
 ## Earlier release notes
 
 These dated entries describe what each earlier release changed and verified. Their phrases such as “this release” and “before rollout” refer to that entry's release, not a new deployment instruction. Current implementation boundaries and open gates follow the history below.
@@ -342,16 +351,16 @@ The pilot operations release wires verified staff identity, explicit lender gran
 
 The Paystack adapter supports read-only checks and optional authenticated raw-event ingestion into a lender-scoped test inbox. Local fixtures cover duplicate delivery, conflicts, signatures and out-of-order events. No test key is available, so external ingestion remains unconfigured. No charging method, external verification or Direct Debit availability is claimed. See `docs/paystack.md`.
 
-## Explicit implementation deviations
+## Implementation direction and remaining acceptance gaps
 
 | Requirement | Current implementation | Consequence |
 |---|---|---|
-| Python 3.12 / FastAPI / SQLAlchemy / Celery / Redis | TypeScript / Express / Drizzle / PostgreSQL | Not exact technical-stack compliance; engineering-owner review remains necessary. |
+| TypeScript modular monolith retained by Technical Requirements v2.0 and v2.1 | TypeScript / Express / Drizzle / PostgreSQL | The stack is consistent with the current direction. Hosted infrastructure, security, capacity and operational acceptance remain separate work; an unrelated FastAPI rewrite is not a current requirement. |
 | Modular entity-specific resource API | Generic typed record resources plus action endpoints | Partner-specific resource adapters, API keys and outbound LMS event contracts remain to implement. |
 | Real provider and messaging adapters | Synthetic evidence plus an opt-in signed Paystack test inbox; no account or test key configured | External delivery is unverified. No debits, mandate lifecycle instructions, activation SMS or notices reach a provider. |
 | Production tenancy and MFA | Staff identity, provisioned membership, fresh-MFA enforcement and lender grants are implemented behind staging configuration; the preview uses synthetic personas | Actual identity-provider commissioning and MFA verification remain outstanding. |
 | Independent database tenant isolation and immutability | Optional restricted runtime login with forced row security across ten tables, scoped transaction identity and application mutation guards | The preview database has not been commissioned with this boundary. Privileged administration can still bypass application immutability; staging tests do not approve live data. |
-| Production outbox / worker scheduler / status recovery | The daily close is scheduled inside the API process rather than by Celery beat and workers; no outbound side effects are dispatched | The close scheduler is single-process per instance with database row locks for coordination; the instruction scheduler, at-least-once receiver idempotency, lost-ack replay and provider polling are not certified. |
+| Production outbox / worker scheduler / status recovery | Daily-close scheduling runs in an application worker with database coordination; an external one-shot close pass is also available. Isolated synthetic instruction recovery rehearses fenced claims and unknown outcomes; no outbound side effects are dispatched. | The deployed scheduler remains off. External scheduling, provider-side idempotency, live unknown-outcome recovery and provider polling remain uncommissioned; the disposable rehearsal is not a production instruction outbox. |
 | Field encryption / key destruction | Optional managed envelope encryption for raw imports and recovery payloads, with scope binding and key rotation support | Managed key access is not configured on the preview. Other stored fields and cryptographic destruction require further work; only synthetic data is permitted. |
 | Locked retention and independent audit anchors | Private objects, application-protected metadata, transactional chain verification and a daily check of each lender's whole chain after its close | WORM retention, external anchors and crypto-shredding remain unimplemented (hosting gates); privileged database access can alter metadata and rewrite an unanchored chain consistently, which the daily check, running in the application against the same database, cannot detect. |
 | Full Test 2 inference | Stable future-failure assignment, sample estimate, 30-day settled-value accounting, the 90% interval of the difference and the pre-registered rule evaluated as written | The rule can only read "proven" on live controlled evidence for each design partner; synthetic data cannot supply it, and the gate readiness register keeps the recovery decision not proven. |

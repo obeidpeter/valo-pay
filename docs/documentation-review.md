@@ -1,6 +1,14 @@
 # Documentation review
 
-A review of the documents against the code they describe, made after the security, internationalisation and observability reviews and in the same manner: read every document and the code it names, test what can be tested here, fix what is this repository's to fix, and write down the rest. Its lasting part is a check in the test suite that keeps the documents true.
+A review of the documents against the code they describe, made after the security, internationalisation and observability reviews and in the same manner: read every document and the code it names, test what can be tested here, fix what is this repository's to fix, and write down the rest. Its lasting part is a structural documentation check in the test suite. Passing that check does not establish that a product claim or planning assumption is current.
+
+## Currency review · 26 September 2026
+
+The current review compared the four core Word documents dated 21 September with the repository through PR #66 and the separately recorded deployed PR #64. The [document register](document-register.md) names their refreshed versions, role responsibilities, dated source records and review triggers.
+
+The refresh corrects the inherited Technical Requirements v1.1 pointer, the obsolete FastAPI stack-deviation claim, Paystack saved-event verification status, the duplicated workspace-failure description and the claim that every imported CSV is discarded. It records PR #65 and PR #66 as draft changes rather than deployed functionality. The Word documents distinguish implemented synthetic journeys and rehearsed foundations from real-data, live-provider, hosted-recovery, independent security and human-pilot acceptance. Financial estimates retain their original planning date and need re-estimation before use as the remaining delivery budget.
+
+The original findings below remain a historical review record. Provider/legal research dates are retained; this currency review does not reconfirm external rules, tariffs or product availability. It changes no financial-model calculations and marks no production gate complete. Future reviews must compare claims with implementation and deployment evidence as well as run the mechanical check.
 
 ## Scope and method
 
