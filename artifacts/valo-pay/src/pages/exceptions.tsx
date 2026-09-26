@@ -20,11 +20,12 @@ import { RecordPagination, usePageProblemFocus } from '@/components/record-pagin
 import { ExceptionContext, resolutionLabel } from '@/components/exception-context';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { useFocusWhenLost } from '@/lib/focus';
+import { permissionReason } from '@/lib/permissions';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
 export default function ExceptionsPage() {
-  const { merchantId } = useWorkspace();
+  const { merchantId, workspace } = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const q = searchParams.get('q')?.trim();
   // A link to one exception (from its case) shows that exception alone, whatever its status, until the queue is chosen again.
@@ -94,6 +95,7 @@ export default function ExceptionsPage() {
       </header>
 
       <QueueFreshness key={merchantId} queries={[exceptionsQuery]} />
+      {workspace?.role === 'Compliance reviewer' && <p className="text-sm text-muted-foreground">You can review exception evidence and case history. An Admin, Operations or Finance colleague can edit exception details.</p>}
 
       {resolved && <section ref={resolvedRef} role="status" aria-label="Resolution recorded" className="rounded-lg border border-success/30 bg-success/5 p-4 text-sm">
         <p className="font-semibold">{resolved.what} resolved</p>
@@ -199,9 +201,9 @@ export default function ExceptionsPage() {
                       <Link href={`/cases/${exception.id}`} className="mb-2 inline-flex min-h-9 items-center text-xs font-medium text-primary underline">Case & handover</Link>
                       {exception.status !== 'resolved' && exception.status !== 'closed' ? (
                         <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="ghost" className="text-xs" kind="exceptions" record={exception} onClick={() => handleAction(exception, 'update')}>
+                          {!permissionReason(workspace, { kind: 'exceptions', record: exception }) && <Button size="sm" variant="ghost" className="text-xs" kind="exceptions" record={exception} onClick={() => handleAction(exception, 'update')}>
                             Edit
-                          </Button>
+                          </Button>}
                           <Button size="sm" variant="outline" className="text-xs" action="resolve_exception" record={exception} onClick={() => handleAction(exception, 'resolve')}>
                             Resolve
                           </Button>

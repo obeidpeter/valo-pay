@@ -5,11 +5,15 @@ import { ClerkProvider, useAuth, useClerk } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { ErrorBoundary, type ErrorFallbackProps } from '@/components/error-boundary';
 import type { ClerkSlots, Session } from './auth';
+export { ClerkSignIn, ClerkSignUp } from '@/components/clerk-forms';
+export { VerifiedSession } from '@/components/staff-verification';
 
 /*
  * Clerk's provider and the session it reports, in a chunk of their own that
  * lib/auth.tsx loads only where sign-in is wanted, so the page shell carries
  * no Clerk code and the anonymous sandbox on a local host never fetches it.
+ * Forms and verification share this entry so a successful retry uses this
+ * provider's Clerk context, never the original failed entry URL.
  */
 
 const configuredKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;

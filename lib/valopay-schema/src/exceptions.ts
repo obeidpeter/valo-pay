@@ -100,7 +100,7 @@ export function unseenReversalCondition(observationId: string): string {
 /** The evidence an unseen-payment condition (unseenReversalCondition) names; undefined for any other condition. */
 export function unseenReversalOf(condition: unknown): string | undefined {
   const parts = String(condition ?? "").split(":");
-  return parts.length === 3 && parts[0] === "provider_status_mismatch" && parts[1] && parts[2] === "unseen" ? parts[1] : undefined;
+  return (parts.length === 3 || (parts.length === 5 && parts[3] === "review" && !!parts[4])) && parts[0] === "provider_status_mismatch" && parts[1] && parts[2] === "unseen" ? parts[1] : undefined;
 }
 
 /**
@@ -116,11 +116,9 @@ export const unseenReversalCodes = { setAside: "platform_state_confirmed", adopt
 /**
  * Decision on what a resolution means: it keeps the meaning Finance was shown
  * when it was recorded. resolve_exception records the rules it was recorded
- * under on the exception (data.resolutionRuleVersion); a resolution without it
- * was recorded by an earlier build. That build told Finance that any resolution
- * of a reversal waiting for a payment no connection had seen sets the reversal
- * aside at the next reconciliation, so such a resolution still does, whatever
- * its code; only one that records a rule version follows unseenReversalCodes.
+ * under on the exception (data.resolutionRuleVersion). Several earlier builds
+ * omitted it while giving the same code different meanings. Such a reversal
+ * requires a new explicit Finance review; its old decision is never reinterpreted.
  */
 export const resolutionRuleVersion = 1;
 

@@ -5,12 +5,41 @@ import { makeRecord } from "../../api-server/src/domain/records";
 import { raiseException, reconcile } from "../../api-server/src/domain/reconciliation";
 import { providerFeeKobo } from "@workspace/valopay-schema";
 import { countedTwiceEffect, otherCurrencyLinesEffect } from "@/components/exception-context";
+import { permissionReason } from '@/lib/permissions';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
 afterEach(() => api.uninstall());
 
 describe("exceptions", () => {
+  it('keeps Compliance review available without offering a generic exception edit or create', async () => {
+    api.role = 'Compliance reviewer';
+    renderApp('/exceptions');
+    await screen.findByRole('tab', { name: 'All open (4)' });
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.getAllByRole('link', { name: 'Case & handover' })).toHaveLength(4);
+    expect(screen.getByText(/An Admin, Operations or Finance colleague can edit exception details/)).toBeTruthy();
+    expect(permissionReason({ role: 'Compliance reviewer', actor: 'reviewer' }, { kind: 'exceptions' })).toBe('Requires Admin, Operations or Finance.');
+    expect(api.calls.some(call => call.method === 'POST')).toBe(false);
+  });
+
+  it('preserves terminal exception details and offers case history instead of generic edits', async () => {
+    api.mutate(state => {
+      const exceptions = state.records.filter(record => record.kind === 'exceptions');
+      exceptions[0]!.status = 'resolved';
+      exceptions[1]!.status = 'closed';
+    });
+    renderApp('/exceptions?view=resolved');
+    await screen.findByRole('tab', { name: 'Resolved (2)' });
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resolve' })).toBeNull();
+    expect(screen.getAllByRole('link', { name: 'Case & handover' })).toHaveLength(2);
+    for (const status of ['resolved', 'closed']) {
+      expect(permissionReason({ role: 'Admin', actor: 'admin' }, { kind: 'exceptions', record: { status } })).toContain('details are preserved');
+    }
+    expect(permissionReason({ role: 'Finance', actor: 'finance' }, { kind: 'exceptions', record: { status: 'open' } })).toBeNull();
+  });
+
   it("filters all open, high severity and resolved exceptions with live counts", async () => {
     const user = userEvent.setup();
     renderApp("/exceptions");

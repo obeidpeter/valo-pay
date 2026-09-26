@@ -78,7 +78,9 @@ try {
   const legacyRequest = requestFor(bootstrapPrincipal);
   legacyRequest.headers.cookie = `valo_sandbox=${bootstrapPrincipal}`;
   await inWorkspace(legacyRequest, response(), async (context) => {
-    assert.deepEqual((await listMerchants(context)).map((merchant) => merchant.id).sort(), bootstrapResults[0], "Legacy cookies must keep access to the same workspace.");
+    const fresh = (await listMerchants(context)).map((merchant) => merchant.id).sort();
+    assert.equal(fresh.length, 2);
+    assert.notDeepEqual(fresh, bootstrapResults[0], "A legacy cookie cannot select an existing anonymous workspace.");
   });
 
   const principalA = token();
@@ -363,7 +365,7 @@ try {
       await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,data)
         SELECT $2||'-record-'||i,$1,CASE WHEN i%50=0 THEN 'exports' ELSE 'notifications' END,'Index filler',CASE WHEN i%50=0 THEN 'ready' ELSE 'sent' END,'{}' FROM generate_series(1,20000) i`, [indexLender, filler]);
       await pool.query("ANALYZE valopay_records");
-      const queue = await statementOf(/^SELECT merchant_id AS "merchantId",id FROM valopay_records/, () => exportJobRepository.candidates(2));
+      const queue = await statementOf(/^SELECT merchant_id AS "merchantId",id,to_char/, () => exportJobRepository.candidates(2));
       assert.deepEqual([...await indexesRead(queue)], ["valopay_records_export_queue"], "the export worker's look-up reads only its queue index");
       assert.ok(!(await nodesRun(queue)).has("Sort"), "which gives the jobs in the order the worker takes them, with no sort");
     } finally {

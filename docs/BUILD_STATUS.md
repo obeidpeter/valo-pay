@@ -1,5 +1,9 @@
 # Valo Pay — build status
 
+## Comprehensive audit remediation · 26 September 2026
+
+The twelve findings from the audit of PR #60 are addressed in this release: financial decision integrity, provider-scoped identities, export queue fairness, sign-in recovery, accessible controls and navigation, sandbox identity, proxy limits and a dependency advisory. The [remediation record](audit-remediation-2026-09-26.md) maps each finding to its fix and regression coverage. Migration 009 must run before rollout; ambiguous historical reversal and settlement evidence remains held for reviewed resolution. External service commissioning and production data repair are separate owner steps, not outcomes of local tests.
+
 ## Backlog and fourth review fixes · September 2026
 
 The open items of the usability backlog (`docs/usability/audit.md`) that this sandbox can close, the owner's decisions on the questions it left open, and the findings of the fourth review, of the fixes merged on 25 September, are fixed and covered by tests:

@@ -4,7 +4,7 @@
   --foreground: 217 36% 15%;
   --muted-foreground: 216 11% 41%;
   --border: 32 20% 88%;
-  --input: 218 12% 71%;
+  --input: 220 12% 48%;
   --primary: 17 89% 41%;
   --primary-foreground: 0 0% 100%;
   --ring: 17 89% 41%;
@@ -468,7 +468,7 @@
     --muted-foreground: 215 12% 73%;
     --card: 215 28% 15%;
     --border: 215 20% 25%;
-    --input: 215 13% 45%;
+    --input: 220 14% 60%;
     --primary: 23 100% 74%;
     --primary-foreground: 214 29% 11%;
     --ring: 23 100% 74%;

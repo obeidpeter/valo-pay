@@ -39,11 +39,14 @@ export const records = pgTable("valopay_records", {
   uniqueIndex("valopay_unique_due_reference")
     .on(t.merchantId, t.reference)
     .where(sql`${t.kind} = 'due-items' AND ${t.reference} <> ''`),
+  uniqueIndex("valopay_unique_customer_reference")
+    .on(t.merchantId, t.reference)
+    .where(sql`${t.kind} = 'customers' AND ${t.reference} <> ''`),
   // drizzle-kit reads every column of an index that has an expression back as an expression, so the lender column of
   // these two is declared as one too: declared as a plain column it never matched, and every push dropped and rebuilt
   // both guards. PostgreSQL builds the same index either way.
-  uniqueIndex("valopay_unique_observation")
-    .on(sql`${t.merchantId}`, sql`(${t.data}->>'source')`, sql`(${t.data}->>'eventId')`)
+  uniqueIndex("valopay_unique_provider_event")
+    .on(sql`${t.merchantId}`, sql`translate(coalesce(nullif(btrim(${t.data}->>'providerConnection'), ''), nullif(btrim(${t.data}->>'provider'), ''), ''), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')`, sql`coalesce(${t.data}->>'source', '')`, sql`(${t.data}->>'eventId')`)
     .where(sql`${t.kind} = 'observations' AND ${t.data}->>'eventId' IS NOT NULL`),
   uniqueIndex("valopay_one_inflight")
     .on(sql`${t.merchantId}`, sql`(${t.data}->>'dueItemId')`)

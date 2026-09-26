@@ -126,7 +126,7 @@ for (const match of mutations.matchAll(/`([a-z]+_[a-z_]+)`/g)) check(actionsSour
 // Inline handlers (the JSON 404) and the Clerk proxy, a pass-through mounted at a constant, are not routers of this contract.
 const operations = new Set(Object.entries(spec.paths).flatMap(([path, methods]) => Object.keys(methods).map((method) => `${method.toUpperCase()} ${path}`)));
 const apiSource = "artifacts/api-server/src", appFile = `${apiSource}/app.ts`, appSource = read(appFile);
-const moduleFile = (from, specifier) => [`${join(dirname(from), specifier)}.ts`, join(dirname(from), specifier, "index.ts")].find((path) => existsSync(join(root, path)));
+const moduleFile = (from, specifier) => [`${join(dirname(from), specifier)}.ts`, join(dirname(from), specifier, "index.ts")].map(path => path.replaceAll('\\', '/')).find((path) => existsSync(join(root, path)));
 const imported = new Map();
 for (const match of appSource.matchAll(/import\s+(?:(\w+)|\{([^}]*)\})\s+from\s+["'](\.\/[^"']+)["']/g)) {
   for (const name of match[1] ? [match[1]] : match[2].split(",").map((part) => part.trim().split(/\s+as\s+/).pop()).filter(Boolean)) imported.set(name, match[3]);

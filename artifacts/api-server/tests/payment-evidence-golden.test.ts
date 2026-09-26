@@ -576,6 +576,7 @@ section("a line an earlier build counted in two batches", () => {
   // What the build before the fix left behind: the same collection also counted in batch B-2, which its statement credit reconciled.
   const line = addObservation(state, { reference: "PSK-P3", amountKobo: 2_487_500, grossAmountKobo: 2_500_000, feeKobo: 12_500, batchReference: "B-2", source: "settlement", customerId: due.customerId, eventId: "l2", occurredAt: wat("2027-07-03T06:00:00") });
   const second = makeRecord(state, "settlement-batches", { ...structuredClone(first!), id: undefined, reference: "B-2", name: "Settlement batch B-2", status: "reconciled", data: { ...structuredClone(first!.data), batchReference: "B-2", lineObservationIds: [line.id], linePaymentIds: [collected!.id] } } as any);
+  delete second.data.providerIdentityKey; // Persisted before provider-scoped identities existed.
   Object.assign(line, { status: "resolved" }); Object.assign(line.data, { paymentId: collected!.id, settlementBatchId: second.id, resolutionKey: "canonical_provider_reference" });
   addObservation(state, { reference: "STMT-B2", amountKobo: 2_487_500, batchReference: "B-2", source: "statement", eventId: "s2", occurredAt: wat("2027-07-03T08:00:00") });
   close(state, "2027-07-04T07:00:00");
@@ -688,7 +689,10 @@ section("evidence held for its connection alone", () => {
   const report = close(joined.state, "2027-07-02T07:30:00").data.report;
   const batch = recordsOf(joined.state, "settlement-batches").find((item) => item.reference === "B-1")!;
   equal([payment(joined.state, "PSK-SET-1").length, joined.line.status, joined.line.data.resolutionKey, joined.line.data.paymentId, joined.debit.data.settlementStatus], [1, "resolved", "joined_after_review", joined.debit.id, "settled"], "the line joins the debit: one payment, settled");
-  equal([batch.status, batch.data.linePaymentIds, batch.data.grossKobo, batch.data.netKobo, batch.data.statementNetKobo], ["reconciled", [joined.debit.id], 2_500_000, 2_487_500, 2_487_500], "the batch counts the debit's line and reconciles with its statement credit");
+  equal([batch.status, batch.data.linePaymentIds, batch.data.grossKobo, batch.data.netKobo, batch.data.statementNetKobo], ["pending", [joined.debit.id], 2_500_000, 2_487_500, undefined], "joining a payment does not authorise a different connection's same-named payout credit");
+  addObservation(joined.state, { reference: "STMT-B-1-OWN", amountKobo: 2_487_500, batchReference: "B-1", source: "statement", eventId: "st-own", occurredAt: wat("2027-07-02T07:35:00"), provider: "Sandbox Rail Settlements" } as any);
+  close(joined.state, "2027-07-02T07:40:00");
+  equal([batch.status, batch.data.statementNetKobo], ["reconciled", 2_487_500], "the batch reconciles only with the settlement connection's own credit");
   equal([positionFor(joined.state, joined.due.customerId).unallocatedKobo, report.possibleDuplicates.count, billableCollection(joined.state, joined.debit, wat("2027-08-15T12:00:00"))], [0, 0, true], "no credit that does not exist, no duplicate, and the settled debit is billed");
   const again = addObservation(joined.state, { reference: "PSK-SET-1", amountKobo: 2_500_000, source: "webhook", customerId: joined.due.customerId, eventId: "w2", occurredAt: wat("2027-07-02T08:00:00"), provider: "Sandbox Rail Settlements" } as any);
   close(joined.state, "2027-07-02T09:00:00");
@@ -860,7 +864,7 @@ section("a waiting reversal Finance resolved before its payment arrived", () => 
   check(/Resolve it as platform state confirmed if .*: the next reconciliation sets the reversal aside, and it reverses nothing, even if its payment arrives later/.test(notes) && /Resolve it as provider state adopted if .*: it keeps waiting for its payment with no new exception, and the reconciliation that records that payment reverses it/.test(notes) && /Leave this exception open while you check/.test(notes), `the exception says what each resolution does (${notes})`);
 });
 
-// ---------- Fourth review finding 2: a waiting reversal's resolution keeps the meaning Finance was shown ----------
+// ---------- FIN-02: several releases omitted rule versions while assigning different meanings ----------
 section("a waiting reversal Finance resolved under an earlier build", () => {
   const run = (code: string) => {
     const { state, due } = liveFixture({ withFailure: false, merchantId: `unseen-earlier-${code}` });
@@ -868,12 +872,10 @@ section("a waiting reversal Finance resolved under an earlier build", () => {
     const reversal = addObservation(state, { reference: "PSK-UNSEEN-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "rev-1", reversed: true, occurredAt: wat("2027-07-01T07:00:00"), provider: "Sandbox Rail" } as any);
     close(state, "2027-07-02T08:00:00");
     const [unseen] = exceptionsFor(state, reversal.id, "provider_status_mismatch");
-    // The earlier build's resolve_exception accepted every code of the type, recorded no rule version, and answered that
-    // the reversal is set aside at the next reconciliation.
-    accepted(request(state, () => {
-      Object.assign(unseen!, { status: "resolved", updatedAt: wat("2027-07-02T09:00:00") });
-      Object.assign(unseen!.data, { resolutionCode: code, notes: "Checked with the provider.", resolvedBy: "finance@example.test", resolvedAt: wat("2027-07-02T09:00:00") });
-    }), "the earlier build's resolution");
+    // Actual pre-marker persisted shape, including the PR59 adopted code. There is no trustworthy release discriminator.
+    Object.assign(unseen!, { status: "resolved", updatedAt: wat("2027-07-02T09:00:00") });
+    Object.assign(unseen!.data, { resolutionCode: code, notes: "Checked with the provider.", resolvedBy: "finance@example.test", resolvedAt: wat("2027-07-02T09:00:00") });
+    const historical = structuredClone(unseen!);
     const upgraded = closeAnswer(state, "2027-07-02T10:00:00");
     addObservation(state, { reference: "PSK-UNSEEN-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "debit-1", occurredAt: wat("2027-07-01T06:30:00"), provider: "Sandbox Rail" } as any);
     const later = closeAnswer(state, "2027-07-03T08:00:00");
@@ -882,14 +884,15 @@ section("a waiting reversal Finance resolved under an earlier build", () => {
       upgraded, later, reversal: [after.status, after.data.resolutionKey ?? null, after.data.resolvedTo === `exception:${unseen!.id}`],
       debit: [debit?.status, debit?.data.reversalStatus], due: [instalment.status, outstandingOf(instalment)],
       raised: exceptionsFor(state, reversal.id).filter((item) => item.id !== unseen!.id).map((item) => item.data.type),
+      historicalUnchanged: JSON.stringify(live(state, unseen!)) === JSON.stringify(historical),
+      reviews: exceptionsFor(state, reversal.id).filter((item) => item.data.legacyResolutionReview).length,
     };
   };
   for (const code of ["escalated_to_provider", "provider_state_adopted", "platform_state_confirmed"]) {
     const outcome = run(code);
-    equal([outcome.reversal, outcome.debit, outcome.due, outcome.raised], [["resolved", "reversal_set_aside_after_review", true], ["allocated", "none"], ["paid", 0], []], `${code}: the first reconciliation after the upgrade sets the reversal aside, as the earlier build said, and the debit stands`);
-    const noted = code !== "platform_state_confirmed";
-    equal([outcome.upgraded.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence PSK-UNSEEN-1 .*, as a resolution recorded before resolutions recorded their rules is read, whatever its code \(the build before the third review said any resolution sets it aside\): it reverses nothing/.test(String(outcome.upgraded.data.auditNote)) && !/said it would/.test(String(outcome.upgraded.data.auditNote))], [noted ? 1 : 0, noted], `${code}: the close's audit entry says so where the code now means otherwise, without saying which build recorded it (${outcome.upgraded.data.auditNote})`);
-    equal([outcome.later.data.reversalsSetAsideAsResolved ?? 0, /Set aside reversal evidence/.test(String(outcome.later.data.auditNote ?? ""))], [0, false], `${code}: once`);
+    equal([outcome.reversal, outcome.debit, outcome.due, outcome.raised], [["unresolved", null, false], ["unallocated", "none"], ["in_dispute", 2_500_000], ["provider_status_mismatch"]], `${code}: ambiguity holds the reversal, receipt and instalment instead of inferring a decision`);
+    equal([outcome.historicalUnchanged, outcome.reviews, outcome.upgraded.data.legacyReversalReviewsPending, outcome.later.data.legacyReversalReviewsPending], [true, 1, 1, 1], `${code}: history is unchanged and reruns retain one explicit review`);
+    check(/held for renewed Finance review/.test(String(outcome.upgraded.data.auditNote)), `${code}: the audit explains the hold`);
   }
   // A resolution this build records carries its rule version, and follows the codes as they are now.
   const { state, due } = liveFixture({ withFailure: false, merchantId: "unseen-marked" });
@@ -901,7 +904,7 @@ section("a waiting reversal Finance resolved under an earlier build", () => {
   close(state, "2027-07-02T10:00:00");
   equal([live(state, reversal).status, exceptionsFor(state, reversal.id).filter(isOpen).length], ["unresolved", 0], "and an adopted reversal keeps waiting for its payment");
   const edit = request(state, () => { const input: any = structuredClone(live(state, unseen!)); input.data.resolutionRuleVersion = null; validateRecord(state, finance(wat("2027-07-02T11:00:00")), "exceptions", { ...input, data: { ...input.data, resolutionRuleVersion: undefined } }, true); });
-  check(!edit.ok && /rule version/.test(edit.message), `the record API cannot remove it (${!edit.ok && edit.message})`);
+  check(!edit.ok && /rule version|completed exception/.test(edit.message), `the record API cannot remove it (${!edit.ok && edit.message})`);
 });
 
 section("held evidence Finance resolved in one sitting", () => {
@@ -1191,6 +1194,7 @@ section("exceptions about money in another currency", () => {
 
   // A batch an earlier build left counting the USD collection that B-U7 counts: the report of it names the currency too.
   const earlier = makeRecord(state, "settlement-batches", { name: "Settlement batch B-U9", status: "pending", reference: "B-U9", data: { ...structuredClone(recordsOf(state, "settlement-batches").find((item) => item.reference === "B-U7")!.data), batchReference: "B-U9", lineObservationIds: [], linePaymentIds: [line!.id] } } as any);
+  delete earlier.data.providerIdentityKey; // Actual pre-identity persisted shape.
   accepted(request(state, () => reconcile(state, finance(wat("2027-07-02T11:30:00")))), "the reconciliation of the earlier build's batch");
   const [counted] = exceptionsFor(state, earlier.id, "settlement_variance");
   equal([counted?.data.condition, counted?.amountKobo, counted?.data.currency], [`settlement_variance:${earlier.id}:counted:${line!.id}`, 100_000, "USD"], "a batch that counts a USD collection another batch counts is reported in dollars");

@@ -9,7 +9,10 @@ const root = path.resolve(import.meta.dirname, "..");
 const generated = ["lib/api-spec", "lib/api-zod", "lib/api-client-react"];
 const regenerate = "node scripts/create-valopay-spec.cjs && pnpm --filter @workspace/api-spec run codegen";
 for (const [command, args] of [[process.execPath, ["scripts/create-valopay-spec.cjs"]], ["pnpm", ["--filter", "@workspace/api-spec", "run", "codegen"]]]) {
-  const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
+  // pnpm is a .cmd shim on Windows; npm_execpath names the real JS entry when
+  // invoked through pnpm run, avoiding a shell and preserving argument boundaries.
+  const viaNode = command === 'pnpm' && process.env.npm_execpath;
+  const result = spawnSync(viaNode ? process.execPath : command, viaNode ? [process.env.npm_execpath, ...args] : args, { cwd: root, stdio: "inherit", ...(command === 'pnpm' && !viaNode && process.platform === 'win32' ? { shell: true } : {}) });
   if (result.status !== 0) { console.error(`✕ ${regenerate} failed`); process.exit(result.status ?? 1); }
 }
 const changed = execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--", ...generated], { cwd: root, encoding: "utf8" });

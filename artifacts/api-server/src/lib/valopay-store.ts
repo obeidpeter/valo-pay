@@ -10,7 +10,7 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
+import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson, observationEventKey } from "@workspace/valopay-schema";
 import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, chainSequence, AUDIT_GENESIS, type AuditPoint } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
@@ -24,7 +24,7 @@ import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
 import { allocatableOnly, allocationChoices, EXPIRED_EXPORT_STATUS, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
-import { allocationPayer } from "../domain/reconciliation";
+import { allocationPayer, exceptionCurrency } from "../domain/reconciliation";
 import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
@@ -44,6 +44,7 @@ import { executeApprovedRun } from '../domain/lifecycle-run';
 import { deleteRetainedExport } from './export-download';
 import { objectStorageClient } from './objectStorage';
 import { assertProviderEventChange } from '../providers/paystack-inbox';
+import { exceptionDecisionChanged, exceptionReviewSubjectChanged } from '../domain/exception-integrity';
 
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
@@ -2046,6 +2047,14 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       conflict("Approved, preregistered, and closed versions are immutable.");
     }
     if (before.kind === 'provider-events') assertProviderEventChange(before,present);
+    if (exceptionReviewSubjectChanged(before, present, original.get(before.data.linkedRecordId))) conflict('The subject of a historical evidence review is immutable.');
+    if (before.kind === 'settlement-batches' && before.data.providerIdentityReview !== undefined && !sameJson(before.data.providerIdentityReview, present.data.providerIdentityReview)) conflict('A recorded settlement provider review snapshot is immutable.');
+    if (before.kind === 'settlement-batches' && before.data.providerIdentityKey !== undefined
+      && (before.reference !== present.reference || ['batchReference', 'provider', 'providerConnection', 'providerIdentityKey'].some(key => !sameJson(before.data[key], present.data[key])))) conflict('A recorded settlement provider identity is immutable.');
+    // A legacy exception can acquire only the currency its original linked money already had; it cannot change the decision's monetary meaning.
+    const derivedCurrency = before.kind === 'exceptions' && !before.data.currency && present.data.currency
+      ? exceptionCurrency(before, (kind, id) => { const record = original.get(id); return record?.kind === kind ? record : undefined; }) : undefined;
+    if (exceptionDecisionChanged(before, present, derivedCurrency)) conflict('A completed exception decision and its recorded attribution are immutable. Record a new review instead.');
     if (before.kind === 'source-profiles' && ['source','kind'].some(key=>!sameJson(before.data[key],present.data[key]))) conflict('A source profile cannot change its source or record type.');
     if (before.kind === 'import-batches' && before.status === 'committed' && !sameJson(present, before)&&!retentionChange()) conflict('Committed source batches are immutable.');
     if(before.kind==='close-reviews'&&!sameJson(present,before)){
@@ -2057,7 +2066,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (before.data.importIdentity && !sameJson(present.data.importIdentity, before.data.importIdentity)) conflict('Source row provenance is immutable.');
     assertImportedCorrectionChange(before, present, snapshot, state);
   }
-  const dueReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
+  const dueReferences = new Set<string>(), customerReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
   const allocatedPayments = new Map<string, number>(), allocatedDues = new Map<string, number>();
   const changed = (record: ValopayRecord, ...keys: string[]) => {
     if (unchanged.has(record.id)) return false;
@@ -2081,6 +2090,10 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (!target || target.merchantId !== record.merchantId) conflict(`${label} must belong to this lender.`);
   };
   for (const record of final.values()) {
+    if (record.kind === 'customers' && record.reference) {
+      if (customerReferences.has(record.reference)) conflict('Customer references must be unique within a lender.');
+      customerReferences.add(record.reference);
+    }
     if (record.customerId && changedCustomer(record)) reference(record, record.customerId, "customers", "Customer", final);
     // Shared data links are verified only when a new/changed state introduces
     // them; this protects writes without reinterpreting historical snapshots.
@@ -2131,7 +2144,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
         || (changedCustomer(record) && record.data.dueItemId ? reference(record, record.data.dueItemId, "due-items", "Observation due item", final) : undefined);
       if (due && record.customerId && due.customerId !== record.customerId) conflict("Observation due item must belong to its customer.");
       if (record.data.eventId !== undefined && record.data.eventId !== null) {
-        const key = `${String(record.data.source)}\u0000${String(record.data.eventId)}`;
+        const key = observationEventKey(record.data)!;
         if (observations.has(key)) conflict("Observation already exists for this source event.");
         observations.add(key);
       }
@@ -2636,7 +2649,8 @@ export const integrityGuards = [
   { type: "unique index", name: "valopay_merchants_pkey", table: "valopay_merchants", definition: "USING btree (id)" },
   { type: "unique index", name: "valopay_records_pkey", table: "valopay_records", definition: "USING btree (id)" },
   { type: "unique index", name: "valopay_unique_due_reference", table: "valopay_records", definition: "USING btree (merchant_id, reference) WHERE ((kind = 'due-items'::text) AND (reference <> ''::text))" },
-  { type: "unique index", name: "valopay_unique_observation", table: "valopay_records", definition: "USING btree (merchant_id, ((data ->> 'source'::text)), ((data ->> 'eventId'::text))) WHERE ((kind = 'observations'::text) AND ((data ->> 'eventId'::text) IS NOT NULL))" },
+  { type: "unique index", name: "valopay_unique_customer_reference", table: "valopay_records", definition: "USING btree (merchant_id, reference) WHERE ((kind = 'customers'::text) AND (reference <> ''::text))" },
+  { type: "unique index", name: "valopay_unique_provider_event", table: "valopay_records", definition: "USING btree (merchant_id, translate(COALESCE(NULLIF(btrim((data ->> 'providerConnection'::text)), ''::text), NULLIF(btrim((data ->> 'provider'::text)), ''::text), ''::text), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'::text, 'abcdefghijklmnopqrstuvwxyz'::text), COALESCE((data ->> 'source'::text), ''::text), ((data ->> 'eventId'::text))) WHERE ((kind = 'observations'::text) AND ((data ->> 'eventId'::text) IS NOT NULL))" },
   { type: "unique index", name: "valopay_one_inflight", table: "valopay_records", definition: "USING btree (merchant_id, ((data ->> 'dueItemId'::text))) WHERE ((kind = 'attempts'::text) AND (status = ANY (ARRAY['scheduled'::text, 'sent'::text, 'unknown'::text])))" },
   { type: "check", name: "valopay_money_integer", table: "valopay_records", definition: "CHECK (((amount_kobo >= 0) AND (amount_kobo <= '9007199254740991'::bigint)))" },
   { type: "check", name: "valopay_ticket_floor", table: "valopay_records", definition: "CHECK (((kind <> 'due-items'::text) OR (amount_kobo >= 500000)))" },

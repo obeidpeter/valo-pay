@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Link } from "wouter";
 import {
   ArrowLeftRight,
@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { PublicFrame } from "@/components/public-frame";
 import { Button } from "@/components/ui/button";
-import { authEnabled, ClerkSlot } from "@/lib/auth";
+import { authEnabled, ClerkSlot, ClerkSignIn, ClerkSignUp } from "@/lib/auth";
 import "@/sign-in.css";
 
 /**
@@ -27,11 +27,6 @@ import "@/sign-in.css";
  */
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-// Clerk's forms and their theme load only where sign-in is available, and render under Clerk's provider.
-const ClerkSignIn = lazy(() => import("@/components/clerk-forms").then((module) => ({ default: module.ClerkSignIn })));
-const ClerkSignUp = lazy(() => import("@/components/clerk-forms").then((module) => ({ default: module.ClerkSignUp })));
-
 
 function Shell({
   title,
@@ -219,13 +214,11 @@ export function SignInPage() {
       {authEnabled ? (
         <>
           <ClerkSlot>
-            <Suspense fallback={null}>
-              <ClerkSignIn
-                path={`${basePath}/sign-in`}
-                signUpUrl={`${basePath}/sign-up`}
-                fallbackRedirectUrl={`${basePath}/overview`}
-              />
-            </Suspense>
+            <ClerkSignIn
+              path={`${basePath}/sign-in`}
+              signUpUrl={`${basePath}/sign-up`}
+              fallbackRedirectUrl={`${basePath}/overview`}
+            />
           </ClerkSlot>
           <SandboxOption />
         </>
@@ -246,13 +239,11 @@ export function SignUpPage() {
       {authEnabled ? (
         <>
           <ClerkSlot>
-            <Suspense fallback={null}>
-              <ClerkSignUp
-                path={`${basePath}/sign-up`}
-                signInUrl={`${basePath}/sign-in`}
-                fallbackRedirectUrl={`${basePath}/overview`}
-              />
-            </Suspense>
+            <ClerkSignUp
+              path={`${basePath}/sign-up`}
+              signInUrl={`${basePath}/sign-in`}
+              fallbackRedirectUrl={`${basePath}/overview`}
+            />
           </ClerkSlot>
           <SandboxOption />
         </>

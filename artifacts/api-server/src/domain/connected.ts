@@ -14,6 +14,7 @@ import {
 } from "./reconciliation";
 import { creditView, runCreditAction } from "./connected-credit-service";
 import { cashView, runCashAction } from "./connected-cash-service";
+import { dueNeedsReversalReview } from "./reversal-review";
 
 // The action's shape and the consent purposes are the shared definitions the contract and the console read.
 export const connectedActionSchema = connectedActionInputSchema;
@@ -286,6 +287,7 @@ function recordCheckoutReceipt(
   const available = Number(due.data.outstandingKobo ?? due.amountKobo);
   if (
     available > 0 &&
+    !dueNeedsReversalReview(state, due) &&
     !["in_dispute", "cancelled", "closed"].includes(due.status)
   )
     allocatePayment(
@@ -379,6 +381,7 @@ function paymentAction(
       .strict()
       .parse(input.data);
     const due = owned(state, dueItemId, "due-items");
+    if (dueNeedsReversalReview(state, due)) reject("This instalment is held for renewed Finance review of an earlier reversal decision. Resolve that review and run reconciliation before creating a checkout.", 409);
     if (
       ["paid", "cancelled", "closed", "in_dispute"].includes(due.status) ||
       amountKobo > Number(due.data.outstandingKobo ?? due.amountKobo)
@@ -433,6 +436,7 @@ function paymentAction(
   const due = owned(state, String(intent.data.dueItemId), "due-items");
   const event = (status: string, detail: string) => recordEvent(intent, ctx, status, detail);
   if (input.action === "payment.authorise") {
+    if (dueNeedsReversalReview(state, due)) reject("This instalment is held for renewed Finance review of an earlier reversal decision. Resolve that review and run reconciliation before authorising a checkout.", 409);
     if (intent.status !== "created")
       reject("Only a new checkout can be authorised.", 409);
     if (Date.parse(String(intent.data.expiresAt)) <= Date.parse(ctx.now))

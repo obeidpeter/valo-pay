@@ -74,9 +74,6 @@ export function revealCurrentPage(list: HTMLElement | null): void {
   list.scrollTop += link.top - frame.top - (frame.height - link.height) / 2;
 }
 
-/** The breakpoint at which the sidebar replaces the phone bar; the same value as Tailwind's `md`. */
-const SIDEBAR_QUERY = '(min-width: 768px)';
-
 /**
  * One list of links for the sidebar and the phone drawer, so the console is
  * learnt once and looks the same on every screen. The drawer's rows are taller
@@ -169,6 +166,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const signOut = useSignOut();
   const { theme, setChoice } = useTheme();
   const mainRef = useRef<HTMLElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   useQueuePosition(mainRef, `${location}?${search}`, `${merchantId}:${workspace?.actor}:${workspace?.role}`);
 
   // The title names the page, or says the page stopped working while the boundary below shows its notice.
@@ -197,10 +195,13 @@ export function Layout({ children }: { children: ReactNode }) {
   }, [location]);
   useEffect(() => { if (location !== openedAt.current) setMenuOpen(false); }, [location]);
   useEffect(() => {
-    const sidebar = window.matchMedia(SIDEBAR_QUERY);
-    const onChange = () => { if (sidebar.matches) setMenuOpen(false); };
-    sidebar.addEventListener('change', onChange);
-    return () => sidebar.removeEventListener('change', onChange);
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    // CSS uses the shell's available width in rem, so enlarged root text also switches to the drawer.
+    // Observe its actual visibility instead of duplicating a viewport-only breakpoint in JavaScript.
+    const observer = new ResizeObserver(() => { if (sidebar.getClientRects().length && getComputedStyle(sidebar).display !== 'none') setMenuOpen(false); });
+    observer.observe(sidebar);
+    return () => observer.disconnect();
   }, []);
   // Paper carries what the screen's chrome carried: the lender, the sandbox notice, and when it was printed.
   // The time is taken again as the print dialog opens, since a page can sit open for a day before it is printed.
@@ -235,7 +236,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </div>
 
       {/* Phone bar: the brand, the lender being worked on, and the drawer with the same pages as the sidebar. */}
-      <div className="md:hidden sticky top-0 z-40 flex items-center gap-2 border-b bg-card px-3 py-2 print:hidden">
+      <div className="console-phone-bar sticky top-0 z-40 flex flex-wrap items-center gap-2 border-b bg-card px-3 py-2 print:hidden">
         <BrandLockup descriptor={false} compact className="shrink-0" />
         <label htmlFor="lender-phone" className="sr-only">Active lender</label>
         {lenderSelect('lender-phone', 'min-w-0 flex-1 rounded-md border bg-secondary p-2 text-sm text-secondary-foreground')}
@@ -245,9 +246,9 @@ export function Layout({ children }: { children: ReactNode }) {
               <Menu className="h-4 w-4" aria-hidden="true" /> Menu
             </Button>
           </SheetTrigger>
-          <SheetContent side="left" className="flex w-72 flex-col p-0" aria-describedby={undefined}
+          <SheetContent side="left" className="flex w-72 max-w-[90vw] flex-col p-0" aria-describedby={undefined}
             onOpenAutoFocus={(event) => { event.preventDefault(); (drawerPages.current?.querySelector<HTMLElement>('a[aria-current="page"]') ?? drawerPages.current?.querySelector('a'))?.focus(); }}
-            onCloseAutoFocus={(event) => { if (currentLocation.current !== openedAt.current) { event.preventDefault(); focusMain(); } }}>
+            onCloseAutoFocus={(event) => { if (currentLocation.current !== openedAt.current || (sidebarRef.current?.getClientRects().length && getComputedStyle(sidebarRef.current).display !== 'none')) { event.preventDefault(); focusMain(); } }}>
             <SheetHeader className="border-b p-4 pr-12 text-left">
               <SheetTitle className="text-base">Menu</SheetTitle>
             </SheetHeader>
@@ -263,7 +264,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </header>
       <div className="flex flex-1 overflow-hidden print:block print:overflow-visible">
         {/* Sidebar */}
-        <aside aria-label="Console sidebar" className="console-sidebar w-60 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
+        <aside ref={sidebarRef} aria-label="Console sidebar" className="console-sidebar w-60 border-r bg-card flex-col shrink-0 print:hidden">
           <div className="px-5 py-3 flex items-center justify-between">
             <BrandLockup descriptor={false} />
             <span className="text-[9px] tracking-widest uppercase text-muted-foreground border rounded px-1.5 py-1">Console</span>
@@ -297,7 +298,7 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* Main Content */}
         <main ref={mainRef} id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
           <div className="workspace-bar flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 md:px-8 print:hidden">
-            <div className="hidden md:flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
+            <div className="console-desktop-context items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
             <p aria-live="polite" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span>{workspace?.accessMode === 'staff' ? 'Role' : 'Demo role'}: <strong className="font-semibold">{workspace?.role || 'Loading…'}</strong></span>{lender?.mode && <span>Mode: <strong className="font-semibold">{lender.mode}</strong></span>}<span className="text-muted-foreground">Times in WAT</span></p>
           </div>
           <div className="console-content p-4 sm:p-6 md:p-8 max-w-[1440px] mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>

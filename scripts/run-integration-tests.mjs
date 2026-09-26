@@ -25,6 +25,7 @@ export const suites = [
   "artifacts/api-server/tests/api-contract.integration.test.ts",
   "artifacts/api-server/tests/connected-workflows.integration.test.ts",
   "artifacts/api-server/tests/record-index-migration.integration.test.ts",
+  "artifacts/api-server/tests/record-identity-migration.integration.test.ts",
   "artifacts/api-server/tests/pilot-workflow-migration.integration.test.ts",
   "artifacts/api-server/tests/schema-push.integration.test.ts",
   "artifacts/api-server/tests/integrity-guards.integration.test.ts",

@@ -198,10 +198,12 @@ try {
     assert.equal(fresh.set.length, 1);
     assert.match(fresh.set[0]!, /^__Host-valopay_sandbox=[a-f0-9]{64}; Max-Age=2592000; Path=\/; Expires=[^;]+; HttpOnly; Secure; SameSite=Lax$/, "on HTTPS the cookie is __Host-: Secure, Path=/, no Domain");
     const moved = await cookies({ "X-Forwarded-Proto": "https", Cookie: `valopay_sandbox=${token("a")}` });
-    assert.match(moved.set[0]!, new RegExp(`^__Host-valopay_sandbox=${token("a")};`), "the plain cookie's sandbox moves to the __Host- name, with the same token");
+    assert.match(moved.set[0]!, /^__Host-valopay_sandbox=[a-f0-9]{64};/);
+    assert.doesNotMatch(moved.set[0]!, new RegExp(token("a")), "a cookie planted under the plain name cannot select a fresh HTTPS visitor's sandbox");
     assert.match(moved.set[1] ?? "", /^valopay_sandbox=; Path=\/; Expires=Thu, 01 Jan 1970 00:00:00 GMT;/, "and the plain cookie is cleared");
     const legacy = await cookies({ Cookie: `valo_sandbox=${token("b")}` });
-    assert.match(legacy.set[0]!, new RegExp(`^valopay_sandbox=${token("b")};`), "on plain HTTP the legacy name moves to valopay_sandbox");
+    assert.match(legacy.set[0]!, /^valopay_sandbox=[a-f0-9]{64};/);
+    assert.doesNotMatch(legacy.set[0]!, new RegExp(token("b")), "the retired name cannot select a sandbox on HTTP either");
     assert.match(legacy.set[1] ?? "", /^valo_sandbox=; Path=\/; Expires=Thu, 01 Jan 1970/, "and the legacy cookie is cleared");
     const planted = await get("/api/v1/workspace", "192.0.2.40", { Cookie: `valopay_sandbox=${token("c")}; valopay_sandbox=${token("d")}` });
     assert.equal(planted.status, 400, "two different tokens under one name are refused, not guessed between");
@@ -438,11 +440,11 @@ await section("readiness reused for a second, its warning once per check", async
   checks += 4;
 });
 
-await section("the sandbox cookie after the legacy period", async () => {
-  const { readSandboxCookie, LEGACY_SANDBOX_COOKIES_UNTIL } = await import("../src/lib/sandbox-cookie.js");
+await section("legacy sandbox cookies never select a principal", async () => {
+  const { readSandboxCookie } = await import("../src/lib/sandbox-cookie.js");
   const header = `valo_sandbox=${token("7")}; valopay_sandbox=${token("8")}`;
-  assert.deepEqual(readSandboxCookie(header, true, LEGACY_SANDBOX_COOKIES_UNTIL - 1), { name: "__Host-valopay_sandbox", token: token("8"), stale: ["valopay_sandbox", "valo_sandbox"] }, "until then the newer of the old names is taken over, and both are cleared");
-  assert.deepEqual(readSandboxCookie(header, true, LEGACY_SANDBOX_COOKIES_UNTIL), { name: "__Host-valopay_sandbox", stale: ["valopay_sandbox", "valo_sandbox"] }, "from 1 January 2027 old names are not read, only cleared");
+  assert.deepEqual(readSandboxCookie(header, true), { name: "__Host-valopay_sandbox", stale: ["valopay_sandbox", "valo_sandbox"] }, "old names are ignored immediately, without a migration window");
+  assert.deepEqual(readSandboxCookie(`valopay_sandbox=${token("7")}; valopay_sandbox=${token("8")}`, true), { name: "__Host-valopay_sandbox", stale: ["valopay_sandbox"] }, "conflicting planted old cookies cannot prevent a new host cookie from being issued");
   assert.deepEqual(readSandboxCookie(`valopay_sandbox=not-a-token; valopay_sandbox=${token("9")}`, false), { name: "valopay_sandbox", token: token("9"), stale: [] }, "a value that is not a token names no sandbox, so it is no conflict");
   checks += 3;
 });

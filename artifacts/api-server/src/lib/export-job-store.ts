@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { SYSTEM_ACTOR_PREFIX, chainSequenceSql } from './valopay-store';
 import { auditEntryData, chainSequence } from './digests';
-import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, returnExportToQueue, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
+import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, returnExportToQueue, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult, type ExportQueueCursor } from './export-jobs';
 import { bindRuntimeService, runtimeExportRequesterAllowed } from './runtime-isolation';
 import { beginStatement, checkOut, databaseLimits } from './database-limits';
 
@@ -157,8 +157,7 @@ async function complete(claim: ClaimedExport, artifact?: ExportArtifact, message
   }) ?? 'busy';
 }
 
-export const exportJobRepository: ExportJobRepository = {
-  async candidates(limit) {
+async function queuePage(limit: number, after?: ExportQueueCursor, through?: ExportQueueCursor, newest = false) {
     // Bound checkout and the read itself so a queue scan cannot occupy both
     // worker slots forever. Claims still recheck ownership under the lender lock.
     // The kind and status conditions are the predicate of migration 008's partial
@@ -168,15 +167,20 @@ export const exportJobRepository: ExportJobRepository = {
     try {
       await client.query(beginStatement(databaseLimits().worker, 'READ ONLY'));
       await bindRuntimeService(client);
-      const targets = (await client.query<{ merchantId: string; id: string }>(`SELECT merchant_id AS "merchantId",id FROM valopay_records
+      const targets = (await client.query<{ merchantId: string; id: string; createdAt: string }>(`SELECT merchant_id AS "merchantId",id,to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt" FROM valopay_records
       WHERE kind='exports' AND status IN ('queued','running')
         AND (status='queued' OR COALESCE(data->>'leaseExpiresAt','') <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
-      ORDER BY created_at,id LIMIT $1`, [Math.max(1, Math.min(20, limit))])).rows;
+        ${after ? 'AND (created_at,id) > ($2::timestamptz,$3::text)' : ''}
+        ${through ? `AND (created_at,id) <= ($${after ? 4 : 2}::timestamptz,$${after ? 5 : 3}::text)` : ''}
+      ORDER BY created_at${newest ? ' DESC' : ''},id${newest ? ' DESC' : ''} LIMIT $1`, [Math.max(1, Math.min(20, limit)), ...(after ? [after.createdAt, after.id] : []), ...(through ? [through.createdAt, through.id] : [])])).rows;
       await client.query('COMMIT');
       return targets;
     } catch (error) { try { await client.query('ROLLBACK'); } catch { /* disconnected */ } throw error; }
     finally { guard.release(); }
-  },
+}
+export const exportJobRepository: ExportJobRepository = {
+  queueEnd: async () => (await queuePage(1, undefined, undefined, true))[0],
+  candidates: (limit, after, through) => queuePage(limit, after, through),
   async claim(merchantId, id) {
     return transaction(merchantId, 'skip', async (client, scope) => {
       const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`,

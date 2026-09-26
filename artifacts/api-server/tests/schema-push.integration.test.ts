@@ -23,7 +23,7 @@ await requireCreateDatabase(suite, pool);
 const database = throwawayDatabaseName(connection, 'push_rehearsal');
 const targetUrl = new URL(connection); targetUrl.pathname = `/${database}`;
 const env = { ...process.env, DATABASE_URL: targetUrl.toString() };
-const kit = fileURLToPath(new URL('../../../lib/db/node_modules/.bin/drizzle-kit', import.meta.url));
+const kit = fileURLToPath(new URL('../../../lib/db/node_modules/drizzle-kit/bin.cjs', import.meta.url));
 const dbPackage = fileURLToPath(new URL('../../../lib/db/', import.meta.url));
 const indexRunner = fileURLToPath(new URL('../../../scripts/apply-record-list-indexes.mjs', import.meta.url));
 const migration = (name: string) => readFile(new URL(`../../../lib/db/migrations/${name}`, import.meta.url), 'utf8');
@@ -38,7 +38,7 @@ const earlierNames = [
  * and ran, as it printed them. drizzle-kit prints a statement that failed and still exits 0, so an error is a failure.
  */
 function push(): string[] {
-  const run = spawnSync(kit, ['push', '--force', '--verbose', '--config', './drizzle.config.ts'], { cwd: dbPackage, env, encoding: 'utf8', timeout: 120_000 });
+  const run = spawnSync(process.execPath, [kit, 'push', '--force', '--verbose', '--config', './drizzle.config.ts'], { cwd: dbPackage, env, encoding: 'utf8', timeout: 120_000 });
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
   assert.equal(run.status, 0, output);
   assert.doesNotMatch(output, /\berror\b/i, output);
@@ -60,10 +60,12 @@ try {
   assert.equal(readIndexes.status, 0, readIndexes.stderr);
   for (const name of ['003_pilot_workflow.sql', '004_staff_lender_access.sql']) await target.query(await migration(name));
   for (const [table, name, cut] of earlierNames) await target.query(`ALTER TABLE ${table} RENAME CONSTRAINT ${name} TO ${cut}`);
-  for (const name of ['007_journal_and_lender_indexes.sql', '008_export_queue_index_and_foreign_key_names.sql']) await target.query(await migration(name));
+  await target.query('DROP INDEX valopay_unique_customer_reference, valopay_unique_provider_event');
+  await target.query("CREATE UNIQUE INDEX valopay_unique_observation ON valopay_records (merchant_id,(data->>'source'),(data->>'eventId')) WHERE kind='observations' AND data->>'eventId' IS NOT NULL");
+  for (const name of ['007_journal_and_lender_indexes.sql', '008_export_queue_index_and_foreign_key_names.sql', '009_record_identity_guards.sql']) await target.query(await migration(name));
   assert.deepEqual(push(), [], 'a push on a database built by the migrations plans nothing');
   assert.deepEqual(push(), [], 'and neither does the next one');
-  console.log('Schema push rehearsal passed: a second push plans nothing on a freshly pushed database, and a push plans nothing on a database built from the base tables and migrations 002, 003, 004 (with the earlier foreign key names), 007 and 008, nor does the push after it.');
+  console.log('Schema push rehearsal passed: a second push plans nothing on a freshly pushed database, and a push plans nothing on a database built from the base tables and migrations 002, 003, 004 (with the earlier foreign key names), 007, 008 and 009, nor does the push after it.');
 } finally {
   await target?.end();
   if (created) await pool.query(`DROP DATABASE "${database}"`);

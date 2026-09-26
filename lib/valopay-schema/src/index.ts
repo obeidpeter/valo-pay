@@ -23,3 +23,4 @@ export * from './receipts';
 export * from './operations';
 export * from './team';
 export * from './connected';
+export * from './provider-identity';

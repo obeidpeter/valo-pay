@@ -110,8 +110,12 @@ export function returnExportToQueue(record: ValopayRecord, now: string): void {
 export interface ClaimedExport {
   merchantId: string; id: string; token: string; state: DomainState; context: Context; input: ExportInput; location: ExportLocation;
 }
+/** Database timestamp text retains microseconds, so the cursor never repeats a sub-millisecond page. */
+export interface ExportQueueCursor { createdAt: string; id: string }
+export interface ExportCandidate extends ExportQueueCursor { merchantId: string }
 export interface ExportJobRepository {
-  candidates(limit: number): Promise<Array<{ merchantId: string; id: string }>>;
+  queueEnd(): Promise<ExportQueueCursor | undefined>;
+  candidates(limit: number, after?: ExportQueueCursor, through?: ExportQueueCursor): Promise<ExportCandidate[]>;
   claim(merchantId: string, id: string): Promise<ClaimedExport | null>;
   progress?(claim: ClaimedExport, stage: ExportStage): Promise<ExportWriteResult>;
   finish(claim: ClaimedExport, artifact: ExportArtifact): Promise<ExportWriteResult>;

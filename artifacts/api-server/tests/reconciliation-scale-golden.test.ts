@@ -121,6 +121,14 @@ const outcome = {
   monthEnd: digest(monthEnd.data),
   nextDay: digest(nextDay.data),
 };
+// FIN-03 adds a stable provider-scoped batch identity. Prove that this metadata is the only
+// change to this older single-provider scenario before updating its full-record digest.
+const beforeProviderIdentity = structuredClone(state.records);
+for (const record of beforeProviderIdentity) if (record.kind === "settlement-batches") {
+  assert.equal(record.data.providerIdentityKey, JSON.stringify([String(record.data.providerConnection).trim().toLowerCase(), record.reference]));
+  delete record.data.providerIdentityKey;
+}
+assert.equal(digest([state.merchant, state.settings, beforeProviderIdentity.sort(byId)]), "0a0bb4ff0a8ff3c087b3c8ecd87c949b195f6813adfd4dd02b95da51fcc71092", "only the new provider identity changes the earlier golden records");
 if (process.env.VALOPAY_GOLDEN_PRINT === "1") console.log(JSON.stringify({ outcome, records, visits: [first.visits, second.visits] }, null, 2));
 /**
  * Computed for this scenario by the code before its lookups were indexed: first at c22c229, then again by the dispute
@@ -131,7 +139,7 @@ if (process.env.VALOPAY_GOLDEN_PRINT === "1") console.log(JSON.stringify({ outco
  * records' only change, checked by leaving that field out (VALOPAY_GOLDEN_PRINT=1 prints the current values).
  */
 const golden = {
-  records: "0a0bb4ff0a8ff3c087b3c8ecd87c949b195f6813adfd4dd02b95da51fcc71092",
+  records: "e8e1bf3974b0ca6df6a0540604813450c2aee373e374900f1fadc33fa50e36c7",
   monthEnd: "dff97eb6d50336fb650cf48652975f842fd2b85f14df835eb535a7dbb4a35a7d",
   nextDay: "1a88e829ce6bd3940c6a5248e5bbdfddc0a7786480202fc138aca0a834c4a798",
 };

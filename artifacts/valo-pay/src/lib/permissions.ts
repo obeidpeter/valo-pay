@@ -10,7 +10,7 @@ const recordRoles: Record<string, string[]> = {
   attempts: ['Admin', 'Operations'], observations: operators,
   policies: ['Admin'], templates: ['Admin'], experiments: ['Admin'], evidence: ['Admin'], cutovers: ['Admin'],
   commercial: ['Admin', 'Finance'], costs: ['Admin', 'Finance'], 'settlement-batches': ['Admin', 'Finance'],
-  exceptions: [...operators, 'Compliance reviewer'], reviews: [...operators, 'Compliance reviewer'],
+  exceptions: operators, reviews: [...operators, 'Compliance reviewer'],
   calendar: ['Admin', 'Operations'],
 };
 const actionRoles: Record<string, string[]> = {
@@ -52,6 +52,9 @@ export function permissionReason(workspace: ActingWorkspace, { action, kind, rec
   if (!allowed) return 'This action is unavailable for your role.';
   const roles = allowed.length < 2 ? allowed[0] : `${allowed.slice(0, -1).join(', ')} or ${allowed.at(-1)}`;
   if (!allowed.includes(workspace.role)) return `Requires ${roles}.`;
+  if (!action && kind === 'exceptions' && ['resolved', 'closed'].includes(record?.status || '')) {
+    return 'Resolved and closed exception details are preserved. Review the case history instead.';
+  }
   if (['approve_policy', 'reject_policy', 'approve_template', 'reject_template'].includes(action || '') && record?.data?.author === workspace.actor) {
     return 'Ask a different Compliance reviewer. You cannot review your own submission.';
   }

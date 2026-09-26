@@ -12,16 +12,6 @@ export const SANDBOX_COOKIE = "valopay_sandbox";
 export const HOST_SANDBOX_COOKIE = `__Host-${SANDBOX_COOKIE}`;
 /** The name before the rename to valopay_sandbox. */
 export const LEGACY_SANDBOX_COOKIE = "valo_sandbox";
-/**
- * Until the end of 2026 (UTC) the older names are still read, to move a
- * browser's sandbox to the current name once: `valo_sandbox` anywhere, and
- * `valopay_sandbox` on a secure request. The answer then issues the same token
- * under the current name and clears the old cookie. From 1 January 2027 they
- * are not read, and a browser that still holds only an old cookie starts a new
- * sandbox; the cookie lasts 30 days from the last visit, so any browser that
- * visits in the meantime keeps its sandbox.
- */
-export const LEGACY_SANDBOX_COOKIES_UNTIL = Date.parse("2027-01-01T00:00:00.000Z");
 const TOKEN = /^[a-f0-9]{64}$/;
 
 /** The principal an anonymous sandbox's token stands for. */
@@ -61,20 +51,21 @@ export interface SandboxCookie {
 /**
  * Which sandbox a request's cookies name. The current name decides when it
  * carries a token; on a secure request only this host can have set it, so a
- * cookie under an older name beside it is ignored and cleared. Otherwise,
- * until LEGACY_SANDBOX_COOKIES_UNTIL, an older name's token is taken over.
+ * cookie under an older name is always ignored and cleared. An old cookie
+ * cannot prove it came from this host, so it never selects or migrates a
+ * sandbox, even for a browser with no current cookie yet.
  * Two different tokens under the name that decides are refused (400), not
  * guessed between: a cookie planted for a parent domain with a longer path is
  * sent first, and taking it would put the visitor in a sandbox someone else
  * can read. A value that is not a token names no sandbox and is ignored.
  */
-export function readSandboxCookie(header: string | undefined, secure: boolean, nowMs = Date.now()): SandboxCookie {
+export function readSandboxCookie(header: string | undefined, secure: boolean): SandboxCookie {
   const cookies = header ?? "";
   const name = secure ? HOST_SANDBOX_COOKIE : SANDBOX_COOKIE;
   const older = secure ? [SANDBOX_COOKIE, LEGACY_SANDBOX_COOKIE] : [LEGACY_SANDBOX_COOKIE];
   const stale = older.filter((old) => cookieValues(cookies, old).length > 0);
-  for (const candidate of [name, ...(nowMs < LEGACY_SANDBOX_COOKIES_UNTIL ? older : [])]) {
-    const tokens = [...new Set(cookieValues(cookies, candidate).filter((value) => TOKEN.test(value)))];
+  {
+    const tokens = [...new Set(cookieValues(cookies, name).filter((value) => TOKEN.test(value)))];
     if (tokens.length > 1) throw Object.assign(new Error("This browser sent two different sandbox cookies, so it is not clear which sandbox is yours. Clear this site's cookies, then reload the page."), { status: 400 });
     if (tokens.length === 1) return { name, token: tokens[0], stale };
   }

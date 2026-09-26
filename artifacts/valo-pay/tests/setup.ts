@@ -20,6 +20,9 @@ vi.mock("@/lib/auth", () => ({
   AuthShow: () => null,
   AuthProvider: ({ children }: { children: unknown }) => children,
   ClerkSlot: () => null,
+  ClerkSignIn: () => null,
+  ClerkSignUp: () => null,
+  VerifiedSession: () => null,
 }));
 
 class ResizeObserverStub {

@@ -9,6 +9,7 @@ import { makeRecord, recordsOf } from "./records";
 import { indexedPass, recordsWhere } from "./record-index";
 import { holidaySet, isBusinessDay, nonBusinessDaysBetween, watDate } from "./calendar";
 import { canonicalDigest } from "../lib/digests";
+import { dueNeedsReversalReview } from "./reversal-review";
 
 const HOUR = 60 * 60 * 1000;
 export type { RetryDecisionKind };
@@ -175,6 +176,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     ...(noticeRequired ? { noticeRequired } : {}),
   });
   const finalNotice: NoticeRequirement = { purpose: "final_attempt", leadHours: 0, requiredBy: null, noticeId: null, acceptedAt: null, evidenced: false };
+  if (dueNeedsReversalReview(state, due)) return explain("blocked", "reversal_review", "Collection is paused for renewed Finance review of an earlier reversal decision. Resolve that review and run reconciliation before planning a retry.");
   if(recordsWhere(state,'connected-intents','data.dueItemId',due.id).some(r=>['authorised','pending','unknown'].includes(r.status))) return explain('blocked','in_flight','A pay-by-bank payment is pending or has an unknown outcome. Reconcile it before scheduling another collection.');
 
   // Row 1: settled by any channel, or the obligation is frozen or closed.
