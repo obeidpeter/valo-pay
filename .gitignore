@@ -87,3 +87,6 @@ exports/
 **/test-results/
 **/playwright-database-report/
 **/test-results-database/
+
+# Verified official Node distribution installed by publishing builds.
+/.deployment-runtime/

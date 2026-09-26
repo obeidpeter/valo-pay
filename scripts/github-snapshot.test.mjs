@@ -26,8 +26,8 @@ assert.deepEqual(changedFiles(preserved, [remoteWorkflow, otherRemoteWorkflow]),
 assert.deepEqual(changedFiles([source, workflow], [source, remoteWorkflow]), [workflow]);
 assert.deepEqual(changedFiles(preserved, preserved), []);
 
-for (const path of ["README.md", "artifacts/api-server/src/app.ts", "lib/db/src/schema/index.ts", "scripts/github-sync.mjs", ".github/workflows/ci.yml", "docs/design/console.md"]) assert.equal(allowedPath(path), true);
-for (const path of [".agents/memory/MEMORY.md", ".conversation/file.md", "docs/source/business.txt", "docs/PUBLISHED_SANDBOX_VERIFICATION.md", "artifacts/valo-pay/.env.local", "artifacts/api-server/dist/index.js", "lib/backups/records.json", "scripts/password.key", "lib/../private.json", ".github/workflows/deploy.yml", ".github/workflows/ci.yaml", ".github/actions/custom/action.yml", ".github/workflows/../private.yml"]) assert.equal(allowedPath(path), false, path);
+for (const path of ["README.md", ".node-version", "docs/deployment-node.md", "artifacts/api-server/src/app.ts", "lib/db/src/schema/index.ts", "scripts/github-sync.mjs", ".github/workflows/ci.yml", "docs/design/console.md"]) assert.equal(allowedPath(path), true);
+for (const path of [".agents/memory/MEMORY.md", ".conversation/file.md", "docs/source/business.txt", "docs/PUBLISHED_SANDBOX_VERIFICATION.md", ".deployment-runtime/node-v24.15.0-linux-x64/bin/node", "scripts/.deployment-runtime/install.sh", "artifacts/valo-pay/.env.local", "artifacts/api-server/dist/index.js", "lib/backups/records.json", "scripts/password.key", "lib/../private.json", ".github/workflows/deploy.yml", ".github/workflows/ci.yaml", ".github/actions/custom/action.yml", ".github/workflows/../private.yml"]) assert.equal(allowedPath(path), false, path);
 assert.throws(() => assertSafeText("fixture", "ghp_" + "a".repeat(36)), /Potential credential/);
 assert.throws(() => assertSafeText("fixture", ["postgres:", "//real:password", "@example.invalid/db"].join("")), /Potential credential/);
 assert.doesNotThrow(() => assertSafeText("fixture", 'process.env.CLERK_SECRET_KEY'));
@@ -36,17 +36,19 @@ try {
   execFileSync("git", ["init", "-q", root]);
   execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: root });
   mkdirSync(join(root, ".agents"));
-  for (const [path, text] of [["README.md", "# Example\n"], ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"], [".agents/internal.md", "private local material"]]) writeFileSync(join(root, path), text);
+  mkdirSync(join(root, "docs"));
+  mkdirSync(join(root, ".deployment-runtime"));
+  for (const [path, text] of [["README.md", "# Example\n"], ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"], [".node-version", "24.15.0\n"], ["docs/deployment-node.md", "# Deployment Node\n"], [".deployment-runtime/artifact.sh", "not source\n"], [".agents/internal.md", "private local material"]]) writeFileSync(join(root, path), text);
   execFileSync("git", ["add", "."], { cwd: root });
-  assert.equal(snapshot(root).files.length, 2);
-  assert.deepEqual(snapshot(root).excluded, [".agents/internal.md"]);
+  assert.deepEqual(snapshot(root).files.map(f => f.path), [".node-version", "README.md", "docs/deployment-node.md", "pnpm-lock.yaml"]);
+  assert.deepEqual(snapshot(root).excluded, [".agents/internal.md", ".deployment-runtime/artifact.sh"]);
   mkdirSync(join(root, ".github/workflows"), { recursive: true });
   writeFileSync(join(root, ".github/workflows/ci.yml"), "name: Approved CI\n");
   writeFileSync(join(root, ".github/workflows/deploy.yml"), "name: Unreviewed deployment\n");
   execFileSync("git", ["add", ".github"], { cwd: root });
-  assert.equal(snapshot(root).files.length, 3);
+  assert.equal(snapshot(root).files.length, 5);
   assert.equal(snapshot(root).files.find(f => f.path === ".github/workflows/ci.yml").content, "name: Approved CI\n");
-  assert.deepEqual(snapshot(root).excluded, [".agents/internal.md", ".github/workflows/deploy.yml"]);
+  assert.deepEqual(snapshot(root).excluded, [".agents/internal.md", ".deployment-runtime/artifact.sh", ".github/workflows/deploy.yml"]);
   writeFileSync(join(root, ".github/workflows/ci.yml"), "ghp_" + "a".repeat(36));
   assert.throws(() => snapshot(root), /Potential credential/);
   writeFileSync(join(root, ".github/workflows/ci.yml"), "name: Approved CI\n");

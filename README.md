@@ -36,6 +36,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 | `docs/audit-remediation-2026-09-26.md` | All twelve audit findings, their fixes, regression evidence and remaining deployment checks. |
 | `docs/record-list-index-deployment.md` | Deploying the read indexes of migrations 002, 007 and 008 to an existing database. |
 | `docs/deployment.md` | What the Replit deployment runs and gates on, what Autoscale means for scheduled closes, exports and per-address limits, the background worker thread that runs them (its connections, crashes and shutdown), the two ways to run closes on time (a Reserved VM, or the one-shot close pass from a Scheduled Deployment), sandbox expiry and Clerk telemetry on the deployed host. |
+| `docs/deployment-node.md` | The verified Node version used for publishing builds and production startup, checksum checks and the runtime upgrade procedure. |
 | `docs/frontend-contract.md` | The console's contract with the API: records, pages, mutations, imports and exports, and every console behaviour a page must keep. |
 | `docs/design/console.md` | The design rationale for the console, page by page and audit by audit, against the usability heuristics and interaction-design principles. |
 | `docs/security-review.md` | The security review: what is sound, the findings and their status, what belongs to the host. |
