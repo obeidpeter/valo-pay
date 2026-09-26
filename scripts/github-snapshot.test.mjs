@@ -34,6 +34,7 @@ assert.doesNotThrow(() => assertSafeText("fixture", 'process.env.CLERK_SECRET_KE
 const root = mkdtempSync(join(tmpdir(), "valopay-github-test-"));
 try {
   execFileSync("git", ["init", "-q", root]);
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: root });
   mkdirSync(join(root, ".agents"));
   for (const [path, text] of [["README.md", "# Example\n"], ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"], [".agents/internal.md", "private local material"]]) writeFileSync(join(root, path), text);
   execFileSync("git", ["add", "."], { cwd: root });
@@ -55,7 +56,11 @@ try {
   writeFileSync(join(root, "README.md"), Buffer.from([0]));
   assert.throws(() => snapshot(root), /Binary file/);
   rmSync(join(root, "README.md"));
-  symlinkSync("/etc/hosts", join(root, "README.md"));
+  // Junctions need no Windows developer-mode privilege and exercise the same
+  // refusal of a tracked path whose working file is a link instead of a file.
+  const linkTarget = join(root, 'link-target');
+  mkdirSync(linkTarget);
+  symlinkSync(linkTarget, join(root, "README.md"), process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => snapshot(root), /Unsupported link/);
 } finally {
   rmSync(root, { recursive: true, force: true });

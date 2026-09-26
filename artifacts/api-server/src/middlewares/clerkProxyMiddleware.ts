@@ -26,14 +26,20 @@
  *   app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
  */
 
-import type { IncomingHttpHeaders } from 'http';
+import type { IncomingHttpHeaders, ClientRequest, IncomingMessage } from 'http';
 import type { Request, RequestHandler } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { originFor } from '../lib/staff-access';
 import { withoutSandboxCookies } from '../lib/sandbox-cookie';
+import { clientNetwork, createWindowCounter } from '../lib/request-limits';
 
 const CLERK_FAPI = 'https://frontend-api.clerk.dev';
 export const CLERK_PROXY_PATH = '/api/__clerk';
+export const CLERK_PROXY_LIMITS = {
+  deadlineMs: 30_000, requestBytes: 16 * 1024 * 1024,
+  bufferedBytes: 4 * 1024 * 1024, responseBytes: 32 * 1024 * 1024,
+  concurrency: 32, networkConcurrency: 8, requestsPerMinute: 240,
+};
 
 /**
  * Returns the first effective public hostname for the given request,
@@ -70,10 +76,22 @@ export function clerkProxyMiddleware(): RequestHandler {
   if (!secretKey) {
     return (_req, _res, next) => next();
   }
+  return createBoundedClerkProxy(secretKey);
+}
 
-  const proxy = createProxyMiddleware({
-    target: CLERK_FAPI,
+/** Options are injection points for offline tests, never request or environment input. */
+export function createBoundedClerkProxy(secretKey: string, options: { target?: string; limits?: Partial<typeof CLERK_PROXY_LIMITS> } = {}): RequestHandler {
+  const limits = { ...CLERK_PROXY_LIMITS, ...options.limits };
+  const windows = createWindowCounter({ limit: limits.requestsPerMinute, windowMs: 60_000, maxKeys: 5_000 });
+  let active = 0;
+  const networks = new Map<string, number>();
+  type Flight = { closed: boolean; upstream?: ClientRequest; response?: IncomingMessage; fail(status: number): void };
+  const flights = new WeakMap<IncomingMessage, Flight>();
+
+  const proxy = createProxyMiddleware<Request>({
+    target: options.target ?? CLERK_FAPI,
     changeOrigin: true,
+    proxyTimeout: limits.deadlineMs,
     // Take over the response so it can be re-sent with a Content-Length (see
     // proxyRes); the deployment edge rejects chunked proxied responses.
     selfHandleResponse: true,
@@ -81,6 +99,14 @@ export function clerkProxyMiddleware(): RequestHandler {
       path.replace(new RegExp(`^${CLERK_PROXY_PATH}`), ''),
     on: {
       proxyReq: (proxyReq, req) => {
+        const flight = flights.get(req);
+        if (!flight || flight.closed) { proxyReq.destroy(); return; }
+        flight.upstream = proxyReq;
+        let received = 0;
+        req.on('data', (chunk: Buffer) => {
+          received += chunk.length;
+          if (received > limits.requestBytes) flight.fail(413);
+        });
         // The configured origin the request's host names, else the first; checked to exist before proxying.
         const origin = originFor(req)!;
         proxyReq.setHeader('Clerk-Proxy-Url', `${origin.origin}${CLERK_PROXY_PATH}`);
@@ -111,6 +137,9 @@ export function clerkProxyMiddleware(): RequestHandler {
       // Content-Encoding is preserved. Length-known responses (e.g. /npm/*
       // assets) and body-less responses stream through without buffering.
       proxyRes: (proxyRes, req, res) => {
+        const flight = flights.get(req);
+        if (!flight || flight.closed) { proxyRes.destroy(); return; }
+        flight.response = proxyRes;
         const headers = { ...proxyRes.headers };
         // Transfer-Encoding/Connection are hop-by-hop (RFC 7230 §6.1).
         delete headers['transfer-encoding'];
@@ -128,33 +157,39 @@ export function clerkProxyMiddleware(): RequestHandler {
           status < 200 ||
           status === 204 ||
           status === 304;
+        const length = headers['content-length'];
+        if (!bodyless && length !== undefined && (!/^\d+$/.test(String(length)) || Number(length) > limits.responseBytes)) {
+          flight.fail(502); return;
+        }
+        proxyRes.on('error', () => flight.fail(502));
+        proxyRes.on('aborted', () => flight.fail(502));
         if (headers['content-length'] !== undefined || bodyless) {
           res.writeHead(status, headers);
           // Headers are already sent, so abort the response if the upstream
           // stream errors mid-pipe (e.g. ECONNRESET) rather than leaving an
           // unhandled 'error' or a hung client.
-          proxyRes.on('error', () => res.destroy());
           proxyRes.pipe(res);
           return;
         }
 
         const chunks: Buffer[] = [];
-        proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+        let bytes = 0;
+        proxyRes.on('data', (chunk: Buffer) => {
+          if (flight.closed) return;
+          bytes += chunk.length;
+          if (bytes > limits.bufferedBytes) { chunks.length = 0; flight.fail(502); return; }
+          chunks.push(chunk);
+        });
         proxyRes.on('end', () => {
+          if (flight.closed) return;
           const body = Buffer.concat(chunks);
           headers['content-length'] = String(body.length);
           res.writeHead(status, headers);
           res.end(body);
         });
-        proxyRes.on('error', () => {
-          if (!res.headersSent) {
-            // Set a length so the empty 502 isn't sent chunked (which the
-            // deployment edge would reject just like the original response).
-            res.writeHead(502, { 'content-length': '0' });
-          }
-          res.end();
-        });
       },
+      // Fixed error responses never disclose request URLs, cookies or upstream credentials.
+      error: (_error, req) => { flights.get(req)?.fail(502); },
     },
   }) as RequestHandler;
   return (req, res, next) => {
@@ -162,6 +197,48 @@ export function clerkProxyMiddleware(): RequestHandler {
       res.status(503).json({ error: 'Sign-in is not available on this host.', requestId: req.id });
       return;
     }
-    return proxy(req, res, next);
+    // httpxy skips its proxyReq event for Expect requests. That would bypass
+    // header sanitisation, cookie stripping and body accounting, so refuse
+    // this unsupported handshake before any upstream request exists.
+    if (req.headers.expect !== undefined) {
+      res.setHeader('Connection', 'close');
+      res.status(417).json({ error: 'This sign-in request uses an unsupported handshake.', requestId: req.id });
+      return;
+    }
+    const network = clientNetwork(req.ip ?? req.socket.remoteAddress);
+    if (!windows.take(network) || active >= limits.concurrency || (networks.get(network) ?? 0) >= limits.networkConcurrency) {
+      res.setHeader('Retry-After', '60');
+      res.status(429).json({ error: 'Sign-in is busy. Wait a minute, then try again.', requestId: req.id });
+      return;
+    }
+    const length = req.headers['content-length'];
+    if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > limits.requestBytes)) {
+      res.setHeader('Connection', 'close');
+      res.status(413).json({ error: 'The sign-in request is too large.', requestId: req.id });
+      return;
+    }
+    active++; networks.set(network, (networks.get(network) ?? 0) + 1);
+    const cleanup = () => {
+      if (flight.closed) return;
+      flight.closed = true; clearTimeout(timer);
+      active--; const count = (networks.get(network) ?? 1) - 1;
+      if (count) networks.set(network, count); else networks.delete(network);
+      req.unpipe(flight.upstream); flight.upstream?.destroy(); flight.response?.destroy();
+      req.off('aborted', cleanup);
+    };
+    const flight: Flight = { closed: false, fail(status) {
+      if (flight.closed) return;
+      cleanup();
+      if (res.headersSent) { res.destroy(); return; }
+      if (!req.complete) res.setHeader('Connection', 'close');
+      res.status(status).json({ error: status === 413 ? 'The sign-in request is too large.' : 'Sign-in could not connect. Try again shortly.', requestId: req.id });
+    } };
+    flights.set(req, flight);
+    const timer = setTimeout(() => flight.fail(504), limits.deadlineMs);
+    timer.unref();
+    req.once('aborted', cleanup);
+    res.once('close', cleanup); res.once('finish', cleanup);
+    // Cancel the upstream even if the client disconnects before headers arrive.
+    return proxy(req, res, (error?: unknown) => { if (error) flight.fail(502); else { cleanup(); next(); } });
   };
 }

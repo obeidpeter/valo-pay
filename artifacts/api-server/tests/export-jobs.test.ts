@@ -31,7 +31,8 @@ assert.equal(state.records.filter(record => record.kind === 'exports').length, 1
   assert.throws(() => retryExport(other, readOnly, mandates.id), (error: any) => error.status === 403 && /read-only/.test(error.message)); checks++;
 }
 const repository: ExportJobRepository = {
-  async candidates(limit) { return state.records.filter(record => record.kind === 'exports' && exportIsClaimable(record, new Date(clock).toISOString())).slice(0, limit).map(record => ({ merchantId: record.merchantId, id: record.id })); },
+  async queueEnd() { return state.records.filter(record => record.kind === 'exports' && exportIsClaimable(record, new Date(clock).toISOString())).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)).at(-1); },
+  async candidates(limit, after) { return state.records.filter(record => record.kind === 'exports' && exportIsClaimable(record, new Date(clock).toISOString()) && (!after || record.createdAt > after.createdAt || (record.createdAt === after.createdAt && record.id > after.id))).sort((a,b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)).slice(0, limit).map(record => ({ merchantId: record.merchantId, id: record.id, createdAt: record.createdAt })); },
   async claim(merchantId, id) {
     transaction = true;
     try {
@@ -78,7 +79,7 @@ const storage: ExportJobStorage = {
   },
 };
 const generate = async (claim: ClaimedExport) => { assert.equal(transaction, false); checks++; generations++; return generateExportArtifact(claim); };
-const target = { merchantId: state.merchant.id, id: job.id };
+const target = { merchantId: state.merchant.id, id: job.id, createdAt: now };
 lostUploadResponse = true;
 assert.equal(await processExportJob(repository, storage, generate, target), 'ready'); checks++;
 assert.equal(uploads, 1); assert.equal(generations, 1); checks += 2;
@@ -135,9 +136,48 @@ await runExportPass({ repository, storage, generate: async claim => { concurrent
 assert.equal(peak, 2); checks++;
 assert.ok(MAX_EXPORT_BYTES <= 32 * 1024 * 1024); checks++;
 let attempted:string[]=[];
-const targets=Array.from({length:5},(_,index)=>({merchantId:target.merchantId,id:`blocked-${index}`}));
+const targets=Array.from({length:5},(_,index)=>({merchantId:target.merchantId,id:`blocked-${index}`,createdAt:now}));
 await runExportPass({repository:{...repository,candidates:async limit=>{assert.equal(limit,20);return targets;},claim:async(_merchant,id)=>{attempted.push(id);return null;}},storage,generate});
 assert.equal(attempted.length,5);checks++;
+
+// Two full lender queues used to hide every newer job forever. The actual
+// worker continues its bounded scan across ticks, then revisits skipped work.
+{
+ const pending = Array.from({length:61},(_,index)=>({merchantId:`lender-${Math.floor(index/10)}`,id:`fair-${String(index).padStart(3,'0')}`,createdAt:now}));
+ const visited:string[]=[];
+ const scans:Array<string|undefined>=[];
+ const fair = startExportWorker({intervalMs:60_000,repository:{...repository,
+  queueEnd:async()=>pending.at(-1),
+  candidates:async(limit,after)=>{scans.push(after?.id);return pending.filter(row=>!after || row.id>after.id).slice(0,limit);},
+  claim:async(_merchant,id)=>{visited.push(id);return null;}
+ },storage,generate});
+ await fair.settle();
+ for(let pass=0;pass<3;pass++)await fair.tick();
+ assert.equal(new Set(visited).size,61,'all jobs beyond multiple full pages are attempted despite busy oldest lenders');
+ assert.deepEqual(scans,[undefined,'fair-019','fair-039','fair-059']);
+ await fair.tick();
+ assert.equal(visited.filter(id=>id==='fair-000').length,2,'the next cycle revisits the oldest skipped work');
+ fair.stop();await fair.settle();checks+=3;
+ // Sustained arrivals cannot postpone a return to work skipped at the head.
+ const growing = pending.slice(0,40), growthVisits:string[]=[];
+ const growth = startExportWorker({intervalMs:60_000,repository:{...repository,
+  queueEnd:async()=>growing.at(-1),
+  candidates:async(limit,after,through)=>growing.filter(row=>(!after||row.id>after.id)&&(!through||row.id<=through.id)).slice(0,limit),
+  claim:async(_merchant,id)=>{growthVisits.push(id);return null;}
+ },storage,generate});
+ await growth.settle();
+ for(let page=0;page<3;page++){
+  for(let n=0;n<20;n++)growing.push({...pending[0]!,id:`fair-${String(growing.length).padStart(3,'0')}`});
+  await growth.tick();
+ }
+ assert.equal(growthVisits.filter(id=>id==='fair-000').length,2,'fixed sweep end revisits old work even as a full page arrives each pass');
+ growth.stop();await growth.settle();checks++;
+ // A removed final page wraps immediately; failed scans preserve the cursor.
+ const scan={after:{id:'removed',createdAt:now}};
+ let reads=0;
+ await runExportPass({scan,repository:{...repository,candidates:async(_limit,after)=>{reads++;return after?[]:[pending[0]!];},claim:async()=>null},storage,generate});
+ assert.equal(reads,2);assert.equal(scan.after,undefined);checks+=2;
+}
 
 // A large output is rejected before upload, and an oversized source is rejected
 // before rendering. The successful sample records a real byte-generation cost.

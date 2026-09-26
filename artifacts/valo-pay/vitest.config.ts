@@ -4,9 +4,10 @@
 import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { clerkChunk } from './build/clerk-chunk';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [clerkChunk(), react()],
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "src") },
     dedupe: ["react", "react-dom"],

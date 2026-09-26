@@ -75,7 +75,8 @@
   --foreground: 220 28% 17%;
   
   --border: 220 14% 89%;
-  --input: 220 14% 82%;
+  /* Necessary control boundaries, separate from quiet decorative dividers; >=3:1 on form surfaces. */
+  --input: 220 12% 48%;
   --ring: 16 80% 38%;
   
   --card: 0 0% 100%;
@@ -139,7 +140,7 @@
     --foreground: 210 20% 98%;
     
     --border: 220 18% 22%;
-    --input: 220 18% 32%;
+    --input: 220 14% 60%;
     --ring: 214 32% 91%;
     
     --card: 222 22% 12%;
@@ -191,6 +192,9 @@
 @layer base {
   * {
     @apply border-border;
+  }
+  :where(input:not([type=checkbox]):not([type=radio]), select, textarea) {
+    border-color: hsl(var(--input));
   }
   body {
     @apply font-sans antialiased bg-background text-foreground;
@@ -272,6 +276,14 @@
 .console-content details[open] > summary { margin-bottom: .75rem; }
 @media screen {
   html:has(.console-shell) { overflow: hidden; }
+  .console-shell { container: console / inline-size; }
+  .console-sidebar, .console-desktop-context { display: none; }
+  /* 15rem of navigation plus at least 33rem of working space. Container rem units follow the
+     actual root text size, unlike a viewport media breakpoint's initial-font-size rem units. */
+  @container console (min-width: 48rem) {
+    .console-phone-bar { display: none; }
+    .console-sidebar, .console-desktop-context { display: flex; }
+  }
 }
 @media (max-width: 767px) {
   .environment-strip { font-size: 10px; line-height: 1.5; text-align: center; }

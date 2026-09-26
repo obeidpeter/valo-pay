@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 const domain=process.env.REPLIT_DEV_DOMAIN;
 if(!domain||!/^[a-z0-9.-]+\.replit\.dev(?::\d+)?$/i.test(domain))throw new Error("Refusing to run: REPLIT_DEV_DOMAIN must be a *.replit.dev host.");
 const base=`https://${domain}`;
-// Compatibility test: an existing browser must keep its sandbox after the rename.
+// A planted legacy cookie must not select a fresh browser's sandbox.
 const legacyToken=randomBytes(32).toString("hex");
 let cookie=`valo_sandbox=${legacyToken}`,merchantId="",checks=0;
 async function call(path,{method="GET",body,key,expected=200,foreign=false}={}){
@@ -20,9 +20,10 @@ async function call(path,{method="GET",body,key,expected=200,foreign=false}={}){
 }
 const workspace=await call("workspace");assert.equal(workspace.merchants.length,2);assert.equal(workspace.productionEnabled,false);merchantId=workspace.merchants[0].id;
 // On HTTPS the current cookie is __Host-valopay_sandbox; the answer sets it first, then clears the legacy one.
-assert.equal(cookie,`__Host-valopay_sandbox=${legacyToken}`,"Legacy sandbox cookie must migrate without changing its token.");
+assert.match(cookie,/^__Host-valopay_sandbox=[a-f0-9]{64}$/);
+assert.notEqual(cookie,`__Host-valopay_sandbox=${legacyToken}`,"Legacy cookies must not select a sandbox.");
 const restoredWorkspace=await call("workspace");
-assert.deepEqual(restoredWorkspace.merchants.map(m=>m.id),workspace.merchants.map(m=>m.id),"Renamed cookie must retain the same lender workspaces.");
+assert.deepEqual(restoredWorkspace.merchants.map(m=>m.id),workspace.merchants.map(m=>m.id),"The new host cookie retains the same lender workspaces.");
 for(const path of ["overview","reports","gates","settings","records/mandates","records/exceptions","records/payments","openapi.json"])await call(path);
 const list=async kind=>(await call(`records/${kind}`)).items;
 const action=(action,recordId,extra={})=>call("actions",{method:"POST",body:{action,recordId,reason:"Synthetic API smoke verification",...extra}});

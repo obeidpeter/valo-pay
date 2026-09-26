@@ -10,12 +10,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildStamp } from "../artifacts/api-server/build-stamp.mjs";
 import { runSuites, suites } from "./run-integration-tests.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const tsx = join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs");
-const loader = join(root, "scripts", "node_modules", "tsx", "dist", "loader.mjs");
+const loader = pathToFileURL(join(root, "scripts", "node_modules", "tsx", "dist", "loader.mjs")).href;
 const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:VALOPAY_|DATABASE_URL$|CI$)/.test(name)));
 let checks = 0;
 

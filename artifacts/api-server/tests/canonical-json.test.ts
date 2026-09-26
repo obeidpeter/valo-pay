@@ -16,6 +16,20 @@ const root = path.resolve(import.meta.dirname, "..", "..", "..");
 const tsx = path.join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs");
 const REPORT = process.env.VALOPAY_CANONICAL_JSON_REPORT === "1";
 
+// Windows does not use LANG/LC_ALL for ICU's default locale. Simulate only
+// the default-locale entry points there; explicit locales still use the real
+// ICU implementation. Linux CI continues to exercise actual process locales.
+// Without this adapter the en-US bootstrap below recursively spawned itself.
+if (process.platform === 'win32') {
+  const locale = REPORT ? String(process.env.LC_ALL || 'en_US').split('.')[0]!.replace('_', '-') : 'en-US';
+  const NativeCollator = Intl.Collator, compare = String.prototype.localeCompare;
+  Intl.Collator = new Proxy(NativeCollator, {
+    construct(target, args) { return Reflect.construct(target, [args[0] ?? locale, args[1]]); },
+    apply(target, receiver, args) { return Reflect.apply(target, receiver, [args[0] ?? locale, args[1]]); },
+  });
+  String.prototype.localeCompare = function(other: string, locales?: Intl.LocalesArgument, options?: Intl.CollatorOptions) { return compare.call(this, other, locales ?? locale, options); };
+}
+
 // The legacy copies call localeCompare, so the comparison is made where
 // earlier builds ran: a host whose default locale is en-US.
 if (!REPORT && new Intl.Collator().resolvedOptions().locale !== "en-US") {

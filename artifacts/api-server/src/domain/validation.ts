@@ -1,6 +1,6 @@
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, currencyMinorUnit, defaultStatus, describeIssues,
-  editableKinds, exceptionCatalogue, exceptionTransitions, executionOwners, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
+  editableKinds, exceptionCatalogue, exceptionTransitions, executionOwners, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode, observationEventKey,
   normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, recordTextLimits, resolveExceptionType, roles, isKnownFailureCode, isRealDate, templateTextProblems,
 } from "@workspace/valopay-schema";
 import { isDeepStrictEqual } from "node:util";
@@ -9,6 +9,7 @@ import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./record
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays, watDate } from "./calendar";
 import { countedAttempts, minimumTicketKobo, policySummary } from "./policy-engine";
+import { exceptionActionFields, exceptionReviewSubjectChanged } from './exception-integrity';
 
 const roleSet = new Set<string>(roles);
 const editable = new Set<string>(editableKinds);
@@ -169,8 +170,23 @@ export function validateRecord(
   for (const field of ['case', 'importIdentity']) {
     if (JSON.stringify(data[field]) !== JSON.stringify(existing?.data[field])) refuse(field, `Use the dedicated workflow to change ${field === 'case' ? 'case coordination' : 'import provenance'}.`);
   }
-  // The rules a resolution follows are resolve_exception's to record (resolutionRuleVersion).
-  if (kind === "exceptions" && data.resolutionRuleVersion !== existing?.data.resolutionRuleVersion) throw new Error("An exception's resolution rule version is recorded by Resolve exception and cannot be changed here.");
+  for (const field of ['legacyReversalReviewIds', 'legacyReversalReviewAppliedId', 'providerIdentityHeld']) {
+    if (!isDeepStrictEqual(data[field], existing?.data[field])) throw new Error('Reversal and provider identity review holds are recorded by reconciliation and cannot be changed here.');
+  }
+  if (kind === "exceptions") {
+    requireRole(ctx, ["Admin", "Finance", "Operations"]);
+    if (existing && exceptionReviewSubjectChanged(existing, input, state.records.find(record => record.id === existing.data.linkedRecordId))) {
+      throw new Error('The subject of a historical evidence review cannot be changed. Keep its customer, amount, type, condition, and linked record unchanged.');
+    }
+    if (existing && ['resolved', 'closed'].includes(existing.status)) {
+      const closingOnly = existing.status === 'resolved' && input.status === 'closed'
+        && ['name', 'reference', 'amountKobo', 'customerId', 'data'].every(field => isDeepStrictEqual(input[field as keyof typeof input], existing[field as keyof typeof existing]));
+      if (!closingOnly) throw new Error('A completed exception decision cannot be edited. Record a new review through its dedicated workflow.');
+    }
+    for (const field of exceptionActionFields) if (!isDeepStrictEqual(data[field], existing?.data[field])) {
+      throw new Error(`An exception's ${field} is recorded by its dedicated resolution workflow and cannot be changed here.`);
+    }
+  }
   if (isUpdate && !existing) throw new Error("An update requires the existing record id.");
   if (existing?.status === "approved" && (kind === "policies" || kind === "templates")) {
     throw new Error("Approved versions cannot be edited. Create a new draft version instead.");
@@ -200,6 +216,10 @@ export function validateRecord(
 
   if (kind === "customers") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
+    // CSV validation has already compared the row with its own source identity and other references.
+    if (!problems && input.reference && state.records.some(record => record.kind === 'customers' && record.id !== existing?.id && record.reference === input.reference)) {
+      refuse('reference', 'This customer reference is already used in this lender. Enter a different reference.');
+    }
     if (data.accountMasked !== undefined && !masked(data.accountMasked)) refuse("accountMasked", "Mask the account number, for example •••• 1234. Do not enter a full account number.");
     if (data.phoneMasked !== undefined && !masked(data.phoneMasked)) refuse("phoneMasked", "Mask the phone number, for example +234 •••• 32. Do not enter a full phone number.");
   }
@@ -281,6 +301,10 @@ export function validateRecord(
   if (kind === "observations") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
     if (!input.reference) refuse("reference", "Enter the original provider reference for this payment evidence.");
+    const eventKey = observationEventKey(data);
+    if (!problems && eventKey !== undefined && state.records.some(record => record.kind === 'observations' && record.id !== existing?.id && observationEventKey(record.data) === eventKey)) {
+      refuse('eventId', 'This provider connection and delivery channel already have this event ID. Review the saved payment evidence.');
+    }
     if (input.customerId) link("customerId", input.customerId, "customers", "observation customer");
     if (isUpdate) throw new Error("Saved payment evidence cannot be edited. Add a new record to correct it.");
     // Evidence of money received; an absent amount would be saved as 0.
@@ -387,8 +411,12 @@ export function validateRecord(
     }
     // Reconciliation copies these from the provider's lines, the fee schedule and the linked statement credit, and derives the status from them.
     // Compared by value: jsonb returns enteredTotals' keys in its own order.
-    for (const key of ["statementObservationId", "statementNetKobo", "statementOtherCurrencies", "lineObservationIds", "linePaymentIds", "otherCurrencyLineIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals"]) {
+    for (const key of ["statementObservationId", "statementNetKobo", "statementOtherCurrencies", "lineObservationIds", "linePaymentIds", "otherCurrencyLineIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals", "providerIdentityReview", "providerIdentityKey"]) {
       if (!isDeepStrictEqual(data[key], existing?.data[key])) throw new Error(`Settlement batch ${key} is recorded by reconciliation and cannot be changed here.`);
+    }
+    if (existing?.data.providerIdentityKey !== undefined && (input.reference !== existing.reference || data.batchReference !== existing.data.batchReference)) throw new Error('A settlement batch identity is recorded by reconciliation and its reference cannot be changed here.');
+    if (Array.isArray(existing?.data.lineObservationIds) || existing?.data.providerIdentityKey !== undefined) for (const key of ['provider', 'providerConnection']) {
+      if (!isDeepStrictEqual(data[key], existing?.data[key])) throw new Error(`A settlement batch built from provider lines cannot change ${key}.`);
     }
   }
 }

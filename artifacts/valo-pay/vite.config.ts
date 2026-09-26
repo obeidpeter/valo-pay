@@ -2,6 +2,7 @@ import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
+import { clerkChunk } from './build/clerk-chunk';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
@@ -42,6 +43,7 @@ if (!/^https?:\/\/[^/?#]+$/.test(apiOrigin)) {
 export default defineConfig({
   base: basePath,
   plugins: [
+    clerkChunk(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),

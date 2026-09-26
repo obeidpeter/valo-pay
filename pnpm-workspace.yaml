@@ -41,6 +41,8 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
+  # gaxios 6 uses uuid's CommonJS v4 API. 11.1.1 retains it and fixes GHSA-w5hq-g745-h8pq.
+  'gaxios@6.7.1>uuid': 11.1.1
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
   '@expo/ngrok-bin>@expo/ngrok-bin-darwin-arm64': '-'
   '@expo/ngrok-bin>@expo/ngrok-bin-darwin-x64': '-'

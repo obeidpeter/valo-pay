@@ -164,7 +164,7 @@ try{
  let uploading=0,bothUploading!:()=>void;const bothBlocked=new Promise<void>(resolve=>{bothUploading=resolve;});
  const lines:Array<{event:string;status?:string}>=[];
  const worker=startExportWorker({intervalMs:60_000,log:{info:(line:any)=>lines.push(line),error:(line:any)=>lines.push(line)} as any,
-  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id}))},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
+  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id,createdAt:new Date().toISOString()}))},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
  try{await within(bothBlocked,'Both exports in the stop() check must reach their uploads.',10_000);}finally{worker.stop();await worker.settle();}
  assert.deepEqual(lines.map(line=>[line.event,line.status]),[['export.job','released'],['export.job','released']]);
  for(const id of stoppedIds){const view=(await api(`/exports/${id}`)).body;assert.equal(view.status,'queued');assert.equal(view.error,undefined);}
@@ -206,7 +206,7 @@ try{
 
  // Two exports of one lender in one pass: the worker's two slots take turns at the lender instead of the second
  // skipping the first's claim, so both finish in the same pass.
- const pair=[await api('/exports',{method:'POST',body:input,key:'pair-one'}),await api('/exports',{method:'POST',body:input,key:'pair-two'})].map(queuedPair=>({merchantId,id:queuedPair.body.id as string}));
+ const pair=[await api('/exports',{method:'POST',body:input,key:'pair-one'}),await api('/exports',{method:'POST',body:input,key:'pair-two'})].map(queuedPair=>({merchantId,id:queuedPair.body.id as string,createdAt:new Date().toISOString()}));
  const {runExportPass}=await import('../src/lib/export-worker');
  assert.deepEqual(await runExportPass({repository:{...repository,candidates:async()=>pair},storage,generate:generateExportArtifact}),['ready','ready']);
 
@@ -281,7 +281,34 @@ try{
  assert.ok(recent<500,`${recent} entries from this test's hour`);
  assert.ok(scans.length>0&&scans.every(scan=>scan.rows+scan.removed<=recent),`the head read examined ${JSON.stringify(scans)} rows of a chain of over 5,000 entries, ${recent} of them from the hour before the claim`);
  state=await read();assert.equal(verifyAudit(state).valid,true,'busy hand-backs, shared lender turns and bounded head reads keep one valid audit chain');
- console.log('Durable export DB checks passed: queue replay, tenant isolation, private metadata, lock-free upload, audit chain, crash recovery, stable object adoption, retriable failures, hand-back on stop, progress through a busy lender, hand-back when it stays busy, two slots on one lender and a bounded audit head.');
+ // Real queue selection and real lender locks: twenty oldest jobs from two
+ // busy lenders cannot starve a later free lender. Microsecond cursor order
+ // matters: the later job is only one microsecond newer than the first page.
+ {
+  const foreign = await inWorkspace({...request(),headers:{cookie:`valopay_sandbox=${foreignToken}`}},response(),listMerchants);
+  const freeLender = foreign[0]!.id, prefix=`fair-${randomUUID()}-`;
+  const fairIds = Array.from({length:21},(_,i)=>`${prefix}${String(i).padStart(2,'0')}`);
+  for(let i=0;i<fairIds.length;i++)await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,data,created_at)
+    VALUES($1,$2,'exports','Synthetic fair queue','queued',$3,$4::timestamptz)`,
+    [fairIds[i],i<10?merchantId:i<20?siblingId:freeLender,{kind:'customers',format:'json',requestedRole:'Admin',requestedBy:'Sandbox Admin',bucket:'private',objectName:`fair/${fairIds[i]}.json`,attempts:0},`1900-01-01T00:00:00.${i<20?'123456':'123457'}Z`]);
+  const lock = await pool.connect();
+  const scan:import('../src/lib/export-worker').ExportQueueScan={};
+  const fairRepository={...repository,candidates:async(...args:Parameters<typeof repository.candidates>)=>(await repository.candidates(...args)).filter(row=>row.id.startsWith(prefix))};
+  try {
+    await lock.query('BEGIN'); await lock.query('SELECT id FROM valopay_merchants WHERE id=ANY($1) FOR UPDATE',[[merchantId,siblingId]]);
+    assert.deepEqual(await runExportPass({scan,repository:fairRepository,storage,generate:generateExportArtifact}),Array(20).fill('skipped'));
+    assert.equal(scan.after?.createdAt,'1900-01-01T00:00:00.123456Z','queue cursor keeps PostgreSQL microseconds');
+    assert.deepEqual(await runExportPass({scan,repository:fairRepository,storage,generate:generateExportArtifact}),['ready']);
+    const status = (await pool.query('SELECT status FROM valopay_records WHERE id=$1',[fairIds[20]])).rows[0].status;
+    assert.equal(status,'ready','later lender completes while both older lenders remain locked');
+    await lock.query('ROLLBACK');
+    assert.deepEqual(await runExportPass({scan,repository:fairRepository,storage,generate:generateExportArtifact}),Array(20).fill('ready'),'wrapping revisits every earlier skipped job');
+  } finally {
+    await lock.query('ROLLBACK');lock.release();
+    await pool.query('DELETE FROM valopay_records WHERE id=ANY($1)',[fairIds]);
+  }
+ }
+ console.log('Durable export DB checks passed: queue replay, tenant isolation, private metadata, lock-free upload, audit chain, crash recovery, stable object adoption, retriable failures, hand-back on stop, progress through a busy lender, hand-back when it stays busy, two slots on one lender, a bounded audit head and fair cursor traversal past two locked lender queues.');
 }finally{
  if(oldDirectory===undefined)delete process.env.PRIVATE_OBJECT_DIR;else process.env.PRIVATE_OBJECT_DIR=oldDirectory;
  if(server)await new Promise<void>((resolve,reject)=>server!.close(error=>error?reject(error):resolve()));

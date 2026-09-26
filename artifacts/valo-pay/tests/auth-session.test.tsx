@@ -5,8 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { useState } from "react";
 import { expect, it, vi } from "vitest";
 import { Router } from "wouter";
-import { SignIn } from "@clerk/react";
-import { AuthShow, ClerkLoader, ClerkSlot, useSessionUser, useSignOut } from "@/lib/auth";
+import { AuthShow, ClerkLoader, ClerkSlot, ClerkSignIn, useSessionUser, useSignOut } from "@/lib/auth";
 
 vi.unmock("@/lib/auth");
 const clerk = vi.hoisted(() => ({ signOut: () => {}, signedOut: 0 }));
@@ -39,14 +38,15 @@ function Draft() {
 it("reports Clerk's session when its chunk arrives, keeps the page mounted and places Clerk's form in the page", async () => {
   let arrive!: () => void;
   const arrived = new Promise<void>((resolve) => { arrive = resolve; });
-  const load = arrived.then(() => import("@/lib/clerk-session"));
+  const pending = arrived.then(() => import("@/lib/clerk-session"));
+  const load = () => pending;
   render(
     <Router>
       <ClerkLoader load={load}>
         <Session />
         <Draft />
         <AuthShow when="signed-in"><p>Only when signed in</p></AuthShow>
-        <div data-testid="place"><ClerkSlot><SignIn /></ClerkSlot></div>
+        <div data-testid="place"><ClerkSlot><ClerkSignIn path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/overview" /></ClerkSlot></div>
       </ClerkLoader>
     </Router>,
   );
@@ -57,7 +57,7 @@ it("reports Clerk's session when its chunk arrives, keeps the page mounted and p
   act(() => { draft.focus(); });
   fireEvent.change(draft, { target: { value: "typed before Clerk arrived" } });
 
-  await act(async () => { arrive(); await load; });
+  await act(async () => { arrive(); await pending; });
   await screen.findByText("Signed in as user_sample");
   expect(screen.getByText("Only when signed in")).toBeTruthy();
   // The same input, with its value and focus: Clerk's arrival did not remount the page.
@@ -75,4 +75,38 @@ it("keeps sign-in unavailable, and shows neither signed-in nor signed-out conten
   expect(screen.queryByText("Signed out")).toBeNull();
   expect(screen.queryByText("Signed in")).toBeNull();
   expect(screen.getByText("Signed in as null")).toBeTruthy();
+});
+
+it("explains a failed auth load and retries it without losing a draft or treating failure as signed out", async () => {
+  let arrive!: () => void;
+  const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+  const pending = arrived.then(() => import("@/lib/clerk-session"));
+  const load = vi.fn<() => typeof pending>()
+    .mockRejectedValueOnce(new TypeError("Failed to fetch dynamically imported module"))
+    .mockImplementationOnce(() => pending);
+  render(<Router><ClerkLoader load={load}>
+    <Session /><Draft />
+    <AuthShow when="signed-out"><p>Signed out content</p></AuthShow>
+    <AuthShow when="signed-in"><p>Signed in content</p></AuthShow>
+    <ClerkSlot><ClerkSignIn path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/overview" /></ClerkSlot>
+  </ClerkLoader></Router>);
+  const draft = screen.getByLabelText("Draft") as HTMLInputElement;
+  fireEvent.change(draft, { target: { value: "Keep my unsaved work" } });
+  const failure = await screen.findByRole("alert");
+  expect(failure.textContent).toContain("Sign-in could not be loaded");
+  expect(screen.queryByText("Signed out content")).toBeNull();
+  expect(screen.queryByText("Signed in content")).toBeNull();
+  expect(screen.getByText("Waiting for Clerk")).toBeTruthy();
+  fireEvent.click(within(failure).getByRole("button", { name: "Try loading sign-in again" }));
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("status").textContent).toBe("Loading sign-in…");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByText("Signed out content")).toBeNull();
+  await act(async () => { arrive(); await pending; });
+  await screen.findByText("Signed in as user_sample");
+  expect(screen.getByLabelText("Draft")).toBe(draft);
+  expect(draft.value).toBe("Keep my unsaved work");
+  expect(screen.getByText("Signed in content")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Sign-in under Clerk's provider" })).toBeTruthy();
+  expect(screen.queryByRole("status")).toBeNull();
 });

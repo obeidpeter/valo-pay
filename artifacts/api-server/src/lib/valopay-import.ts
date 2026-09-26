@@ -3,7 +3,7 @@ import { canonicalDigest } from './digests';
 import { assertNoRealBankDetails, makeRecord, validateRecord } from "../domain";
 import type { ValidationProblem } from "../domain/validation";
 import type { Context, DomainState } from "../domain/types";
-import { counted, csvAmountToKobo, defaultStatus, importBooleanFields, importFieldsOf, importKinds as sharedImportKinds, importNumericFields, suggestImportField } from "@workspace/valopay-schema";
+import { counted, csvAmountToKobo, defaultStatus, importBooleanFields, importFieldsOf, importKinds as sharedImportKinds, importNumericFields, suggestImportField, observationEventKey, observationProviderKey } from "@workspace/valopay-schema";
 import { importRowError } from "./import-row-errors";
 
 const importKinds:readonly string[]=sharedImportKinds;
@@ -144,8 +144,9 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       record.name ||= record.reference || `${input.kind} import ${index+1}`;
       record.status ||= defaultStatus[input.kind as keyof typeof defaultStatus];
       if(record.customerId&&!working.records.some(r=>r.id===record.customerId&&r.kind==="customers")){
-        const customer=working.records.find(r=>r.kind==="customers"&&r.reference===record.customerId);
-        if(customer)record.customerId=customer.id;
+        const customers=working.records.filter(r=>r.kind==="customers"&&r.reference===record.customerId);
+        if(customers.length>1) problems.push({field:'customerId',message:'This customer reference matches more than one customer. Use the customer record ID and ask an administrator to correct the duplicate references.'});
+        else if(customers[0])record.customerId=customers[0].id;
       }
       for(const [key,kind] of [["mandateId","mandates"],["dueItemId","due-items"]]){
         const candidate=record.data[key!];
@@ -161,7 +162,8 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       // no other record.
       const sameDetails=(saved:{reference:string;customerId:string;amountKobo:number;data:Record<string,any>})=>saved.reference===record.reference&&saved.customerId===(record.customerId||"")&&saved.amountKobo===record.amountKobo
         &&["grossAmountKobo","feeKobo","batchReference","currency","provider","providerConnection"].every(key=>saved.data[key]===record.data[key]);
-      const savedEvidence=input.kind==="observations"&&readable?working.records.find(r=>r!==prior&&r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
+      const eventKey=observationEventKey(record.data);
+      const savedEvidence=input.kind==="observations"&&readable?working.records.find(r=>r!==prior&&r.kind==="observations"&&(eventKey!==undefined||observationEventKey(r.data)!==undefined?eventKey!==undefined&&observationEventKey(r.data)===eventKey:r.data.source===record.data.source&&observationProviderKey(r.data)===observationProviderKey(record.data)&&sameDetails(r))):undefined;
       if(savedEvidence&&!sameDetails(savedEvidence))problems.push({ message: 'This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.' });
       // A new row ID never takes over a saved record: a conflicting row is refused, not silently skipped.
       else if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r!==prior&&r.kind===input.kind&&r.reference===record.reference))){

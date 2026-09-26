@@ -6,7 +6,7 @@ import { saidBy } from "@/lib/notify";
 import { DiscardOriginalRequest } from "./discard-original-request";
 
 export const pilotField =
-  "w-full min-h-11 rounded-lg border bg-background px-3 py-2 text-sm";
+  "w-full min-w-0 min-h-11 rounded-lg border border-input bg-background px-3 py-2 text-sm";
 export function PilotHeading({
   title,
   children,

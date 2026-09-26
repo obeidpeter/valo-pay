@@ -9,7 +9,8 @@ const clerk = vi.hoisted(() => ({
   signUp: null as Record<string, unknown> | null,
 }));
 
-vi.mock("@/lib/auth", () => ({
+vi.mock("@/lib/auth", async () => ({
+  ...await import("@/components/clerk-forms"),
   authEnabled: true,
   useSessionUser: () => ({ userId: null, isLoaded: true }),
   useSignOut: () => () => {},

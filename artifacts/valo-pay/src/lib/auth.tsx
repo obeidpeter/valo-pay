@@ -1,5 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useState, type ComponentType, type ReactNode } from 'react';
-import type { ClerkSessionProps } from './clerk-session';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useState, type ComponentProps, type ReactNode } from 'react';
+import clerkSessionUrl from 'virtual:clerk-session-url';
+
+type ClerkModule = typeof import('./clerk-session');
 
 const configuredKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 const localHost = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i.test(window.location.hostname);
@@ -14,11 +16,16 @@ const localHost = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i.test(window.l
 export const authEnabled = Boolean(configuredKey) || !localHost;
 
 /**
- * Clerk's code (about 90 kB) is not in the page shell: it is fetched as its
+ * Clerk's code is not in the page shell: it is fetched as its
  * own chunk, only where sign-in is wanted, starting as the app loads so it
  * arrives while the first page renders (lib/clerk-session.tsx).
  */
-const clerkSession = authEnabled ? import('./clerk-session') : null;
+let loadAttempt = 0;
+const loadClerkSession = () => {
+  const url = new URL(clerkSessionUrl, window.location.href);
+  if (loadAttempt++) url.searchParams.set('sign-in-retry', String(loadAttempt));
+  return import(/* @vite-ignore */ url.href) as Promise<ClerkModule>;
+};
 
 export type SessionUser = { userId: string | null; orgId?: string | null; isLoaded: boolean };
 /** The signed-in person as Clerk reports them, and the way to sign out. */
@@ -58,52 +65,89 @@ export class ClerkSlots {
   private changed(): void { this.current = [...this.slots]; this.listeners.forEach((listener) => listener()); }
 }
 const SlotContext = createContext<ClerkSlots | null>(null);
+type ClerkLoadState = { state: 'loading' | 'ready' | 'failed'; retry: () => void; components: ClerkModule | null };
+const ClerkLoadContext = createContext<ClerkLoadState | null>(null);
+
+// All Clerk components come from the successful entry, including after a retry.
+// Importing them separately would refer back to the browser's failed module URL
+// or create a second Clerk context outside the recovered provider.
+export function ClerkSignIn(props: ComponentProps<ClerkModule['ClerkSignIn']>) {
+  const Component = useContext(ClerkLoadContext)?.components?.ClerkSignIn;
+  return Component ? <Component {...props} /> : null;
+}
+export function ClerkSignUp(props: ComponentProps<ClerkModule['ClerkSignUp']>) {
+  const Component = useContext(ClerkLoadContext)?.components?.ClerkSignUp;
+  return Component ? <Component {...props} /> : null;
+}
+export function VerifiedSession() {
+  const Component = useContext(ClerkLoadContext)?.components?.VerifiedSession;
+  return Component ? <Component /> : null;
+}
 
 /**
  * Clerk's own components (its sign-in form, the organisation switcher and
  * re-verification) need Clerk's provider around them. That provider renders
  * beside the pages rather than around them, so its arrival never remounts a
  * page: what is placed here is rendered under it, into this place in the
- * page, once Clerk has loaded. Nothing shows before then, as Clerk's own
- * components show nothing until Clerk has loaded.
+ * page, once Clerk has loaded. Until then the slot explains the loading state
+ * and offers a fresh fetch if the chunk cannot be loaded.
  */
 export function ClerkSlot({ children }: { children: ReactNode }) {
   const slots = useContext(SlotContext);
+  const loading = useContext(ClerkLoadContext);
   const id = useId();
   const [node, setNode] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => { if (slots && node) slots.set(id, node, children); }, [slots, node, id, children]);
   useLayoutEffect(() => () => { slots?.delete(id); }, [slots, id]);
-  return <div ref={setNode} className="contents" />;
+  return <>
+    <div ref={setNode} className="contents" />
+    {loading?.state === 'loading' && <p role="status" className="p-4 text-sm text-muted-foreground">Loading sign-in…</p>}
+    {loading?.state === 'failed' && <div role="alert" className="space-y-3 rounded-lg border bg-card p-4 text-sm">
+      <p className="font-medium">Sign-in could not be loaded.</p>
+      <p>Check your connection and try again. Your open pages and drafts are still here. This does not sign you into an account.</p>
+      <button type="button" className="min-h-10 rounded-md border border-input px-3 py-2 font-medium text-primary" onClick={loading.retry}>Try loading sign-in again</button>
+    </div>}
+  </>;
 }
 
 /**
  * The session for the pages below: the anonymous sandbox where sign-in is
  * unavailable, otherwise Clerk's, reported by Clerk's provider once its chunk
  * has loaded. Until then the session is not loaded, as it is until Clerk
- * itself has answered; if the chunk cannot be fetched, sign-in stays
- * unavailable and the workspace starts anonymously after its wait.
+ * itself has answered. A failed fetch offers retry in each Clerk slot without
+ * changing identity or remounting the pages and their open drafts.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  if (!clerkSession) return <>{children}</>;
-  return <ClerkLoader load={clerkSession}>{children}</ClerkLoader>;
+  if (!authEnabled) return <>{children}</>;
+  return <ClerkLoader load={loadClerkSession}>{children}</ClerkLoader>;
 }
 
 /** The session from Clerk's chunk once `load` brings it, rendering Clerk's provider beside `children`; AuthProvider's, where sign-in is wanted. */
-export function ClerkLoader({ load, children }: { load: Promise<{ ClerkSession: ComponentType<ClerkSessionProps> }>; children: ReactNode }) {
+export function ClerkLoader({ load, children }: { load: () => Promise<ClerkModule>; children: ReactNode }) {
   const [session, setSession] = useState<Provided>(waiting);
   const report = useCallback((next: Session) => setSession({ ...next, available: true }), []);
   const [slots] = useState(() => new ClerkSlots());
-  const [Clerk, setClerk] = useState<ComponentType<ClerkSessionProps> | null>(null);
+  const [components, setComponents] = useState<ClerkModule | null>(null);
+  const Clerk = components?.ClerkSession;
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<ClerkLoadState['state']>('loading');
+  const retry = useCallback(() => { setState('loading'); setAttempt(value => value + 1); }, []);
   useEffect(() => {
     let current = true;
-    load.then((module) => { if (current) setClerk(() => module.ClerkSession); }, () => undefined);
+    // Invoke the loader anew on retry; reusing the first rejected promise would never recover.
+    // Failure is not an anonymous or signed-out identity: Clerk has not answered yet.
+    void Promise.resolve().then(load).then((module) => {
+      if (current) { setComponents(module); setState('ready'); }
+    }, () => { if (current) setState('failed'); });
     return () => { current = false; };
-  }, [load]);
+  }, [load, attempt]);
   return (
     <SessionContext.Provider value={session}>
       <SlotContext.Provider value={slots}>
-        {children}
-        {Clerk && <Clerk onSession={report} slots={slots} />}
+        <ClerkLoadContext.Provider value={{ state, retry, components }}>
+          {children}
+          {Clerk && <Clerk onSession={report} slots={slots} />}
+        </ClerkLoadContext.Provider>
       </SlotContext.Provider>
     </SessionContext.Provider>
   );

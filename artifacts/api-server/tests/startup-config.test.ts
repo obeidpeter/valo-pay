@@ -289,7 +289,7 @@ const logged: Array<Record<string, unknown>> = [];
 const log = { info: (fields: Record<string, unknown>) => logged.push({ level: "info", ...fields }), error: (fields: Record<string, unknown>) => logged.push({ level: "error", ...fields }) } as any;
 let looks = 0, failedLooks = 0, failing = true;
 const outage = new Error("connect ECONNREFUSED 127.0.0.1:1");
-const repository = { candidates: async () => { looks += 1; if (failing) { failedLooks += 1; throw outage; } return []; } } as any;
+const repository = { queueEnd: async () => undefined, candidates: async () => { looks += 1; if (failing) { failedLooks += 1; throw outage; } return []; } } as any;
 const worker = startExportWorker({ intervalMs: 10, maxBackoffMs: 80, log, repository });
 await new Promise((resolve) => setTimeout(resolve, 400));
 // Without the backoff a look every 10 ms is about 40 looks; with it, 0, 20, 60, 140, 220 and 300 ms.

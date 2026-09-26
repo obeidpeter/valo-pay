@@ -472,6 +472,7 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput, audit?:
   if (input.action === "resolve_exception") {
     assertActionRole(ctx, ["Admin", "Finance", "Operations"]);
     const item = findRecord(state, String(input.recordId), "exceptions");
+    if (item.data.legacyResolutionReview) assertActionRole(ctx, ["Admin", "Finance"]);
     if (item.data.case?.assignee && item.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') throw Object.assign(new Error('Ask the case assignee or an administrator to record the resolution. Financial review remains a separate action.'), { status: 409 });
     if (["resolved", "closed"].includes(item.status)) throw new Error("This exception is already resolved.");
     // Codes that apply to this exception as it stands now: held evidence is re-derived first, so joining it to its payment is
@@ -500,6 +501,7 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput, audit?:
     if (confirmedCode !== undefined) item.data.confirmedFailureCode = normaliseFailureCode(confirmedCode);
     if (!type) item.data.legacyType = true;
     touch(item, now);
+    if (item.data.legacyResolutionReview) return result("Renewed reversal review recorded without changing the earlier decision or its history. Run reconciliation to apply this decision. Previously applied allocations or reversals are changed only by the normal reversal/correction workflow. Related instalments remain paused until Finance releases them from dispute after reviewing the result.", item);
     if (checkout) {
       const settled = resolveUnknownCheckout(state, ctx, item, checkout, { reason: reason(input), evidenceReference });
       const receipt = settled === "confirmed" ? recordsOf(state, "payments").find((record) => record.id === checkout.data.paymentId) : undefined;

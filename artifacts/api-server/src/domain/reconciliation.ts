@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { providerConnectionKey } from "@workspace/valopay-schema";
 import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, WAT_OFFSET_MS, allocationClosedStatuses, conditionClearedCode, counted, exceptionCatalogue, hasFeeSchedule, heldEvidenceCodes, heldEvidenceCondition, heldEvidenceOf, isKobo, isOpenException, moneyText, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, otherCurrenciesText, paymentAwaitsAllocation, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, unseenReversalCodes, unseenReversalCondition, unseenReversalOf, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import { indexedPass, recordById, recordsOfKind, recordsWhere } from "./record-index";
@@ -6,6 +7,7 @@ import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays, watDate } from "./calendar";
 import { validateRecord } from "./validation";
 import { approvedPolicyFor, attemptTime, attemptsFor, countedAttempts, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
+import { dueNeedsReversalReview, latestEvidenceResolution, paymentNeedsReversalReview } from "./reversal-review";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** ING-05: a second Payment for the same payer and amount inside this window is held as a possible duplicate. */
@@ -29,7 +31,9 @@ export const currencyOf = (record: ValopayRecord): string => String(record.data.
 /** ING-03: the provider connection evidence came through, or a payment was observed on; one that names none came through the lender's own. */
 export const connectionOf = (state: DomainState, record: ValopayRecord): string => String(record.data.providerConnection || record.data.provider || state.merchant.provider);
 /** Connection names are free text: they are compared without case or surrounding spaces. */
-const connectionKey = (connection: string): string => connection.trim().toLowerCase();
+const connectionKey = providerConnectionKey;
+const settlementIdentity = (state: DomainState, record: ValopayRecord, reference = record.reference): string => JSON.stringify([connectionKey(connectionOf(state, record)), reference]);
+const batchIdentity = (state: DomainState, batch: TypedRecord<"settlement-batches">): string => String(batch.data.providerIdentityKey || settlementIdentity(state, batch));
 
 /** The four independent status dimensions of a Payment (TRD 4.2), written in one vocabulary; legacy spellings are normalised. */
 export function paymentDimensions(payment: TypedRecord<"payments">): void {
@@ -231,6 +235,7 @@ function clearedCondition(exception: TypedRecord<"exceptions">, byId: ReadonlyMa
   const type = resolveExceptionType(exception.data.type);
   const linked = byId.get(String(exception.data.linkedRecordId || ""));
   if (!type || !linked) return undefined;
+  if (exception.data.legacyResolutionReview) return undefined; // Only an explicit renewed Finance decision settles ambiguous historical authority.
   if (linked.kind === "observations" && type === "suspected_duplicate") {
     if (linked.status !== "resolved") return undefined;
     const payment = byId.get(String(linked.data.paymentId ?? ""));
@@ -410,7 +415,7 @@ function countLine(batch: TypedRecord<"settlement-batches">, line: TypedRecord<"
  */
 function completeLineGross(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, previousKobo: number, lines: SettlementLines): void {
   const batch = lines.batchOf(payment.id);
-  if (!batch || !Array.isArray(batch.data.lineObservationIds)) return;
+  if (!batch || batch.data.providerIdentityReview || !Array.isArray(batch.data.lineObservationIds)) return;
   const line = batch.data.lineObservationIds.map((id) => recordsWhere(state, "observations", "id", String(id))[0]).find((item) => item?.data.paymentId === payment.id);
   if (!line) return;
   const schedule = lineSchedule(state, line, payment);
@@ -462,6 +467,7 @@ function totalsFromLines(batch: TypedRecord<"settlement-batches">, lines: readon
 function recountEarlierLines(state: DomainState, ctx: Context): void {
   const paymentOf: PaymentOf = (line) => recordsWhere(state, "payments", "id", String(line.data.paymentId ?? ""))[0];
   for (const batch of recordsOfKind(state, "settlement-batches")) {
+    if (batch.data.providerIdentityReview) continue;
     if (!Array.isArray(batch.data.lineObservationIds)) continue;
     const lines = batch.data.lineObservationIds.map((id) => recordsWhere(state, "observations", "id", String(id))[0]);
     const earlier = lines.filter((line): line is TypedRecord<"observations"> => {
@@ -505,6 +511,7 @@ function separateEarlierCurrencies(state: DomainState, ctx: Context): SeparatedL
     return map;
   }, new Map<string, TypedRecord<"observations">>())).get(batchId);
   for (const batch of recordsOfKind(state, "settlement-batches")) {
+    if (batch.data.providerIdentityReview) continue;
     const lines = Array.isArray(batch.data.lineObservationIds) ? batch.data.lineObservationIds.map((id) => recordsWhere(state, "observations", "id", String(id))[0]) : [];
     const first = lines.find(Boolean) ?? (!batch.data.currency && Array.isArray(batch.data.lineObservationIds) ? firstLinked(batch.id) : undefined);
     const currency = batch.data.currency || !first ? currencyOf(batch) : currencyOf(first);
@@ -583,7 +590,7 @@ function countDisplacedLines(state: DomainState, ctx: Context, from: TypedRecord
   let countedNow: TypedRecord<"settlement-batches"> | undefined;
   for (const line of lines) {
     const batch = recordsWhere(state, "settlement-batches", "id", String(line.data.settlementBatchId ?? ""))[0];
-    if (!batch || batch.id === from.id || !Array.isArray(batch.data.lineObservationIds)) continue;
+    if (!batch || batch.data.providerIdentityReview || batch.id === from.id || !Array.isArray(batch.data.lineObservationIds)) continue;
     const lineIds = batch.data.lineObservationIds as string[], linePaymentIds = (batch.data.linePaymentIds ||= []) as string[];
     delete line.data.countedInBatchId;
     let now: string;
@@ -611,6 +618,44 @@ function countDisplacedLines(state: DomainState, ctx: Context, from: TypedRecord
   return countedNow;
 }
 
+/** Freeze an earlier merged payout for review instead of redistributing historical amounts by guesswork. */
+function holdEarlierSettlementIdentities(state: DomainState, ctx: Context): number {
+  const batches = recordsOf(state, "settlement-batches"), evidence = new Map<string, TypedRecord<"observations">[]>();
+  const byKey = new Map<string, string[]>();
+  for (const batch of batches) { const key = batchIdentity(state, batch), ids = byKey.get(key) ?? []; ids.push(batch.id); byKey.set(key, ids); }
+  for (const observation of recordsOf(state, "observations")) {
+    const id = observation.data.source === "settlement" ? observation.data.settlementBatchId
+      : observation.data.source === "statement" && String(observation.data.resolvedTo ?? "").startsWith("batch:") ? String(observation.data.resolvedTo).slice(6) : undefined;
+    if (typeof id === "string") { const rows = evidence.get(id) ?? []; rows.push(observation); evidence.set(id, rows); }
+  }
+  let held = 0;
+  for (const batch of batches) {
+    const linked = new Map((evidence.get(batch.id) ?? []).map((item) => [item.id, item]));
+    const recordedEvidence = [...(Array.isArray(batch.data.lineObservationIds) ? batch.data.lineObservationIds : []), ...(Array.isArray(batch.data.otherCurrencyLineIds) ? batch.data.otherCurrencyLineIds : []), ...(batch.data.statementObservationId ? [batch.data.statementObservationId] : [])];
+    for (const id of recordedEvidence) {
+      const line = recordsWhere(state, "observations", "id", String(id))[0];
+      if (line) linked.set(line.id, line);
+    }
+    const identity = batchIdentity(state, batch);
+    const identities = [...new Set([identity, ...[...linked.values()].map((item) => settlementIdentity(state, item, String(item.data.batchReference || batch.reference)))])].sort();
+    const conflicting = identities.length > 1 || (byKey.get(identity)?.length ?? 0) > 1;
+    if (conflicting && !batch.data.providerIdentityReview) {
+      batch.data.providerIdentityReview = {
+        detectedAt: ctx.now, identities, observationIds: [...linked.keys()].sort(),
+        previous: { status: batch.status, grossKobo: batch.data.grossKobo, feeKobo: batch.data.feeKobo, netKobo: batch.data.netKobo, currency: currencyOf(batch), statementObservationId: batch.data.statementObservationId ?? null, statementNetKobo: batch.data.statementNetKobo ?? null },
+      };
+      touch(batch, ctx.now);
+    }
+    if (batch.data.providerIdentityReview) { held += 1; continue; }
+    if (!batch.data.providerIdentityKey) {
+      batch.data.providerIdentityKey = identity;
+      batch.data.providerConnection = connectionOf(state, batch);
+      touch(batch, ctx.now);
+    }
+  }
+  return held;
+}
+
 /** A batch's first counted line gives it its currency, and the fee schedule for that currency when there is one. */
 function takeLineCurrency(batch: TypedRecord<"settlement-batches">, currency: string, schedule: ProviderFeeSchedule | undefined): void {
   batch.data.currency = currency;
@@ -627,14 +672,21 @@ function takeLineCurrency(batch: TypedRecord<"settlement-batches">, currency: st
 function settlementBatch(state: DomainState, ctx: Context, observation: TypedRecord<"observations">, payment: TypedRecord<"payments">, lines: SettlementLines): void {
   const batchReference = String(observation.data.batchReference || "");
   if (!batchReference) return;
-  const provider = String(observation.data.provider || payment.data.providerConnection || state.merchant.provider);
+  const provider = connectionOf(state, observation);
   const currency = currencyOf(observation), schedule = feeScheduleIn(state, provider, currency);
-  let batch = recordsWhere(state, "settlement-batches", "reference", batchReference)[0];
+  const identity = settlementIdentity(state, observation, batchReference);
+  let batch = recordsWhere(state, "settlement-batches", "reference", batchReference).find((item) => batchIdentity(state, item) === identity || (item.data.providerIdentityReview as { identities?: string[] } | undefined)?.identities?.includes(identity));
   if (!batch) {
     batch = makeRecord(state, "settlement-batches", {
       name: `Settlement batch ${batchReference}`, status: "pending", reference: batchReference, createdAt: ctx.now,
-      data: { provider, batchReference, providerConnection: payment.data.providerConnection, currency, lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, ...(schedule ? { expectedFeeKobo: 0, feeSchedule: schedule } : {}) },
+      data: { provider, batchReference, providerConnection: provider, providerIdentityKey: identity, currency, lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, ...(schedule ? { expectedFeeKobo: 0, feeSchedule: schedule } : {}) },
     });
+  }
+  if (batch.data.providerIdentityReview) {
+    // Retain new evidence beside the quarantined historical total; never silently mix it into that total.
+    observation.data.settlementBatchId = batch.id;
+    observation.data.providerIdentityHeld = true;
+    return;
   }
   if (!Array.isArray(batch.data.lineObservationIds)) {
     // A batch Finance entered by hand: the provider's lines now build its totals, in their currency, and the typed totals are kept beside them.
@@ -752,6 +804,7 @@ const STATEMENT_MATCHED = "Statement credit matched the settlement batch net tot
  * it, so while one names the batch it is in variance.
  */
 export function settlementBatchState(batch: TypedRecord<"settlement-batches">, credits = 1): { status: "pending" | "reconciled" | "variance"; explanation?: string; condition?: string; settledBy?: string[] } {
+  if (batch.data.providerIdentityReview) return { status: "variance", condition: `settlement_variance:${batch.id}:provider_identity`, explanation: "Historical settlement evidence mixes or conflicts with provider connections. Totals and prior links are preserved for Finance review and cannot certify a reconciled payout. An operator-reviewed repair using verified provider-scoped evidence is required; rerunning reconciliation or reimporting the same batch does not clear this hold." };
   const currency = currencyOf(batch), checked = hasFeeSchedule(currency);
   const net = Number(batch.data.netKobo || 0), variance = checked ? Number(batch.data.feeVarianceKobo || 0) : 0;
   const feesDiffer = Math.abs(variance) > SETTLEMENT_BATCH_TOLERANCE_KOBO;
@@ -796,7 +849,7 @@ function evaluateSettlementBatches(state: DomainState, ctx: Context, credits: Re
   for (const batch of recordsOf(state, "settlement-batches")) {
     let changed = false;
     // A batch edited by hand keeps its fee variance in step with its stated and expected fees, where they are checked.
-    if (feesChecked(batch) && Number.isSafeInteger(batch.data.feeKobo) && Number.isSafeInteger(batch.data.expectedFeeKobo)) {
+    if (!batch.data.providerIdentityReview && feesChecked(batch) && Number.isSafeInteger(batch.data.feeKobo) && Number.isSafeInteger(batch.data.expectedFeeKobo)) {
       const variance = Number(batch.data.feeKobo) - Number(batch.data.expectedFeeKobo);
       if (batch.data.feeVarianceKobo !== variance) { batch.data.feeVarianceKobo = variance; changed = true; }
     }
@@ -862,12 +915,12 @@ function linkSettlementStatements(state: DomainState, ctx: Context): { linked: n
   const credits = new Map<string, number>();
   if (!statements.length) return { linked: 0, credits };
   const batches = new Map<string, TypedRecord<"settlement-batches">>(), byId = new Map<string, TypedRecord<"settlement-batches">>();
-  for (const batch of recordsOf(state, "settlement-batches")) { if (!batches.has(batch.reference)) batches.set(batch.reference, batch); byId.set(batch.id, batch); }
+  for (const batch of recordsOf(state, "settlement-batches")) { if (!batch.data.providerIdentityReview) batches.set(batchIdentity(state, batch), batch); byId.set(batch.id, batch); }
   const linkedTo = new Map<string, TypedRecord<"observations">[]>();
   let linked = 0;
   for (const statement of statements) {
-    const batch = statement.status === "unresolved" ? batches.get(String(statement.data.batchReference)) : byId.get(String(statement.data.resolvedTo).slice("batch:".length));
-    if (!batch) continue; // It may arrive before the settlement file; leave it for the next close.
+    const batch = statement.status === "unresolved" ? batches.get(settlementIdentity(state, statement, String(statement.data.batchReference))) : byId.get(String(statement.data.resolvedTo).slice("batch:".length));
+    if (!batch || batch.data.providerIdentityReview || batchIdentity(state, batch) !== settlementIdentity(state, statement, String(statement.data.batchReference))) continue; // Its own provider's batch may arrive later; a same-named foreign payout never matches.
     if (statement.status === "unresolved") {
       statement.status = "resolved";
       statement.data.resolvedTo = `batch:${batch.id}`;
@@ -925,8 +978,8 @@ export function allocatePayment(
   explanation?: string,
   payerReason?: string,
 ): TypedRecord<"allocations"> {
-  assertAllocationEligible(due);
-  assertPaymentAllocatable(payment, amount);
+  assertAllocationEligible(state, due);
+  assertPaymentAllocatable(state, payment, amount);
   assertSamePayer(state, payment, due, confidence === "probable" ? undefined : { automatic, reason: payerReason });
   if (!Number.isInteger(amount) || amount <= 0 || amount > paymentUnappliedKobo(payment)) {
     throw new Error("Enter a positive whole number in kobo, no more than the payment has left to allocate.");
@@ -1043,7 +1096,8 @@ export function withdrawPayerIdentification(state: DomainState, ctx: Context, pa
  * as an overpayment's excess, only the money that stayed can be applied.
  * Instalments are owed in naira, so money in another currency is never applied.
  */
-function assertPaymentAllocatable(payment: TypedRecord<"payments">, amount: number): void {
+function assertPaymentAllocatable(state: DomainState, payment: TypedRecord<"payments">, amount: number): void {
+  if (paymentNeedsReversalReview(state, payment)) throw Object.assign(new Error("This payment is held for renewed Finance review of an earlier reversal decision. Resolve that review and run reconciliation before allocating it."), { status: 409 });
   if (currencyOf(payment) !== "NGN") {
     throw Object.assign(new Error(`Payment ${payment.reference} is in ${currencyOf(payment)}. Instalments are owed in naira, so it cannot be applied to one. Record its refund or resolve it with Finance.`), { status: 409 });
   }
@@ -1057,7 +1111,8 @@ function assertPaymentAllocatable(payment: TypedRecord<"payments">, amount: numb
   }
 }
 
-function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
+function assertAllocationEligible(state: DomainState, due: TypedRecord<'due-items'>): void {
+  if (dueNeedsReversalReview(state, due)) throw Object.assign(new Error("This instalment is held for renewed Finance review of an earlier reversal decision. Resolve that review and run reconciliation before allocating a payment."), { status: 409 });
   if ((allocationClosedStatuses as readonly string[]).includes(due.status)) throw Object.assign(new Error('This instalment is cancelled, closed or in dispute. Refresh the queue and review its status before allocating a payment.'), { status: 409 });
 }
 
@@ -1068,8 +1123,8 @@ function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
 export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">, payerReason?: string): void {
   const payment = recordById(state, String(allocation.data.paymentId), "payments");
   const due = recordById(state, String(allocation.data.dueItemId), "due-items");
-  assertAllocationEligible(due);
-  assertPaymentAllocatable(payment, allocation.amountKobo);
+  assertAllocationEligible(state, due);
+  assertPaymentAllocatable(state, payment, allocation.amountKobo);
   assertSamePayer(state, payment, due, { automatic: allocation.data.automatic === true, reason: payerReason });
   if (allocation.status === "superseded") throw new Error("This allocation is no longer applied and cannot be confirmed. Review the payment to create a new match.");
   if (allocation.status === "confirmed") throw Object.assign(new Error("This allocation is already applied. Refresh the payment to see its current position."), { status: 409 });
@@ -1158,6 +1213,7 @@ export function derivedDueStatus(state: DomainState, due: TypedRecord<"due-items
  * Returns those exceptions.
  */
 export function releaseDispute(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, release: { via: "not_upheld" | "finance_release"; reason: string; exceptionId?: string }): TypedRecord<"exceptions">[] {
+  if (dueNeedsReversalReview(state, due)) throw Object.assign(new Error("Resolve the renewed reversal review and run reconciliation before releasing this instalment."), { status: 409 });
   if (due.status !== "in_dispute") throw Object.assign(new Error(`Instalment ${due.reference} is not in dispute, so there is nothing to release. Refresh it to see its current status.`), { status: 409 });
   const status = balanceStatus(state, due);
   due.status = status;
@@ -1534,6 +1590,8 @@ function setAside(ctx: Context, observation: TypedRecord<"observations">, except
 /** What Finance's resolution of evidence decides for it (financeDecision). */
 interface FinanceDecision {
   exception: TypedRecord<"exceptions">;
+  /** Earlier builds assigned conflicting meanings to unversioned decisions. Neither meaning is safe to infer. */
+  needsReview?: boolean;
   /** Set aside for good: no payment is made from it, and it is applied to none. */
   setAside?: boolean;
   /** The payment its hold named, while the evidence still agrees with it: it is joined to that payment. */
@@ -1544,7 +1602,7 @@ interface FinanceDecision {
   adopted?: boolean;
 }
 
-/** A resolution an earlier build recorded: it records no rule version (resolutionRuleVersion). */
+/** Several releases omitted the marker, so absence cannot identify a historical rule. */
 const earlierResolution = (exception: TypedRecord<"exceptions">): boolean => exception.data.resolutionRuleVersion === undefined;
 
 /**
@@ -1554,7 +1612,7 @@ const earlierResolution = (exception: TypedRecord<"exceptions">): boolean => exc
  */
 function decisionOf(exception: TypedRecord<"exceptions">, observation: TypedRecord<"observations">, payments: CanonicalPaymentIndex, other?: TypedRecord<"payments">): FinanceDecision {
   const code = String(exception.data.resolutionCode);
-  if (resolveExceptionType(exception.data.type) === "provider_status_mismatch") return code === unseenReversalCodes.setAside || earlierResolution(exception) ? { exception, setAside: true } : { exception, adopted: code === unseenReversalCodes.adopted };
+  if (resolveExceptionType(exception.data.type) === "provider_status_mismatch") return earlierResolution(exception) ? { exception, needsReview: true } : code === unseenReversalCodes.setAside ? { exception, setAside: true } : { exception, adopted: code === unseenReversalCodes.adopted };
   const paymentId = heldEvidenceOf(exception.data.condition)?.paymentId ?? other?.id ?? "", named = payments.payment(paymentId);
   if (code === heldEvidenceCodes.samePayment) return { exception, join: named && !evidenceConflict(named, observation, payments) ? named : undefined };
   if (reportsReversal(observation) || code === heldEvidenceCodes.notMoney) return { exception, setAside: true };
@@ -1575,23 +1633,86 @@ function decisionOf(exception: TypedRecord<"exceptions">, observation: TypedReco
  * waiting reversal resolved as platform state confirmed is set aside for good;
  * resolved as provider state adopted it keeps waiting, with no new exception,
  * and reverses its payment when that arrives, through any spelling of the
- * connection. A resolution keeps the meaning Finance was shown when it was
- * recorded: the earlier build that recorded one with no rule version
- * (resolutionRuleVersion) said any resolution sets the waiting reversal aside,
- * so it does, whatever its code (reversalsSetAsideAsResolved). Undefined when
+ * connection. An unversioned resolution has ambiguous historical meaning and
+ * requires a new explicit review; the old decision remains unchanged. Undefined when
  * Finance has resolved neither.
  */
 function financeDecision(state: DomainState, observation: TypedRecord<"observations">, payments: CanonicalPaymentIndex): FinanceDecision | undefined {
-  const resolvedAt = (item: TypedRecord<"exceptions">) => String(item.data.resolvedAt || item.updatedAt);
-  let latest: TypedRecord<"exceptions"> | undefined;
-  for (const exception of recordsWhere(state, "exceptions", "data.linkedRecordId", observation.id)) {
-    const code = exception.data.resolutionCode;
-    if (isOpenException(exception.status) || !code || code === conditionClearedCode) continue;
-    const type = resolveExceptionType(exception.data.type);
-    const decides = type === "suspected_duplicate" ? heldEvidenceOf(exception.data.condition)?.observationId === observation.id : type === "provider_status_mismatch" && unseenReversalOf(exception.data.condition) === observation.id;
-    if (decides && (!latest || resolvedAt(exception) >= resolvedAt(latest))) latest = exception;
-  }
+  const latest = latestEvidenceResolution(state, observation);
   return latest && decisionOf(latest, observation, payments);
+}
+
+/** Quarantine ambiguous persisted decisions without rewriting either the decision or its previous disposition. */
+function reviewEarlierReversalDecisions(state: DomainState, ctx: Context): TypedRecord<"exceptions">[] {
+  const payments = new CanonicalPaymentIndex(state);
+  for (const observation of recordsOf(state, "observations").filter(reportsReversal)) {
+    const decision = financeDecision(state, observation, payments);
+    if (!decision?.needsReview) continue;
+    const condition = `${unseenReversalCondition(observation.id)}:review:${decision.exception.id}`;
+    let review = recordsWhere(state, "exceptions", "data.linkedRecordId", observation.id).find((item) => item.data.condition === condition);
+    if (review) continue;
+    const notes = `Earlier decision ${decision.exception.id} recorded ${decision.exception.data.resolutionCode} without a rule version. Releases used different meanings for that code, so Valo Pay cannot infer whether reversal ${observation.reference} should be adopted or set aside. Its earlier decision and evidence disposition are preserved. Finance must check the provider evidence and record a new explicit decision: provider state adopted applies the reversal to its payment; platform state confirmed sets unprocessed reversal evidence aside. Existing allocations and previously applied reversals are not changed until reviewed. Related payments cannot receive new allocations and related instalments are paused. After reconciliation, review any historical effects and release the instalments explicitly.`;
+    // Do not let an old resolution without a condition suppress this new review.
+    review = recordsWhere(state, "exceptions", "data.linkedRecordId", observation.id).find((item) => isOpenException(item.status) && resolveExceptionType(item.data.type) === "provider_status_mismatch")
+      ?? makeRecord(state, "exceptions", { name: "Review earlier reversal decision", status: "open", customerId: observation.customerId, amountKobo: statedGross(observation).kobo, createdAt: ctx.now, data: { type: "provider_status_mismatch", owner: "Finance", severity: "high", slaBusinessDays: 1, dueBy: addBusinessDays(state, ctx.now, 1), linkedRecordId: observation.id, linkedKind: "observations", ...(currencyOf(observation) !== "NGN" ? { currency: currencyOf(observation) } : {}) } });
+    Object.assign(review.data, { condition, notes, owner: "Finance", severity: "high", legacyResolutionReview: {
+      priorExceptionId: decision.exception.id,
+      priorObservation: { status: observation.status, resolutionKey: observation.data.resolutionKey ?? null, resolvedTo: observation.data.resolvedTo ?? null, paymentId: observation.data.paymentId ?? null },
+    } });
+    touch(review, ctx.now);
+  }
+  const reviews = recordsOf(state, "exceptions").filter((item) => item.data.legacyResolutionReview);
+  for (const review of reviews.filter((item) => !isOpenException(item.status) && !earlierResolution(item))) {
+    const observation = recordsWhere(state, "observations", "id", String(review.data.linkedRecordId))[0];
+    // A prior applied reversal is historical financial activity, never silently undone. An earlier set-aside
+    // disposition may be reconsidered only by this newly authorised decision; its snapshot stays on the review.
+    if (!observation || observation.data.paymentId || observation.data.legacyReversalReviewAppliedId === review.id) continue;
+    observation.status = "unresolved";
+    observation.data.legacyReversalReviewAppliedId = review.id;
+    touch(observation, ctx.now);
+  }
+  return reviews;
+}
+
+/** A hold does not undo allocations. It prevents new applications/collections until the explicit review completes. */
+function holdEarlierReversalPayments(state: DomainState, ctx: Context, reviews: readonly TypedRecord<"exceptions">[]): void {
+  if (!reviews.length) return;
+  const active = reviews.filter((item) => isOpenException(item.status));
+  const byReference = new Map<string, string[]>();
+  for (const review of active) {
+    const observation = recordsWhere(state, "observations", "id", String(review.data.linkedRecordId))[0];
+    if (observation) byReference.set(observation.reference, [...(byReference.get(observation.reference) ?? []), review.id]);
+  }
+  const dueHolds = new Map<string, Set<string>>();
+  for (const payment of recordsOf(state, "payments")) {
+    const ids = [...new Set([...(byReference.get(payment.reference) ?? []), ...(byReference.get(String(payment.data.providerReference)) ?? [])])].sort();
+    if (!isDeepStrictEqual(payment.data.legacyReversalReviewIds ?? [], ids)) {
+      if (ids.length) payment.data.legacyReversalReviewIds = ids; else delete payment.data.legacyReversalReviewIds;
+      touch(payment, ctx.now);
+    }
+    if (!ids.length) continue;
+    const dues = new Set(recordsWhere(state, "allocations", "data.paymentId", payment.id).map((item) => String(item.data.dueItemId)));
+    if (payment.data.dueItemId) dues.add(String(payment.data.dueItemId));
+    if (payment.data.proposedDueItemId) dues.add(String(payment.data.proposedDueItemId));
+    const intended = intendedDueItem(state, payment);
+    if (intended) dues.add(intended.due.id);
+    for (const id of dues) dueHolds.set(id, new Set([...(dueHolds.get(id) ?? []), ...ids]));
+  }
+  // A reversal can name an instalment/attempt before its receipt arrives.
+  for (const review of active) {
+    const observation = recordsWhere(state, "observations", "id", String(review.data.linkedRecordId))[0];
+    if (!observation) continue;
+    const ids = [observation.data.dueItemId, ...recordsOf(state, "attempts").filter((item) => item.data.providerReference === observation.reference || item.reference === observation.reference).map((item) => item.data.dueItemId)];
+    for (const id of ids.filter((id): id is string => typeof id === "string" && !!id)) dueHolds.set(id, new Set([...(dueHolds.get(id) ?? []), review.id]));
+  }
+  for (const due of recordsOf(state, "due-items")) {
+    const ids = [...(dueHolds.get(due.id) ?? [])].sort();
+    if (!isDeepStrictEqual(due.data.legacyReversalReviewIds ?? [], ids)) {
+      if (ids.length) due.data.legacyReversalReviewIds = ids; else delete due.data.legacyReversalReviewIds;
+      touch(due, ctx.now);
+    }
+    if (ids.length && !["cancelled", "closed", "in_dispute"].includes(due.status)) { due.status = "in_dispute"; touch(due, ctx.now); }
+  }
 }
 
 /**
@@ -1611,6 +1732,7 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
   const { kobo: gross, atLeast } = statedGross(observation);
   const reversal = reportsReversal(observation);
   let decision = financeDecision(state, observation, payments), prior: TypedRecord<"payments"> | undefined, key: string | undefined;
+  if (decision?.needsReview) return undefined;
   if (!decision?.setAside && !decision?.join && !decision?.separate) {
     const candidates = payments.candidates(observation);
     prior = candidates.find((item) => !evidenceConflict(item, observation, payments));
@@ -1832,6 +1954,7 @@ export function intendedDueItem(state: DomainState, payment: TypedRecord<"paymen
 /** Section 7.2 rule ladder, applied to canonical Payments, never to observations. A payment with nothing to allocate, such as one an earlier build made from a line whose gross was 0, is left alone. */
 function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, index: MatchIndex): void {
   if (payment.status !== "unallocated" || paymentReturned(payment) || paymentUnappliedKobo(payment) === 0) return;
+  if (Array.isArray(payment.data.legacyReversalReviewIds) && payment.data.legacyReversalReviewIds.length) return;
   const connection = connectionOf(state, payment), currency = currencyOf(payment);
   const rejected = rejectedMatches(payment);
   const intended = intendedDueItem(state, payment, index);
@@ -1980,10 +2103,12 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
 }
 
 function reconcileRecords(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
-  const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   const exceptionsBefore = recordsOf(state, "exceptions").length;
+  const legacyReviews = reviewEarlierReversalDecisions(state, ctx);
+  const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   // Exceptions an earlier build raised for money in another currency name it from now on.
   const currenciesRecorded = recordExceptionCurrencies(state, ctx);
+  const identityHolds = holdEarlierSettlementIdentities(state, ctx);
   // Batches an earlier build saved in several currencies hold one from now on, before any line is counted.
   const separated = separateEarlierCurrencies(state, ctx);
   const canonicalPayments = new CanonicalPaymentIndex(state), settlementLines = new SettlementLines(state);
@@ -1991,7 +2116,7 @@ function reconcileRecords(state: DomainState, ctx: Context): { message: string; 
   // import or close, is recorded first whatever order the evidence arrived in.
   const ordered = [...observations.filter((item) => !reportsReversal(item)), ...observations.filter(reportsReversal)];
   const resolved = ordered.map((item) => canonicalPayment(state, ctx, item, canonicalPayments, settlementLines)).filter(Boolean) as TypedRecord<"payments">[];
-  const earlierResolutions = reversalsSetAsideAsResolved(state, observations);
+  holdEarlierReversalPayments(state, ctx, legacyReviews);
   recountEarlierLines(state, ctx);
   const statements = linkSettlementStatements(state, ctx);
   const batchVariances = evaluateSettlementBatches(state, ctx, statements.credits);
@@ -2068,24 +2193,12 @@ function reconcileRecords(state: DomainState, ctx: Context): { message: string; 
       agedUnallocated: aged.length, finalAttemptExceptions: giveUps.finalFailures, disputesFrozen: giveUps.disputes, noticesNotEvidenced: giveUps.deferred, retryDecisionsRecorded: giveUps.decisionsRecorded, unknownOutcomes: unknownOutcomes.length,
       checkoutOutcomesUnknown: checkoutsUnknown, exceptionsOpened: recordsOf(state, "exceptions").length - exceptionsBefore, exceptionsCleared: cleared.length,
       ...(currenciesRecorded ? { exceptionCurrenciesRecorded: currenciesRecorded } : {}),
-      ...(earlierResolutions.length ? { reversalsSetAsideAsResolved: earlierResolutions.length } : {}),
+      ...(identityHolds ? { settlementProviderIdentityHolds: identityHolds } : {}),
+      ...(legacyReviews.some((item) => isOpenException(item.status)) ? { legacyReversalReviewsPending: legacyReviews.filter((item) => isOpenException(item.status)).length } : {}),
       ...(separated.length ? { settlementLinesSeparated: separated.length } : {}),
-      ...(cleared.length || earlierResolutions.length || separated.length ? { auditNote: [separatedLinesNote(separated), clearedExceptionsNote(cleared), earlierResolutionsNote(earlierResolutions)].filter(Boolean).join(" ") } : {}),
+      ...(cleared.length || legacyReviews.length || separated.length ? { auditNote: [separatedLinesNote(separated), clearedExceptionsNote(cleared), legacyReviews.some((item) => isOpenException(item.status)) ? "Earlier unversioned reversal decisions are held for renewed Finance review; historical decisions and financial activity were not reinterpreted." : undefined].filter(Boolean).join(" ") } : {}),
     },
   };
-}
-
-/**
- * The waiting reversals this pass set aside for a resolution an earlier build
- * recorded whose code now means otherwise (financeDecision), each with that
- * resolution: of `observations`, the evidence the pass read.
- */
-function reversalsSetAsideAsResolved(state: DomainState, observations: readonly TypedRecord<"observations">[]): { reversal: TypedRecord<"observations">; exception: TypedRecord<"exceptions"> }[] {
-  return observations.flatMap((reversal) => {
-    if (reversal.status !== "resolved" || reversal.data.resolutionKey !== "reversal_set_aside_after_review") return [];
-    const exception = recordsWhere(state, "exceptions", "id", String(reversal.data.resolvedTo ?? "").slice("exception:".length))[0];
-    return exception && resolveExceptionType(exception.data.type) === "provider_status_mismatch" && earlierResolution(exception) && exception.data.resolutionCode !== unseenReversalCodes.setAside ? [{ reversal, exception }] : [];
-  });
 }
 
 /** What the audit entry adds for settlement lines an earlier build counted in a batch of another currency: each line, its batch, both currencies and the batch that now counts its collection instead. */
@@ -2094,19 +2207,6 @@ function separatedLinesNote(separated: readonly SeparatedLine[]): string | undef
   const named = separated.slice(0, 3).map(({ line, batch, countedIn }) => `${line.reference} (${currencyOf(line)}) from settlement batch ${batch.reference} (${currencyOf(batch)})${countedIn ? `, now counted in settlement batch ${countedIn.reference}, where the provider lists it too` : ""}`);
   const more = separated.length > 3 ? `; and ${counted(separated.length - 3, "more", "more")}` : "";
   return `Took ${counted(separated.length, "settlement line")} in another currency than its batch out of the batch, as a batch holds one currency: ${named.join("; ")}${more}.`;
-}
-
-/**
- * What the audit entry adds for them: each reversal, the code Finance chose and
- * why it was set aside. It does not say which build recorded the resolution,
- * which nothing on the record tells: the build merged on 25 September recorded
- * none either, and told Finance that provider_state_adopted keeps it waiting.
- */
-function earlierResolutionsNote(kept: readonly { reversal: TypedRecord<"observations">; exception: TypedRecord<"exceptions"> }[]): string | undefined {
-  if (!kept.length) return undefined;
-  const named = kept.slice(0, 3).map(({ reversal, exception }) => `${reversal.reference} (${moneyText(reversal.amountKobo, currencyOf(reversal))}, resolved as ${exception.data.resolutionCode})`);
-  const more = kept.length > 3 ? `; and ${counted(kept.length - 3, "more", "more")}` : "";
-  return `Set aside reversal evidence ${named.join("; ")}${more}, as a resolution recorded before resolutions recorded their rules is read, whatever its code (the build before the third review said any resolution sets it aside): it reverses nothing, even if its payment arrives later.`;
 }
 
 /** When a pay-by-bank checkout's outcome became unknown: its first unknown event, else its last change. */
