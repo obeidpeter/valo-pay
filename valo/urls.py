@@ -1,0 +1,28 @@
+from django.urls import path
+from core import views as v
+
+urlpatterns = [
+    path("",v.home,name="today"),
+    path("customers/",v.customers,name="customers"),
+    path("customers/new/",v.customer_form,name="customer_new"),
+    path("customers/<int:pk>/",v.customer_detail,name="customer_detail"),
+    path("customers/<int:pk>/edit/",v.customer_form,name="customer_edit"),
+    path("import/",v.import_customers,name="import"),
+    path("loans/<int:pk>/action/",v.loan_action,name="loan_action"),
+    path("collections/",v.collections,name="collections"),
+    path("payments/",v.payments,name="payments"),
+    path("payments/new/",v.request_form,name="request_new"),
+    path("payments/<int:pk>/",v.request_detail,name="request_detail"),
+    path("payments/<int:pk>/cancel/",v.cancel_request,name="request_cancel"),
+    path("reviews/",v.reviews,name="reviews"),
+    path("reviews/<int:pk>/",v.review_detail,name="review_detail"),
+    path("refunds/<int:pk>/new/",v.refund_form,name="refund_new"),
+    path("reports/",v.reports,name="reports"),
+    path("settings/",v.settings,name="settings"),
+    path("demo-role/",v.demo_role,name="demo_role"),
+    path("credit/",v.preview,{"workspace":"credit"},name="credit"),
+    path("cash/",v.preview,{"workspace":"cash"},name="cash"),
+    path("consent/<str:token>/",v.public,{"kind":"consent"},name="consent"),
+    path("pay/<str:token>/",v.public,{"kind":"payment"},name="pay"),
+    path("exports/<str:kind>/",v.exports,name="export"),
+]

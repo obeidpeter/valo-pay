@@ -1,0 +1,12 @@
+[project]
+name = "valo-pay"
+version = "0.1.0"
+description = "Valo Pay synthetic-data collections sandbox"
+requires-python = ">=3.12"
+dependencies = [
+    "dj-database-url>=3.1.2",
+    "django>=5.2,<5.3",
+    "gunicorn>=26.2.0",
+    "psycopg[binary]>=3.3.6",
+    "whitenoise>=6.12.0",
+]

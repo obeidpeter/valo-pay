@@ -1,0 +1,38 @@
+{% load static %}<!doctype html>
+<html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay — a synthetic-data collections and Pay-by-bank operations sandbox for Nigerian lenders."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=2"></head>
+<body>
+<div class="sandbox" role="note">Demo sandbox · <b>Synthetic data only</b> · No real payments</div>
+<div class="shell">
+<aside class="side">
+  <a href="/" class="brand"><span class="mark">V</span>Valo Pay</a>
+  <div class="org">{{ org.name }}</div>
+  <nav class="nav" aria-label="Main">
+    <a href="/" class="{% if page == 'today' %}on{% endif %}">Today</a>
+    <a href="/customers/" class="{% if page == 'customers' %}on{% endif %}">Customers</a>
+    <a href="/collections/" class="{% if page == 'collections' %}on{% endif %}">Collections</a>
+    <a href="/payments/" class="{% if page == 'payments' %}on{% endif %}">Pay-by-bank</a>
+    <a href="/reviews/" class="{% if page == 'reviews' %}on{% endif %}">Reviews {% if open_review_count %}<span class="count" aria-label="{{ open_review_count }} open">{{ open_review_count }}</span>{% endif %}</a>
+    <a href="/reports/" class="{% if page == 'reports' %}on{% endif %}">Reports</a>
+  </nav>
+  <div class="subwrap">
+    <div class="navlabel">Account</div>
+    <nav class="nav sub" aria-label="Account"><a href="/settings/" class="{% if page == 'settings' %}on{% endif %}">Settings &amp; team</a></nav>
+    <div class="navlabel" style="margin-top:14px">Previews</div>
+    <nav class="nav sub" aria-label="Previews">
+      <a href="/credit-desk/" class="{% if page == 'credit' %}on{% endif %}">Credit Desk <span class="tag">soon</span></a>
+      <a href="/cash-desk/" class="{% if page == 'cash' %}on{% endif %}">Cash Desk <span class="tag">soon</span></a>
+    </nav>
+  </div>
+  <div class="who">
+    <div class="muted small">Simulating</div>
+    <div class="n">{{ actor.name }}</div><div class="r">{{ actor.role }} · <a href="/settings/#role">switch</a></div>
+  </div>
+</aside>
+<main class="main">
+  {% if messages %}<ul class="msgs" role="status">{% for message in messages %}<li class="{{ message.tags }}">{{ message }}</li>{% endfor %}</ul>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</div>
+<script src="{% static 'valo.js' %}" defer></script>
+</body></html>

@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><div class="eyebrow"><a href="/payments/">Pay-by-bank</a> / Request</div><h1 class="mono" style="font-family:var(--mono);font-size:28px">{{ payment_request.reference }}</h1><p class="sub">{{ payment_request.customer_name }} · <span class="badge b-{{ payment_request.status|slugify }}">{{ payment_request.status }}</span></p></div></div>
+<div class="grid g2"><section class="card"><h2>Share link</h2>
+<div class="copy"><input id="share" type="text" readonly value="{{ share_url }}" data-abs aria-label="Share link"><button type="button" class="btn sm" data-copy="share">Copy</button></div>
+<p class="small muted">Demo link. Opening it shows the customer page; no payment can complete in the sandbox.</p>
+<div class="actions"><a class="btn ghost sm" href="{{ share_url }}" target="_blank" rel="noopener">Preview customer page</a></div></section>
+<section class="card"><h2>Details</h2><dl class="kv"><dt>Amount</dt><dd class="num" style="text-align:left">{{ payment_request.amount_display }}</dd><dt>Expires</dt><dd>{{ payment_request.expires_at|date:"j M Y, H:i" }}</dd><dt>Status</dt><dd>{{ payment_request.status }}</dd></dl>
+{% if payment_request.status == 'Awaiting approval' %}<form method="post" action="/payments/{{ payment_request.id }}/cancel/" style="margin-top:16px" data-confirm="Cancel this request?">{% csrf_token %}<button class="btn warn sm" type="submit">Cancel request</button></form>{% endif %}</section></div>
+{% endblock %}

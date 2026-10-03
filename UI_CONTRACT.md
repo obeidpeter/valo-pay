@@ -1,0 +1,31 @@
+# Valo Pay Django template contract
+
+This app deliberately uses Django templates, HTMX and CSS, NOT React, as explicitly required by the user's technical document. Parent owns Python backend. Design owns templates/ and static/ only. No API hooks are needed: forms are server rendered with CSRF. All routes below have trailing slashes. Use normal HTML navigation and forms; optional HTMX progressive enhancement. Do not build charts; numerical summaries are sufficient.
+
+Every page receives: page (today/customers/collections/payments/reviews/reports/settings/credit/cash), title, org (name, retry_preset, receipts), today, actor (name, role), members (id,name,role), messages (Django messages), open_review_count. All money attributes ending _display are formatted naira strings INCLUDING ₦. All customer names/data synthetic. App is a public demo sandbox with session-isolated organisation data; role switching is explicitly simulation, NOT authentication. Always show "Demo sandbox · Synthetic data only · No real payments". No sign-in pretend functionality.
+
+Shared navigation exactly Today / Customers / Collections / Pay-by-bank / Reviews / Reports. Settings via account area. Credit Desk and Cash Desk are separate preview links, not live products.
+
+Templates to create:
+- base.html: shared shell, {% block content %}, static /static/valo.css, local scripts /static/valo.js; messages.
+- today.html: metrics dict due_display, due_count, collected_display, confirmed_count, failed_count, review_count, held_count, active_consents, customer_count; recent_payments (Payment list); urgent_reviews (Review list); instalments list due today; activity (Audit list).
+- customers.html: customers list, q/filter; GET search q; filters overdue/hold/no-consent; add /customers/new/ and import /import/.
+- customer_form.html: form (Django form via form.as_p), customer optional. POST current URL. Fields name,email,phone,external_id,loan_id,product,amount (naira decimal),due_date,instalment_count.
+- customer_detail.html: customer (id,name,email,phone,external_id), loan (id,reference,product,status,on_hold,consent_status,consent_max_display,consent_expiry,consent_token,hold_reason), instalments (list), payments, reviews, activity. Edit /customers/<id>/edit/. Actions POST /loans/<id>/action/ with action=consent or withdraw or hold or release or close, reason required for withdraw/hold/release/close. Consent shows a copyable link /consent/<token>/. Requests /payments/new/?instalment=<id>. History /exports/customer/?customer=<id>. Future schedule editing explicitly out of first slice, avoid pretending.
+- import.html: form with textarea name=csv_data, CSV file input may populate textarea via JS; POST action=validate or commit. csv_data string persisted in escaped hidden textarea after validation; errors list strings, preview list dicts (customer_id,name,loan_id,amount,due_date), validated bool. Template /exports/template/. CSV fields customer_id,name,email,phone,loan_id,product,amount,due_date (one row per instalment). Validation all-or-nothing.
+- collections.html: instalments list, q, filter (upcoming/in-progress/failed/confirmed/hold); GET filters/search. Each instalment has id, loan (customer,reference,on_hold,consent_status), due_date, amount_display, paid_display, outstanding_display, status. No run real debit button.
+- payments.html: payments list, requests list, filter, q. /payments/new/. Request fields id,reference,customer_name,amount_display,status,expires_at,token. POST /payments/<id>/cancel/. Payment fields id,reference,customer_name,amount_display,status,source,paid_at,instalment; refund link /refunds/<id>/new/.
+- request_form.html: form.as_p (instalment dropdown, amount naira, expiry_hours 1..168); POST; confirmation checkbox name=confirmed required. Explain no money movement; creates demo shareable link. On saved redirected /payments/<id>/ with request.
+- request_detail.html: payment_request and share_url; cancel form; copy link via JS.
+- reviews.html: reviews list; q/filter mine/overdue/type; type query optional.
+- review_detail.html: review (id,kind,customer_name,amount_display,status,owner,deadline,evidence,note,outcome,prepared_by), members; POST action=assign owner=<member id>, or action=resolve outcome=Resolved/Dismissed note=...; distinct reviewer enforced. Money outcomes aren't simulated success and Unknown cannot be manually marked Paid. Can resolve with outcome Failed only for Unknown, or dismiss nonfinancial review; refund approval only marks Approved in sandbox (no provider processing).
+- refund_form.html: form.as_p (amount,reason) and payment; POST current URL; second approval via Reviews.
+- reports.html: metrics same today; export links /exports/payments/, /exports/consents/, /exports/reviews/, /exports/audit/, /exports/daily/; CSV downloads real. PDF not implemented yet, do not advertise.
+- settings.html: form.as_p for organisation name/retry preset/receipts POST; members list; actor selector POST /demo-role/ member=id (label "Simulate role"); billing dict licence_display,usage_display,bank_display,vat_display,total_display,eligible_count; gate_items list {label,done}; Paystack not connected, live disabled (no key form). Team invitations and 2FA not connected yet explicitly.
+- preview.html: workspace ("Credit Desk"/"Cash Desk"), features list strings; clearly sample-preview, coming later, no live data claims.
+- public.html: standalone phone-first no staff shell. kind consent/payment/confirmation/expired; lender, first_name, loan_ref, instalments optional, amount_display, max_display, expiry, retry_preset, token. On consent and payment forms POST current URL -> show provider unavailable truthful message (no success). Consent wording, schedule, withdrawal via lender contact. No third party scripts/fonts/tracking.
+
+Review fields: id,kind,customer_name,amount_display,status,owner.name,deadline,overdue,evidence,note,outcome,prepared_by.name.
+Audit: actor_name,action,detail,created_at.
+Payment: customer_name,amount_display,status,source,reference,paid_at,id.
+Use Django {% load static %}, {% csrf_token %}, {% url %} optional but direct absolute URLs as above simplest (root artifact). Never access Python methods requiring args. No inline JS using unescaped Django data. Accessible 360px layout and text labels for statuses, not colour alone.

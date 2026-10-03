@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><div class="eyebrow"><a href="/customers/">Customers</a> / Import</div><h1>Import instalments</h1><p class="sub">One row per instalment. Validation is all-or-nothing: nothing is saved unless every row passes.</p></div><div class="actions"><a class="btn ghost" href="/exports/template/">Download CSV template</a></div></div>
+<div class="grid g2"><section class="card"><form method="post" class="form">{% csrf_token %}
+{% if validated %}<div class="note" style="margin-bottom:12px"><b>{{ preview|length }} row{{ preview|length|pluralize }} passed.</b> Review the preview, then commit.</div>
+<textarea name="csv_data" hidden aria-hidden="true">{{ csv_data }}</textarea>
+<div class="actions"><button class="btn" type="submit" name="action" value="commit">Commit import</button><a class="btn ghost" href="/import/">Start over</a></div>
+{% else %}
+<p><label for="csv_file">CSV file (optional)</label><input id="csv_file" type="file" accept=".csv,text/csv"><span class="helptext">Selecting a file fills the box below. You can also paste directly.</span></p>
+<p><label for="csv_data">CSV data</label><textarea id="csv_data" name="csv_data" required placeholder="customer_id,name,email,phone,loan_id,product,amount,due_date">{{ csv_data }}</textarea></p>
+<button class="btn" type="submit" name="action" value="validate">Validate</button>{% endif %}
+</form>
+{% if errors %}<div style="margin-top:16px"><h3 style="color:var(--red)">{{ errors|length }} problem{{ errors|length|pluralize }} — nothing imported</h3><ul class="errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul></div>{% endif %}
+{% if preview %}<div class="tablewrap" style="margin-top:16px"><table><thead><tr><th>Customer</th><th>Name</th><th>Loan</th><th>Due</th><th class="num">Amount</th></tr></thead><tbody>{% for r in preview %}<tr><td class="mono">{{ r.customer_id }}</td><td>{{ r.name }}</td><td class="mono">{{ r.loan_id }}</td><td>{{ r.due_date }}</td><td class="num">{{ r.amount }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+</section>
+<aside class="card"><h2>Columns</h2><ul class="list mono small"><li>customer_id</li><li>name</li><li>email</li><li>phone</li><li>loan_id</li><li>product</li><li>amount <span class="muted">naira, e.g. 18450.00</span></li><li>due_date <span class="muted">YYYY-MM-DD</span></li></ul></aside></div>
+{% endblock %}

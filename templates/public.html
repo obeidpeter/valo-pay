@@ -1,0 +1,45 @@
+<!doctype html><html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>{{ lender }} · Valo Pay</title>
+<style>
+:root{--paper:#f4f0e6;--card:#fbf9f3;--ink:#14213a;--mute:#6f7382;--line:#e0d9c8;--accent:#e2a018;--amber:#fbefd2;--red:#f7e1dc}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;min-height:100dvh}
+.sb{background:var(--ink);color:#f4e6c4;font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;text-align:center;padding:8px}
+.w{max-width:440px;margin:0 auto;padding:22px 16px 40px}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:18px}.m{width:34px;height:34px;border-radius:9px;background:var(--ink);color:var(--accent);display:grid;place-items:center;font:700 16px Georgia,serif;box-shadow:inset 0 -3px 0 var(--accent)}
+.top small{display:block;color:var(--mute);font-size:12px}
+.c{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;animation:r .4s ease both}@keyframes r{from{opacity:0;transform:translateY(8px)}}
+h1{font:600 26px/1.15 "Iowan Old Style",Palatino,Georgia,serif;margin:0 0 8px}
+.amt{font:600 38px/1.1 "Iowan Old Style",Palatino,Georgia,serif;margin:10px 0}
+.k{font:11px ui-monospace,Menlo,monospace;text-transform:uppercase;letter-spacing:.1em;color:var(--mute)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:14px 0;font-size:14px}dt{color:var(--mute)}dd{margin:0;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}td{padding:8px 0;border-bottom:1px solid var(--line)}td:last-child{text-align:right;font-family:ui-monospace,Menlo,monospace}
+.n{background:var(--amber);border-radius:10px;padding:12px 14px;font-size:14px;margin:14px 0}.n.bad{background:var(--red)}
+label.ck{display:flex;gap:10px;font-size:14px;margin:14px 0;align-items:flex-start}label.ck input{margin-top:4px;width:18px;height:18px;accent-color:var(--ink)}
+button{width:100%;font:600 16px inherit;padding:14px;border-radius:10px;border:0;background:var(--ink);color:#fbf6e9;cursor:pointer;transition:transform .12s,box-shadow .15s}button:hover{box-shadow:0 4px 0 -1px var(--accent);transform:translateY(-1px)}button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.f{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
+</style></head><body>
+<div class="sb" role="note">Demo sandbox · Synthetic data only · No real payments</div>
+<div class="w">
+<div class="top"><div class="m">V</div><div><b>{{ lender }}</b><small>Secured by Valo Pay · Loan {{ loan_ref }}</small></div></div>
+{% if messages %}{% for message in messages %}<div class="n {% if message.tags == 'error' %}bad{% endif %}" role="status">{{ message }}</div>{% endfor %}{% endif %}
+<div class="c">
+{% if kind == 'consent' %}
+<div class="k">Direct debit authorisation</div><h1>Hello {{ first_name }}, please review your repayment plan.</h1>
+<p>{{ lender }} is asking permission to collect your loan repayments from your bank account on the dates below.</p>
+<dl><dt>Loan</dt><dd>{{ loan_ref }}</dd><dt>Maximum per debit</dt><dd>{{ max_display }}</dd>{% if expiry %}<dt>Authorisation ends</dt><dd>{{ expiry|date:"j M Y" }}</dd>{% endif %}{% if retry_preset %}<dt>If a debit fails</dt><dd>{{ retry_preset }}</dd>{% endif %}</dl>
+{% if instalments %}<div class="k">Schedule</div><table>{% for i in instalments %}<tr><td>{{ i.due_date|date:"j M Y" }}</td><td>{{ i.amount_display }}</td></tr>{% endfor %}</table>{% endif %}
+<p style="font-size:14px">You can withdraw this authorisation at any time by contacting {{ lender }}. Withdrawing does not cancel what you owe.</p>
+<form method="post">{% csrf_token %}<label class="ck"><input type="checkbox" name="agree" value="1" required><span>I authorise {{ lender }} to debit up to {{ max_display }} per instalment on the schedule above.</span></label><button type="submit">Continue to my bank</button></form>
+{% elif kind == 'payment' %}
+<div class="k">Payment request</div><h1>Hello {{ first_name }}</h1><p>{{ lender }} has requested a payment towards loan {{ loan_ref }}.</p>
+<div class="amt">{{ amount_display }}</div>{% if expiry %}<p class="k">Link expires {{ expiry|date:"j M Y, H:i" }}</p>{% endif %}
+<form method="post">{% csrf_token %}<button type="submit">Pay by bank transfer</button></form>
+{% elif kind == 'confirmation' %}
+<div class="k">Bank provider unavailable</div><h1>We could not reach the payment provider.</h1>
+<div class="n">This is a demo sandbox. No bank was contacted, nothing was authorised, and <b>no money has moved</b>. If this were live, you would now be sent to your bank to confirm.</div>
+<p style="font-size:14px">Questions about your loan? Contact {{ lender }} directly.</p>
+{% else %}
+<div class="k">Link unavailable</div><h1>This link has expired or was cancelled.</h1><p>Please contact {{ lender }} for a new link. No payment was taken through this link.</p>
+{% endif %}
+</div>
+<p class="f">Valo Pay never asks for your card PIN, BVN or bank password.</p>
+</div></body></html>

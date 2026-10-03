@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><div class="eyebrow">Evidence</div><h1>Reports</h1><p class="sub">Today's position and CSV exports for reconciliation and audit.</p></div></div>
+<div class="stats">
+<div class="stat"><div class="k">Due today</div><div class="v">{{ metrics.due_display }}</div><div class="small muted">{{ metrics.due_count }} instalments</div></div>
+<div class="stat"><div class="k">Confirmed this month</div><div class="v">{{ metrics.collected_display }}</div><div class="small muted">{{ metrics.confirmed_count }} sample payments</div></div>
+<a class="stat alert" href="/collections/?filter=failed"><div class="k">Failed</div><div class="v">{{ metrics.failed_count }}</div></a>
+<a class="stat hold" href="/reviews/"><div class="k">In review</div><div class="v">{{ metrics.review_count }}</div></a>
+<a class="stat" href="/collections/?filter=hold"><div class="k">On hold</div><div class="v">{{ metrics.held_count }}</div></a>
+<div class="stat"><div class="k">Active consents</div><div class="v">{{ metrics.active_consents }}</div></div>
+<a class="stat" href="/customers/"><div class="k">Customers</div><div class="v">{{ metrics.customer_count }}</div></a>
+</div>
+<section class="card"><h2>CSV exports</h2><ul class="list">
+<li><div><b>Payments</b><div class="small muted">Every payment with status, source and reference</div></div><a class="btn ghost sm" href="/exports/payments/" download>Download CSV</a></li>
+<li><div><b>Consents</b><div class="small muted">Consent status, limits and expiry per loan</div></div><a class="btn ghost sm" href="/exports/consents/" download>Download CSV</a></li>
+<li><div><b>Reviews</b><div class="small muted">Exceptions, owners, outcomes and approvers</div></div><a class="btn ghost sm" href="/exports/reviews/" download>Download CSV</a></li>
+<li><div><b>Audit log</b><div class="small muted">Who did what, and when</div></div><a class="btn ghost sm" href="/exports/audit/" download>Download CSV</a></li>
+<li><div><b>Daily summary</b><div class="small muted">Today's due, confirmed and exception totals</div></div><a class="btn ghost sm" href="/exports/daily/" download>Download CSV</a></li>
+</ul></section>{% endblock %}

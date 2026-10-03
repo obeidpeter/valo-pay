@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><div class="eyebrow">Account</div><h1>Settings</h1><p class="sub">Organisation, team, billing estimate and go-live checklist.</p></div></div>
+<div class="grid g2"><div>
+<section class="card"><h2>Organisation</h2><form method="post" class="form">{% csrf_token %}{{ form.as_p }}<button class="btn" type="submit">Save settings</button></form></section>
+<section class="card" id="role"><h2>Simulate role <small>Not sign-in</small></h2><p class="small muted" style="margin-top:0">Switch whose view you see. This is a sandbox simulation, not authentication.</p>
+<form method="post" action="/demo-role/" class="form" style="display:flex;gap:8px;align-items:flex-end">{% csrf_token %}<p style="flex:1;margin:0"><label for="member">Simulate role</label><select id="member" name="member">{% for m in members %}<option value="{{ m.id }}" {% if m.name == actor.name %}selected{% endif %}>{{ m.name }} — {{ m.role }}</option>{% endfor %}</select></p><button class="btn ghost" type="submit">Switch</button></form></section>
+<section class="card"><h2>Team <small>{{ members|length }}</small></h2><ul class="list">{% for m in members %}<li><span><b>{{ m.name }}</b>{% if m.name == actor.name %} <span class="tag">you</span>{% endif %}</span><span class="muted small">{{ m.role }}</span></li>{% endfor %}</ul>
+<p class="small muted">Team invitations and two-factor authentication are not connected yet.</p></section>
+</div><div>
+<section class="card"><h2>Price illustration</h2><dl class="kv"><dt>Licence</dt><dd>{{ billing.licence_display }}</dd><dt>Usage</dt><dd>{{ billing.usage_display }}</dd><dt>Bank fees</dt><dd>{{ billing.bank_display }}</dd><dt>VAT</dt><dd>{{ billing.vat_display }}</dd><dt><b>Total</b></dt><dd><b style="font-family:var(--serif);font-size:20px">{{ billing.total_display }}</b></dd></dl><p class="small muted">Illustration of pricing only, based on {{ billing.eligible_count }} eligible item{{ billing.eligible_count|pluralize }}. Excludes all synthetic payments. Not an invoice and not real usage; nothing is charged.</p></section>
+<section class="card"><h2>Go-live checklist</h2><ul class="list gate">{% for g in gate_items %}<li class="{% if g.done %}done{% endif %}"><span class="box" aria-hidden="true">{% if g.done %}&#10003;{% endif %}</span><span>{{ g.label }} <span class="muted small">— {% if g.done %}done{% else %}to do{% endif %}</span></span></li>{% endfor %}</ul>
+<div class="note warn" style="margin-top:12px"><b>Paystack: not connected.</b> Live mode is disabled in this sandbox.</div>
+<button class="btn" type="button" disabled style="margin-top:12px;opacity:.45;cursor:not-allowed">Go live (unavailable)</button></section>
+</div></div>{% endblock %}
