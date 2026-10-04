@@ -5,21 +5,21 @@ This records the October 2026 review and rewrite of every user-facing word in th
 | Document | What it holds |
 |---|---|
 | [content-guide.md](content-guide.md) | Voice, style, terminology, roles, state meanings and rules for borrower pages, messages and legal text |
-| [copy-inventory.csv](copy-inventory.csv) | 87 entries: each change with location, audience, before, after, intended meaning, issue, priority, source, status and verification |
-| [copy-walk-diff.csv](copy-walk-diff.csv) | The complete before-and-after log: 237 distinct changes found by walking every route, role and state before and after the rewrite |
+| [copy-inventory.csv](copy-inventory.csv) | 91 entries: each change with location, audience, before, after, intended meaning, issue, priority, source, status and verification |
+| [copy-walk-diff.csv](copy-walk-diff.csv) | The complete before-and-after log: 241 distinct changes found by walking every route, role and state before and after the rewrite |
 | This file | Coverage, test results, discrepancies, owner approvals and the comprehension test script |
 
 ## Status at a glance
 
 | Status | Meaning | Count |
 |---|---|---|
-| Implemented and tested | In the code, and covered by automated tests, the browser check or the reviewed walk diff | 73 inventory entries |
-| Implemented; awaiting owner review | In the code because the old wording was wrong or misleading, but the owner should confirm the new wording | 11 |
+| Implemented and tested | In the code, and covered by automated tests, the browser check or the reviewed walk diff | 76 inventory entries |
+| Implemented; awaiting owner review | In the code because the old wording was wrong or misleading, but the owner should confirm the new wording | 12 |
 | Unchanged; awaiting owner review | Legal or security wording deliberately left as it was, with proposed alternatives below | 2 |
 | Not changed; owner decision | Needs a product or engineering decision first | 1 |
 | Unverified | Nothing has been tested with real lenders, borrowers or screen-reader users. The comprehension test script below has **not been run**. | All |
 
-Priorities in the inventory: P1 (money, consent, security or state meaning) 31, P2 (blocks a task, recovery or accessibility) 41, P3 (consistency and style) 15.
+Priorities in the inventory: P1 (money, consent, security or state meaning) 32, P2 (blocks a task, recovery or accessibility) 42, P3 (consistency and style) 17.
 
 No real borrower was contacted, no real collection was triggered and nothing was deployed. All checks ran locally against sample data.
 
@@ -44,7 +44,7 @@ A script opened a fresh local demo workspace and walked 126 scenes: every route,
 
 | Surface | Result |
 |---|---|
-| Navigation, headings, body text, buttons, links | Reviewed and rewritten. The six navigation names and four role names are unchanged. |
+| Navigation, headings, body text, buttons, links | Reviewed and rewritten. The six navigation names and four role names are unchanged. Actions are shown only to roles that can use them. |
 | Page titles and meta descriptions | Reviewed; every page title now names its record or task |
 | Form labels, help text, placeholders | Reviewed and rewritten |
 | Validation and error messages, including CSV import | Reviewed and rewritten; no framework default messages remain |
@@ -54,7 +54,7 @@ A script opened a fresh local demo workspace and walked 126 scenes: every route,
 | Status labels | TRD labels kept; plain meanings added next to them (core/content.py) |
 | Accessible names and announcements | Reviewed with the browser's accessibility tree; fixes listed under test results |
 | Borrower consent and payment pages | Reviewed and rewritten, except the legal sentences (see owner approvals) |
-| Error pages | Created for 403, 404, 500 and form-security failures; the 405 response is still blank (D8 below) |
+| Error pages | Created for 403, 404, 500 and form-security failures. Customer links (/consent/, /pay/) that do not exist get a customer version of the 404 page. The 405 response is still blank (D8 below). |
 | CSV exports | Reviewed; column names and the daily summary rewritten (see T7, T8 in the inventory) |
 | Audit entries and sample records | Wording changed only for entries created from now on. Existing audit entries, decision notes and evidence are never rewritten. |
 | Operator command output (purge_demo_workspaces) | Reviewed; unchanged |
@@ -66,25 +66,27 @@ A script opened a fresh local demo workspace and walked 126 scenes: every route,
 
 ## Test results
 
-### Automated tests: 73 passed
+### Automated tests: 79 passed
 
-`uv run pytest` passes 73 tests: the 52 existing behaviour tests and 21 new copy checks in `core/tests/test_copy.py`.
+`uv run pytest` passes 79 tests: the 52 existing behaviour tests and 27 copy checks in `core/tests/test_copy.py`.
 
 The copy checks render every staff page for all four roles, the borrower pages in each state, the error pages and every CSV export. They fail on any of the following:
 
 - Unrendered placeholders or printed empty values ("None", "undefined").
-- Banned words: sandbox, synthetic, two-factor, log in, "Something went wrong", "Invalid", "soon", "Secured by", Submit, negative contractions, US spellings, role and navigation variants.
+- Banned words: sandbox, synthetic, two-factor, log in, "Something went wrong", "Invalid", "soon", "Secured by", Submit, negative contractions, US spellings, role and navigation variants, and integrity claims such as "can be detected" or "tamper-proof".
 - Counts whose noun does not agree.
-- Pages without exactly one main heading or a meaningful page title.
-- Form controls without labels, or unnamed buttons.
+- Pages without exactly one main heading or a meaningful page title, and headings that end with a full stop.
+- Form controls without labels, or buttons without their own text.
 - Links with the same name that go to different places.
 
-They also pin the meanings that protect money and consent:
-- Active consent is explained.
+They also pin, word for word, the meanings that protect money and consent:
+- Active consent, Unknown results and Awaiting approval are explained, and every state the code can reach has a meaning in core/content.py.
 - Unknown is not shown as Failed.
 - Approved refunds say "Not refunded yet".
 - Creating a payment request never claims money moved.
-- The borrower legal sentences stay as they are.
+- The consent page lists only dates that can still be collected.
+- The borrower legal sentences, the retry sentence and the security footer stay as they are.
+- Each role sees only the actions it can use, and only Admins see the audit download.
 
 Five existing assertions pinned the old wording. Each was updated to the new wording of the same message, and still checks the same behaviour:
 
@@ -96,7 +98,7 @@ Five existing assertions pinned the old wording. Each was updated to the new wor
 | test_import_is_all_or_nothing | Row 3: amount | Row 3, amount: |
 | test_duplicate_loan_ids_are_rejected | loan_id: already exists | Row 2, loan_id: LN-2041 is already used |
 
-### Do the copy checks catch regressions? 16 of 16
+### Do the checks catch regressions? 16 of 16, and 17 of 17 review fixes
 
 Each of these regressions was put back into a scratch copy, and the copy checks failed every time:
 - "Sandbox" banner
@@ -116,11 +118,13 @@ Each of these regressions was put back into a scratch copy, and the copy checks 
 - Unknown shown as Failed
 - "two-factor"
 
+Each fix from the independent review (below) was also undone in a scratch copy, one at a time, and the tests failed for all 17.
+
 ### Walk diff
 
 - **Same 126 scenes:** before and after, with identical HTTP status codes.
-- **No banned wording:** none in any of the 8,059 text segments after the rewrite.
-- **Every change read:** all 237 distinct changes were reviewed for accuracy against the code and the TRD.
+- **No banned wording:** none in any of the 8,041 text segments after the rewrite.
+- **Every change read:** all 241 distinct changes were reviewed for accuracy against the code and the TRD.
 - **Problems found by reading the diff, then fixed:**
   - The Today date format.
   - A doubled "Approved" on refunds.
@@ -128,6 +132,23 @@ Each of these regressions was put back into a scratch copy, and the copy checks 
   - "Switch" became "Switch person".
   - The edit page listed the wrong editable fields.
   - The customer-filter description.
+
+### Independent review of the merged change
+
+After the first pull request merged, five independent reviewers each read the whole change through one lens: whether the wording tells the truth about the code, money and consent meaning against the sources, logic regressions, markup and accessibility, and the tests and docs. A skeptic then tried to refute each finding. 16 findings held up (12 distinct problems, some found by more than one lens) and 6 were refuted, mostly because the problem was older than the change. All 12 are fixed:
+
+- The consent page listed paid and past instalments under "collect … on the dates below" (B9, D14).
+- Reports claimed changes to the audit log "can be detected", although the hash does not cover times and nothing checks it (T6, O6).
+- A replaced consent link showed customers the staff demo 404 page, and the "replaced by a newer link" wording could never appear (E2, B8, D15).
+- After a closed loan's hold was released, the message said payment requests could be created again; closed loans could also be put on hold (D7).
+- The due-date help text did not say month-end dates move to the last day of a shorter month (F1).
+- The payment page said "pay this instalment" when the amount can be part of it (B2).
+- Withdrawing an unused link was announced as "Consent withdrawn" (D9, D1).
+- Reviewers and Viewers were shown actions that end on the 403 page (G12).
+- A heading ended with a full stop, and list deadlines and expiries had no WAT (G13, G14).
+- Four meaning checks compared the page with itself, so a wrong meaning in core/content.py would pass (now pinned word for word).
+- The unnamed-button check counted later page text as the button's name (fixed, with its own test).
+- Two inventory rows claimed tests that did not exist, and one count was wrong (tests added, count corrected).
 
 ### Browser checks: 166 passed
 
@@ -184,6 +205,8 @@ Accessibility-tree snapshots of the start page, a customer page, a payment reque
 | D11 | Brief refers to earlier accessibility, usability and aesthetics briefs | Those briefs were not supplied | Worked from the 10 usability heuristics document and WCAG 2.2 | Whoever commissioned the work |
 | D12 | Layout | At 360 px and below, the main navigation scrolls sideways (Pay-by-bank, Reviews and Reports start off screen), and the instalment table's "Request payment" column needs a sideways scroll | Layout, not wording; not changed | Design owner |
 | D13 | "In the live service, …" sentences | They describe TRD requirements that this demo does not implement | Each is phrased as the live service's behaviour, never as something that happened | Product owner before any of them is reused in marketing |
+| D14 | TRD 8.2 and FR-C2.2: the consent page shows "the schedule" | The page now lists only unpaid instalments due today or later, so "on the dates below" is true; overdue instalments are not listed | Paid and past dates removed (found in review) | Product owner and legal: whether a new consent should also cover overdue instalments, and how to say so |
+| D15 | Content guide: customers never see staff or demo wording | Creating a new consent link overwrites the old one, so the old link is unknown rather than "no longer active" | Customer links that do not exist get a customer 404 page; the lender's name cannot be shown because the old link is not kept | Engineering: keep replaced links so they can show the lender-branded "no longer active" page |
 
 ## Wording that needs owner approval
 
@@ -196,7 +219,7 @@ The live app currently shows the "Current wording" column. Nothing in this table
 | O3 | Consent page, retry rule (changed from the bare preset name "Standard") | If a debit does not go through: {lender} may try again 2 days later and 5 days later, for the same amount. | Confirm the timing and that the retry amount is the same | Retries are possible and when they happen; must match the contract and Paystack's retry behaviour | Legal and compliance, product |
 | O4 | Borrower pages, header (changed from "Secured by Valo Pay") | Valo Pay is a service provider to {lender} | Confirm it matches the agreed processing structure (Business Plan: Valo Pay acts on the lender's instructions) | Who the customer deals with | Legal counsel |
 | O5 | Borrower pages, footer (unchanged) | Valo Pay never asks for your card PIN, BVN or bank password. | Confirm it stays true for the Paystack direct-debit flow, which may ask for bank details on the bank's or Paystack's own page | Anti-fraud guidance that is always true | Security and legal |
-| O6 | Reports, audit log | Each entry is linked to the one before it, so changes to the log can be detected. | Confirm, or weaken to "Each entry is linked to the one before it." The chain only shows changes when someone checks it, and someone with full database access could rebuild it | Tamper-evidence claim | Security owner |
+| O6 | Reports, audit log | Each entry is linked to the one before it. | Add a tamper-evidence claim only once the hash covers each entry's time, something checks the chain, and the FR-X3.4 checkpoint is stored separately. The earlier "so changes to the log can be detected" was removed after review, and the copy checks now block such claims. | No integrity claim the system cannot back | Security owner |
 | O7 | Settings, price example | An example based on proposed Collections pricing: a licence from ₦150,000 a month, plus a usage fee of 0.3% of each eligible direct debit, capped at ₦150 … | Confirm figures before any external use (Business Plan: Starter "from ₦150,000", fee "0.3%, capped at ₦150", Pay-by-bank ₦50 proposed) | An example, not a quote or invoice; only eligible debits carry the fee | Commercial owner |
 | O8 | Start page | Valo Pay is software for the team that collects loan repayments. It is designed to keep each customer's consent … Valo Pay never holds money: each lender connects its own Paystack account. | Confirm positioning and whether to add "Request a demo" (D4) | No claims beyond what the product does | Marketing and product owners |
 | O9 | Today and Reports | Confirmed this month | Keep, or return to the TRD's "Collected this month (confirmed only)" | Only confirmed payments count (D1) | Product owner |

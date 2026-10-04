@@ -1,5 +1,7 @@
-{% extends "standalone.html" %}{% block title %}Page not found · Valo Pay{% endblock %}{% block content %}
-<section class="card"><div class="eyebrow">Page not found</div><h1>This page does not exist</h1>
+{% extends "standalone.html" %}{% block title %}{% if request.path|slice:":9" == "/consent/" or request.path|slice:":5" == "/pay/" %}Link not found{% else %}Page not found{% endif %} · Valo Pay{% endblock %}{% block content %}
+{% if request.path|slice:":9" == "/consent/" or request.path|slice:":5" == "/pay/" %}<section class="card"><div class="eyebrow">Link not found</div><h1>This link does not work</h1>
+<p class="sub">It may be incomplete, or it may have been replaced or cancelled. No payment can be made and nothing can be authorised through it. If you need a new link, contact the lender or cooperative that sent it to you.</p></section>
+{% else %}<section class="card"><div class="eyebrow">Page not found</div><h1>This page does not exist</h1>
 <p class="sub">The link may be wrong, incomplete or out of date. If someone sent you this link, ask them for a new one. Demo records belong to one workspace, so links from an earlier demo session no longer work.</p>
-<div class="actions" style="margin-top:20px"><a class="btn" href="/">Go to Valo Pay</a></div></section>
+<div class="actions" style="margin-top:20px"><a class="btn" href="/">Go to Valo Pay</a></div></section>{% endif %}
 {% endblock %}

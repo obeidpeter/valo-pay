@@ -25,14 +25,14 @@ button{width:100%;font:600 16px inherit;padding:14px;border-radius:10px;border:0
 <div class="c">
 {% if kind == 'consent' %}
 <div class="k">Direct debit authorisation</div><h1>Hello {{ first_name }}, please check your repayment plan</h1>
-<p>{{ lender }} is asking for your permission to collect your loan repayments from your bank account on the dates below. This is called a direct debit.</p>
+<p>{{ lender }} is asking for your permission to collect your loan repayments from your bank account{% if instalments %} on the dates below{% endif %}. This is called a direct debit.</p>
 <dl><dt>Loan</dt><dd>{{ loan_ref }}</dd><dt>Maximum for each debit</dt><dd>{{ max_display }}</dd>{% if expiry %}<dt>Authorisation ends</dt><dd>{{ expiry|date:"j M Y" }}</dd>{% endif %}</dl>{% if retry_text %}<p style="font-size:14px"><b>If a debit does not go through:</b> {{ retry_text }}</p>{% endif %}
 {% if instalments %}<table><caption class="k" style="text-align:left">Repayment schedule</caption>{% for i in instalments %}<tr><td>{{ i.due_date|date:"j M Y" }}</td><td>{{ i.amount_display }}</td></tr>{% endfor %}</table>{% endif %}
 <p style="font-size:14px">You can withdraw this authorisation at any time by contacting {{ lender }}. Withdrawing does not cancel what you owe.</p>
 <form method="post">{% csrf_token %}<label class="ck"><input type="checkbox" name="agree" value="1" required><span>I authorise {{ lender }} to debit up to {{ max_display }} per instalment on the schedule above.</span></label><button type="submit">Continue to your bank</button></form>
 {% elif kind == 'payment' %}
-<div class="k">Payment request</div><h1>Hello {{ first_name }}</h1><p>{{ lender }} has asked you to pay this instalment of your loan {{ loan_ref }}.</p>
-<div class="amt">{{ amount_display }}</div>{% if instalment %}<p style="font-size:14px;margin-top:0">Instalment {{ instalment.sequence }} of {{ instalment_total }}, due {{ instalment.due_date|date:"j M Y" }}</p>{% endif %}{% if expiry %}<p class="k">This link expires on {{ expiry|date:"j M Y" }} at {{ expiry|date:"H:i" }} WAT</p>{% endif %}
+<div class="k">Payment request</div><h1>Hello {{ first_name }}</h1><p>{{ lender }} has asked you to make a payment towards your loan {{ loan_ref }}.</p>
+<div class="amt">{{ amount_display }}</div>{% if instalment %}<p style="font-size:14px;margin-top:0">For instalment {{ instalment.sequence }} of {{ instalment_total }}, due {{ instalment.due_date|date:"j M Y" }}</p>{% endif %}{% if expiry %}<p class="k">This link expires on {{ expiry|date:"j M Y" }} at {{ expiry|date:"H:i" }} WAT</p>{% endif %}
 <form method="post">{% csrf_token %}<button type="submit">Pay from your bank</button></form>
 {% elif kind == 'confirmation' %}
 <div class="k">Demo · bank step not available</div>{% if flow == 'consent' %}<h1>Your bank was not contacted</h1>
@@ -41,7 +41,7 @@ button{width:100%;font:600 16px inherit;padding:14px;border-radius:10px;border:0
 <div class="n">This is a demonstration, so you were not sent to your bank and <b>no money moved</b>. In the live service, you would approve the payment at your bank, and {{ lender }} would see it only after it is confirmed.</div>{% endif %}
 <p style="font-size:14px">Questions about your loan? Contact {{ lender }}.</p>
 {% else %}
-<div class="k">Link no longer active</div>{% if flow == 'consent' %}<h1>This consent link is no longer active</h1><p>It may have been used, replaced by a newer link or withdrawn, or it was not used within 14 days. If you need a new link, contact {{ lender }}.</p>
+<div class="k">Link no longer active</div>{% if flow == 'consent' %}<h1>This consent link is no longer active</h1><p>It may have been used or withdrawn, or it was not used within 14 days. If you need a new link, contact {{ lender }}.</p>
 {% else %}<h1>This payment link is no longer active</h1><p>It has expired, or {{ lender }} cancelled the request. No payment can be made through this link. If you still need to pay, contact {{ lender }} for a new link.</p>{% endif %}
 {% endif %}
 </div>

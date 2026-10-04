@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block content %}
 <div class="head"><div><div class="eyebrow">Borrowers and members</div><h1>Customers</h1><p class="sub">{% if filtered %}{{ customers|length }} customer{{ customers|length|pluralize }} match{{ customers|length|pluralize:"es," }} your search or filter.{% else %}{{ customers|length }} customer{{ customers|length|pluralize }}. Each row shows their loans, consent status and any holds.{% endif %}</p></div>
-<div class="actions"><a class="btn ghost" href="/import/">Import from CSV</a><a class="btn" href="/customers/new/">Add customer</a></div></div>
+{% if actor.role == 'Admin' or actor.role == 'Preparer' %}<div class="actions"><a class="btn ghost" href="/import/">Import from CSV</a><a class="btn" href="/customers/new/">Add customer</a></div>{% endif %}</div>
 <section class="card">
 <form method="get" class="toolbar" action="/customers/"><div class="search"><label for="q" class="sr-only">Search customers</label><input type="search" id="q" name="q" value="{{ q }}" placeholder="Name, email, phone, customer ID or loan ID">{% if filter %}<input type="hidden" name="filter" value="{{ filter }}">{% endif %}<button class="btn ghost" type="submit">Search</button></div></form>
 <div class="chips" style="margin-bottom:14px"><a class="chip {% if not filter %}on{% endif %}" href="/customers/{% if q %}?q={{ q|urlencode }}{% endif %}">All</a>

@@ -10,7 +10,7 @@ CONSENT = {
     "Requested": "A consent link has been created. The customer has not authorised it yet. The link works for 14 days.",
     "Awaiting bank": "The customer has authorised, and their bank is still activating the consent. No debit can be made until it is Active.",
     "Active": "Consent is in place. Debits must still follow the schedule, the maximum per debit, the six-hour wait after authorisation and the notice rule.",
-    "Withdrawn": "Consent was withdrawn. No new debits can be made under it.",
+    "Withdrawn": "The consent, or a consent link the customer had not used, was withdrawn. No debits can be made under it.",
     "Expired": "This consent is no longer valid: its end date passed or the link was not used within 14 days.",
     "Failed": "The consent was not activated, for example because the bank reported a problem.",
 }

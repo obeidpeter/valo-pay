@@ -9,7 +9,7 @@ import re
 from html.parser import HTMLParser
 
 from django.template.loader import render_to_string
-from django.test import Client
+from django.test import Client, SimpleTestCase
 
 from core import content
 from core.models import Customer, Instalment, Payment, PaymentRequest, Review
@@ -25,6 +25,7 @@ BANNED = [
     (r"(?i)something went wrong|\binvalid\b|This field is required|Enter a valid", "a generic or default error message"),
     (r"(?i)\bsoon\b", "do not promise dates"),
     (r"(?i)secured by", "Valo Pay does not secure the customer's bank"),
+    (r"(?i)can be detected|tamper|cannot be altered", "integrity claims need the security owner's approval (copy-review.md O6)"),
     (r"(?i)\bexternal ID\b", "say customer ID or loan ID"),
     (r"(?i)\borganiz|\bauthoriz|\binstallment|\bcancel(?:ed|ing)\b|\blicense\b", "use British spelling"),
     (r"Pay by bank|Pay-By-Bank|Pay By Bank", "the canonical name is Pay-by-bank"),
@@ -46,6 +47,7 @@ class Reader(HTMLParser):
         self.parts, self.hidden, self.in_label, self.in_title = [], 0, 0, False
         self.title, self.h1, self.labelled, self.controls, self.buttons = "", 0, set(), [], []
         self.links, self.link = {}, None
+        self.in_button, self.headings, self.heading = 0, [], None
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -69,6 +71,9 @@ class Reader(HTMLParser):
                 self.controls.append(a.get("id") or a.get("name"))
         if tag == "button":
             self.buttons.append([a.get("aria-label") or ""])
+            self.in_button += 1
+        if tag in ("h1", "h2", "h3"):
+            self.heading = []
         if tag == "a" and a.get("href"):
             self.link = [a["href"], a.get("aria-label"), []]
 
@@ -79,6 +84,11 @@ class Reader(HTMLParser):
             self.in_label -= 1
         if tag == "title":
             self.in_title = False
+        if tag == "button" and self.in_button:
+            self.in_button -= 1
+        if tag in ("h1", "h2", "h3") and self.heading is not None:
+            self.headings.append(re.sub(r"\s+", " ", "".join(self.heading)).strip())
+            self.heading = None
         if tag == "a" and self.link:
             name = self.link[1] or re.sub(r"\s+", " ", "".join(self.link[2])).strip()
             self.links.setdefault(name, set()).add(self.link[0])
@@ -90,8 +100,10 @@ class Reader(HTMLParser):
         self.parts.append(data)
         if self.in_title:
             self.title += data
-        if self.buttons:
+        if self.in_button and self.buttons:
             self.buttons[-1].append(data)
+        if self.heading is not None:
+            self.heading.append(data)
         if self.link:
             self.link[2].append(data)
 
@@ -121,6 +133,8 @@ class CopyTestCase(WorkspaceTestCase):
         self.assertEqual(unlabelled, [], f"{where}: form controls without a label")
         for button in reader.buttons:
             self.assertTrue("".join(button).strip(), f"{where}: a button has no name")
+        for heading in reader.headings:
+            self.assertFalse(heading.endswith("."), f"{where}: heading ends with a full stop: {heading}")
         ambiguous = {name: sorted(hrefs) for name, hrefs in reader.links.items() if len(hrefs) > 1}
         self.assertEqual(ambiguous, {}, f"{where}: links with the same name go to different places")
         return text
@@ -169,26 +183,46 @@ class StaffPageTests(CopyTestCase):
         text = self.check(self.client.get("/settings/"), "settings")
         for role in ROLES:
             self.assertIn(role, text)
-            self.assertIn(content.ROLE[role], text)
+        for line in ["Sets up the organisation, team and settings. Can also act as a Reviewer.",
+                     "Collections officer: imports loans, creates consent links and payment requests, requests refunds and works the review queue.",
+                     "Supervisor: approves or rejects refunds, decides items that affect money and releases holds.",
+                     "Read-only access and downloads."]:
+            self.assertIn(line, text)
+
+    def test_meanings_cover_every_state(self):
+        expected = {"CONSENT": ["Not requested", "Requested", "Awaiting bank", "Active", "Withdrawn", "Expired", "Failed"],
+                    "PAYMENT_REQUEST": ["Awaiting approval", "Awaiting confirmation", "Confirmed", "Failed", "Unknown", "Expired", "Cancelled"],
+                    "REVIEW_KIND": ["Unknown result", "Consent problem", "Non-retryable failure", "Unclear match", "Refund request"],
+                    "ROLE": ROLES}
+        for name, keys in expected.items():
+            meanings = getattr(content, name)
+            for key in keys:
+                self.assertTrue(meanings.get(key, "").strip(), f"{name}[{key!r}] has no meaning")
 
     def test_states_keep_their_meaning(self):
         active = self.loan_of("Chidi Nwosu")
-        self.assertIn(content.CONSENT["Active"], self.check(self.client.get(f"/customers/{active.customer_id}/"), "active consent"))
+        self.assertIn("Consent is in place. Debits must still follow the schedule, the maximum per debit, the six-hour wait after authorisation and the notice rule.",
+                      self.check(self.client.get(f"/customers/{active.customer_id}/"), "active consent"))
         unknown = self.loan_of("Amara Okeke")
         text = self.check(self.client.get(f"/customers/{unknown.customer_id}/"), "unknown result")
         self.assertIn("Unknown result.", text)
         self.assertNotIn("Failed", text)
         review = self.review("Unknown result")
-        self.assertIn(content.REVIEW_KIND["Unknown result"], self.check(self.client.get(f"/reviews/{review.id}/"), "unknown review"))
+        self.assertIn("No final result arrived for a payment in time. Further collection for this instalment is on hold until the result is known.",
+                      self.check(self.client.get(f"/reviews/{review.id}/"), "unknown review"))
 
     def test_creating_a_request_never_claims_money_moved(self):
         inst = self.loan_of("Chidi Nwosu").instalments.get(sequence=2)
         response = self.client.post("/payments/new/", {"instalment": inst.id, "amount": "100.00", "expiry_hours": 24, "confirmed": "1"}, follow=True)
         text = self.check(response, "new request")
         self.assertIn("Awaiting approval", text)
-        self.assertIn(content.PAYMENT_REQUEST["Awaiting approval"], text)
+        self.assertIn("The customer has not yet approved this payment at their bank.", text)
         for claim in ["Payment received", "has paid", "Paid ·", "Confirmed ·"]:
             self.assertNotIn(claim, text)
+        # Expiries and deadlines that decide what someone can do say WAT, in lists too.
+        self.assertRegex(self.check(self.client.get("/payments/"), "requests list"), r"\d{4}, \d\d:\d\d WAT")
+        self.assertRegex(self.check(self.client.get("/reviews/"), "review queue"), r"\d{4}, \d\d:\d\d WAT")
+        self.assertRegex(self.check(self.client.get("/"), "today"), r"Deadline \d{1,2} \w{3} \d{4}, \d\d:\d\d WAT")
 
     def test_approved_refund_is_not_called_refunded(self):
         payment = Payment.objects.filter(organisation=self.org).first()
@@ -207,6 +241,8 @@ class StaffPageTests(CopyTestCase):
         text = self.check(response, "new customer")
         self.assertIn("Túndé Bakare", text)
         self.assertIn("Customer added, with 1 instalment on loan LN-9100.", text)
+        self.assertIn("No email or phone recorded", text)
+        self.assertNotRegex(text, r"(^|\s)·\s+Download")
         customer = Customer.objects.get(organisation=self.org, external_id="CUS-9100")
         rows = list(csv.reader(io.StringIO(self.client.get(f"/exports/customer/?customer={customer.id}").content.decode("utf-8-sig"))))
         self.assertEqual(rows[1][0], "LN-9100")
@@ -221,6 +257,47 @@ class StaffPageTests(CopyTestCase):
             self.assertIn(message, text)
         text = self.check(self.client.post("/payments/new/", {"amount": "", "expiry_hours": "24"}), "request form errors")
         self.assertIn("Choose the instalment this payment is for.", text)
+        self.assertIn("Later instalments fall on the same day of each following month, or on the last day of a shorter month.",
+                      self.check(self.client.get("/customers/new/"), "customer form"))
+
+    def test_actions_match_the_role(self):
+        creating = ['href="/payments/new/', 'href="/customers/new/"', 'href="/import/"']
+        self.assertIn(creating[0], self.client.get("/").content.decode())
+        for name in ["Tunde Bello", "Emeka Obi"]:
+            self.act_as(name)
+            for url in ["/", "/customers/", "/collections/", "/payments/"]:
+                html = self.client.get(url).content.decode()
+                for link in creating:
+                    self.assertNotIn(link, html, f"{url} as {name} offers {link}, which this role cannot use")
+        review = self.review("Consent problem")
+        self.assertNotIn('name="owner"', self.client.get(f"/reviews/{review.id}/").content.decode())
+
+    def test_audit_download_only_for_admins(self):
+        self.assertIn("/exports/audit/", self.client.get("/reports/").content.decode())
+        for name in ["Tunde Bello", "Zainab Yusuf", "Emeka Obi"]:
+            self.act_as(name)
+            html = self.client.get("/reports/").content.decode()
+            self.assertNotIn("/exports/audit/", html, name)
+            self.assertIn("Admins only.", html)
+
+    def test_closed_loans_cannot_be_held_and_release_says_so(self):
+        loan = self.loan_of("Chidi Nwosu")
+        act = lambda action: " ".join(self.messages_in(self.client.post(f"/loans/{loan.id}/action/", {"action": action, "reason": "test"}, follow=True)))
+        act("hold")
+        act("close")
+        self.act_as("Tunde Bello")
+        self.assertIn(f"Hold released for {loan.reference}. The loan is closed, so payment requests still cannot be created for it.", act("release"))
+        self.assertIn("This loan is closed, so it cannot be put on hold.", act("hold"))
+        self.assertNotIn("Put this loan on hold", self.client.get(f"/customers/{loan.customer_id}/").content.decode())
+
+    def test_withdrawing_an_unused_link_is_not_called_consent(self):
+        loan = self.loan_of("Oluwaseun Adeyemi")
+        self.client.post(f"/loans/{loan.id}/action/", {"action": "consent"})
+        page = read(self.client.get(f"/customers/{loan.customer_id}/").content.decode())
+        self.assertIn("Withdraw the consent link", page.text())
+        self.assertIn("Withdraw link", ["".join(b).strip() for b in page.buttons])
+        response = self.client.post(f"/loans/{loan.id}/action/", {"action": "withdraw", "reason": "Sent to the wrong address"}, follow=True)
+        self.assertIn("Consent link withdrawn. The customer had not used it, and the link no longer works.", " ".join(self.messages_in(response)))
 
     def test_import_problems_name_the_row_and_column(self):
         response = self.import_csv(["CUS-7001,Good,,,LN-7001,Personal finance,abc,2026-11-01"])
@@ -247,11 +324,15 @@ class BorrowerPageTests(CopyTestCase):
         token = self.consent_token()
         text = self.check(self.borrower.get(f"/consent/{token}/"), "consent page")
         self.assertIn("Valo Pay is a service provider to Meridian Finance", text)
-        self.assertIn(content.RETRY_FOR_CUSTOMER["Standard"].format(lender="Meridian Finance"), text)
+        self.assertIn("If a debit does not go through: Meridian Finance may try again 2 days later and 5 days later, for the same amount.", text)
         # Legal wording: changes need owner approval (docs/content/copy-review.md).
         self.assertIn("I authorise Meridian Finance to debit up to ₦50,000.00 per instalment on the schedule above.", text)
         self.assertIn("You can withdraw this authorisation at any time by contacting Meridian Finance. Withdrawing does not cancel what you owe.", text)
         self.assertIn("Valo Pay never asks for your card PIN, BVN or bank password.", text)
+        day = lambda i: f"{i.due_date.day} {i.due_date:%b %Y}"
+        loan = self.loan_of("Oluwaseun Adeyemi")
+        self.assertNotIn(day(loan.instalments.get(sequence=1)), text, "a paid, past instalment is listed among the dates to collect")
+        self.assertIn(day(loan.instalments.get(sequence=3)), text)
         text = self.check(self.borrower.post(f"/consent/{token}/", {"agree": "1"}), "consent confirmation")
         self.assertIn("no direct debit authorisation was created", text)
 
@@ -260,16 +341,23 @@ class BorrowerPageTests(CopyTestCase):
         self.client.post("/payments/new/", {"instalment": inst.id, "amount": "100.00", "expiry_hours": 24, "confirmed": "1"})
         item = PaymentRequest.objects.get(instalment=inst)
         text = self.check(self.borrower.get(f"/pay/{item.token}/"), "payment page")
-        self.assertIn(f"Instalment 2 of {Instalment.objects.filter(loan=inst.loan).count()}", text)
+        self.assertIn("Meridian Finance has asked you to make a payment towards your loan LN-2042.", text)
+        self.assertIn(f"For instalment 2 of {Instalment.objects.filter(loan=inst.loan).count()}", text)
         self.assertRegex(text, r"This link expires on \d{1,2} \w{3} \d{4} at \d\d:\d\d WAT")
         self.assertIn("no money moved", self.check(self.borrower.post(f"/pay/{item.token}/"), "payment confirmation"))
         self.client.post(f"/payments/{item.id}/cancel/")
         self.assertIn("This payment link is no longer active", self.check(self.borrower.get(f"/pay/{item.token}/"), "cancelled link"))
 
-    def test_unknown_link(self):
-        response = self.borrower.get("/consent/not-a-real-token/")
-        self.assertIn(response.status_code, [200, 404])
-        self.check(response, "unknown consent link")
+    def test_unknown_or_replaced_link(self):
+        old = self.consent_token()
+        self.client.post(f"/loans/{self.loan_of('Oluwaseun Adeyemi').id}/action/", {"action": "consent"})
+        for path in ["/consent/not-a-real-token/", f"/consent/{old}/", "/pay/not-a-real-token/"]:
+            response = self.borrower.get(path)
+            self.assertEqual(response.status_code, 404, path)
+            text = self.check(response, path)
+            self.assertIn("This link does not work", text)
+            self.assertNotIn("demo session", text)
+            self.assertNotIn("Go to Valo Pay", text)
 
 
 class ErrorPageTests(CopyTestCase):
@@ -300,6 +388,13 @@ class ErrorPageTests(CopyTestCase):
         text = self.check(response, "start page")
         self.assertIn("Open the demo workspace", text)
         self.assertIn("no money can move", text)
+
+
+class ReaderTests(SimpleTestCase):
+    def test_reader_names_buttons_from_their_own_text(self):
+        self.assertEqual(["".join(b).strip() for b in read("<button></button><p>Later text</p>").buttons], [""])
+        self.assertEqual(["".join(b).strip() for b in read('<button>Copy <span class="sr-only">link</span></button>').buttons], ["Copy link"])
+        self.assertEqual(read("<h2>Done.</h2><p>x</p>").headings, ["Done."])
 
 
 class ExportTests(WorkspaceTestCase):
