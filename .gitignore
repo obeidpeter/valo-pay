@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 .pythonlibs/
 staticfiles/
+.pytest_cache/
 *.sqlite3
 *.db
 *.log

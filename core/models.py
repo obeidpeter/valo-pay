@@ -19,6 +19,9 @@ class Organisation(models.Model):
     retry_preset = models.CharField(max_length=12, default="Standard")
     receipts = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Only demo workspaces may be purged; last_seen_at is a coarse activity marker for that purge.
+    demo = models.BooleanField(default=False)
+    last_seen_at = models.DateTimeField(default=timezone.now)
 
 
 class Scoped(models.Model):
@@ -41,9 +44,6 @@ class Customer(Scoped):
     phone = models.CharField(max_length=30, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["organisation", "external_id"], name="vp_customer_id")]
-    @property
-    def loan(self):
-        return self.loans.first()
 
 
 class Loan(Scoped):
@@ -88,6 +88,10 @@ class Instalment(Scoped):
         if self.paid:
             return "Part-paid"
         return "Overdue" if self.due_date < timezone.localdate() else "Due" if self.due_date == timezone.localdate() else "Upcoming"
+    @property
+    def requestable(self):
+        # Whether to offer a payment request; the request form re-checks under the instalment lock (BR-04, FR-P3.2).
+        return self.loan.status == "Open" and self.status in ["Failed", "Part-paid", "Overdue", "Due", "Upcoming"]
     @property
     def amount_display(self):
         return money(self.amount)
@@ -135,6 +139,10 @@ class Payment(Scoped):
 
 
 class Review(Scoped):
+    # Money-affecting outcomes need an Admin or Reviewer who did not prepare the item (TRD FR-C5.5, BR-11).
+    MONEY_KINDS = {"Unknown result", "Unclear match", "Possible duplicate", "Refund request", "Reversal"}
+    # These also need provider or bank evidence, which the sandbox cannot supply.
+    EVIDENCE_KINDS = {"Unknown result", "Unclear match", "Possible duplicate", "Reversal"}
     instalment = models.ForeignKey(Instalment, on_delete=models.PROTECT)
     kind = models.CharField(max_length=50)
     amount = models.BigIntegerField(default=0)
@@ -146,6 +154,16 @@ class Review(Scoped):
     evidence = models.TextField()
     note = models.TextField(blank=True)
     outcome = models.CharField(max_length=50, blank=True)
+    @property
+    def affects_money(self):
+        return self.kind in self.MONEY_KINDS
+    @property
+    def needs_evidence(self):
+        return self.kind in self.EVIDENCE_KINDS
+    @property
+    def decision_roles(self):
+        # Preparers work the queue, so they may close items that cannot move money (TRD 4.1, FR-C5.5).
+        return ["Admin", "Reviewer"] if self.affects_money else ["Admin", "Preparer", "Reviewer"]
     @property
     def overdue(self):
         return self.status not in ["Resolved", "Dismissed"] and self.deadline < timezone.now()

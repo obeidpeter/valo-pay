@@ -1,6 +1,6 @@
 {% load static %}<!doctype html>
 <html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay — a synthetic-data collections and Pay-by-bank operations sandbox for Nigerian lenders."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=2"></head>
+<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay — a synthetic-data collections and Pay-by-bank operations sandbox for Nigerian lenders."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=3"></head>
 <body>
 <div class="sandbox" role="note">Demo sandbox · <b>Synthetic data only</b> · No real payments</div>
 <div class="shell">
@@ -20,8 +20,8 @@
     <nav class="nav sub" aria-label="Account"><a href="/settings/" class="{% if page == 'settings' %}on{% endif %}">Settings &amp; team</a></nav>
     <div class="navlabel" style="margin-top:14px">Previews</div>
     <nav class="nav sub" aria-label="Previews">
-      <a href="/credit-desk/" class="{% if page == 'credit' %}on{% endif %}">Credit Desk <span class="tag">soon</span></a>
-      <a href="/cash-desk/" class="{% if page == 'cash' %}on{% endif %}">Cash Desk <span class="tag">soon</span></a>
+      <a href="/credit/" class="{% if page == 'credit' %}on{% endif %}">Credit Desk <span class="tag">soon</span></a>
+      <a href="/cash/" class="{% if page == 'cash' %}on{% endif %}">Cash Desk <span class="tag">soon</span></a>
     </nav>
   </div>
   <div class="who">
