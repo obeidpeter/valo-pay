@@ -1,18 +1,18 @@
 {% extends "base.html" %}{% block content %}
-<div class="head"><div><div class="eyebrow">Evidence</div><h1>Reports</h1><p class="sub">Today's position and CSV exports for reconciliation and audit.</p></div></div>
+<div class="head"><div><div class="eyebrow">Records</div><h1>Reports</h1><p class="sub">Today's figures and CSV downloads for reconciliation and audit. Figures use sample data and count confirmed payments only.</p></div></div>
 <div class="stats">
-<div class="stat"><div class="k">Due today</div><div class="v">{{ metrics.due_display }}</div><div class="small muted">{{ metrics.due_count }} instalments</div></div>
-<div class="stat"><div class="k">Confirmed this month</div><div class="v">{{ metrics.collected_display }}</div><div class="small muted">{{ metrics.confirmed_count }} sample payments</div></div>
-<a class="stat alert" href="/collections/?filter=failed"><div class="k">Failed</div><div class="v">{{ metrics.failed_count }}</div></a>
-<a class="stat hold" href="/reviews/"><div class="k">In review</div><div class="v">{{ metrics.review_count }}</div></a>
-<a class="stat" href="/collections/?filter=hold"><div class="k">On hold</div><div class="v">{{ metrics.held_count }}</div></a>
-<div class="stat"><div class="k">Active consents</div><div class="v">{{ metrics.active_consents }}</div></div>
+<div class="stat"><div class="k">Due today</div><div class="v">{{ metrics.due_display }}</div><div class="small muted">{{ metrics.due_count }} unpaid instalment{{ metrics.due_count|pluralize }}</div></div>
+<div class="stat"><div class="k">Confirmed this month</div><div class="v">{{ metrics.collected_display }}</div><div class="small muted">{{ metrics.confirmed_count }} sample payment{{ metrics.confirmed_count|pluralize }} since {{ metrics.month_start|date:"j M" }}</div></div>
+<a class="stat alert" href="/collections/?filter=failed"><div class="k">Failed instalments</div><div class="v">{{ metrics.failed_count }}</div></a>
+<a class="stat hold" href="/reviews/"><div class="k">Open reviews</div><div class="v">{{ metrics.review_count }}</div></a>
+<a class="stat" href="/collections/?filter=hold"><div class="k">Instalments on hold</div><div class="v">{{ metrics.held_count }}</div></a>
+<div class="stat"><div class="k">Active consents</div><div class="v">{{ metrics.active_consents }}</div><div class="small muted">of {{ metrics.loan_count }} loan{{ metrics.loan_count|pluralize }}</div></div>
 <a class="stat" href="/customers/"><div class="k">Customers</div><div class="v">{{ metrics.customer_count }}</div></a>
 </div>
-<section class="card"><h2>CSV exports</h2><ul class="list">
-<li><div><b>Payments</b><div class="small muted">Every payment with status, source and reference</div></div><a class="btn ghost sm" href="/exports/payments/" download>Download CSV</a></li>
-<li><div><b>Consents</b><div class="small muted">Consent status, limits and expiry per loan</div></div><a class="btn ghost sm" href="/exports/consents/" download>Download CSV</a></li>
-<li><div><b>Reviews</b><div class="small muted">Exceptions, owners, outcomes and approvers</div></div><a class="btn ghost sm" href="/exports/reviews/" download>Download CSV</a></li>
-<li><div><b>Audit log</b><div class="small muted">Who did what, and when</div></div><a class="btn ghost sm" href="/exports/audit/" download>Download CSV</a></li>
-<li><div><b>Daily summary</b><div class="small muted">Today's due, confirmed and exception totals</div></div><a class="btn ghost sm" href="/exports/daily/" download>Download CSV</a></li>
+<section class="card"><h2>CSV downloads</h2><ul class="list">
+<li><div><b>Payments</b><div class="small muted">Each payment with its reference, customer, amount, status, source and date. In this demo, all are sample records.</div></div><a class="btn ghost sm" href="/exports/payments/" download>Download CSV<span class="sr-only">: Payments</span></a></li>
+<li><div><b>Consents</b><div class="small muted">Consent status, maximum per debit and end date for each loan</div></div><a class="btn ghost sm" href="/exports/consents/" download>Download CSV<span class="sr-only">: Consents</span></a></li>
+<li><div><b>Reviews</b><div class="small muted">Each review item with its owner, deadline, outcome and note, and who prepared and decided it</div></div><a class="btn ghost sm" href="/exports/reviews/" download>Download CSV<span class="sr-only">: Reviews</span></a></li>
+<li><div><b>Audit log</b><div class="small muted">Who did what and when. Each entry is linked to the one before it, so changes to the log can be detected. Admins only.</div></div>{% if actor.role == 'Admin' %}<a class="btn ghost sm" href="/exports/audit/" download>Download CSV<span class="sr-only">: Audit log</span></a>{% else %}<span class="small muted">Admins only</span>{% endif %}</li>
+<li><div><b>Daily summary</b><div class="small muted">Today's totals: due, confirmed, failed, on hold and open reviews, with the period each one covers</div></div><a class="btn ghost sm" href="/exports/daily/" download>Download CSV<span class="sr-only">: Daily summary</span></a></li>
 </ul></section>{% endblock %}

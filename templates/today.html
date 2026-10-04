@@ -1,33 +1,33 @@
 {% extends "base.html" %}{% block content %}
-<div class="head reveal"><div><div class="eyebrow">{{ today|date:"l, j F Y" }}</div><h1>Good day, {{ actor.name }}.</h1><p class="sub">What was due, what was confirmed, and what needs a human decision.</p></div>
-<div class="actions"><a class="btn ghost" href="/payments/new/">New payment request</a><a class="btn" href="/reviews/">Open reviews ({{ metrics.review_count }})</a></div></div>
+<div class="head reveal"><div><div class="eyebrow">{{ today|date:"l j M Y" }}</div><h1>Good day, {{ actor.name }}.</h1><p class="sub">What is due, what has been confirmed and what needs a decision.</p></div>
+<div class="actions"><a class="btn ghost" href="/payments/new/">New payment request</a><a class="btn" href="/reviews/">Review queue ({{ metrics.review_count }} open)</a></div></div>
 <section class="hero reveal">
-  <div class="l"><div class="lab">Collected this month · sample records</div><div class="big">{{ metrics.collected_display }}</div>
-    <div style="color:#d8cfb7">{{ metrics.due_display }} outstanding today across {{ metrics.due_count }} instalment{{ metrics.due_count|pluralize }}</div>
-    <div class="lab" style="margin-top:24px">{{ metrics.confirmed_count }} sample confirmed payments · no real money moved</div></div>
+  <div class="l"><div class="lab">Confirmed this month · sample data</div><div class="big">{{ metrics.collected_display }}</div>
+    <div style="color:#d8cfb7">{{ metrics.due_display }} outstanding on {{ metrics.due_count }} instalment{{ metrics.due_count|pluralize }} due today</div>
+    <div class="lab" style="margin-top:24px">From {{ metrics.confirmed_count }} confirmed sample payment{{ metrics.confirmed_count|pluralize }} since {{ metrics.month_start|date:"j M" }} · no real money moved</div></div>
   <div class="r">
-    <div><div class="lab">Failed</div><div class="val">{{ metrics.failed_count }}</div></div>
-    <div><div class="lab">In review</div><div class="val">{{ metrics.review_count }}</div></div>
-    <div><div class="lab">On hold</div><div class="val">{{ metrics.held_count }}</div></div>
-    <div><div class="lab">Active consents</div><div class="val">{{ metrics.active_consents }} <span style="font-size:13px;color:#b9b19c">/ {{ metrics.customer_count }}</span></div></div>
+    <div><div class="lab">Failed instalments</div><div class="val">{{ metrics.failed_count }}</div></div>
+    <div><div class="lab">Open reviews</div><div class="val">{{ metrics.review_count }}</div></div>
+    <div><div class="lab">Instalments on hold</div><div class="val">{{ metrics.held_count }}</div></div>
+    <div><div class="lab">Active consents</div><div class="val">{{ metrics.active_consents }} <span style="font-size:13px;color:#b9b19c">of {{ metrics.loan_count }} loan{{ metrics.loan_count|pluralize }}</span></div></div>
   </div>
 </section>
 <div class="grid g2">
 <div>
-  <section class="card reveal"><h2>Needs a decision <small><a href="/reviews/">All reviews</a></small></h2>
-  {% if urgent_reviews %}<ul class="list">{% for r in urgent_reviews %}<li><div><a href="/reviews/{{ r.id }}/"><b>{{ r.kind }}</b></a> · {{ r.customer_name }}<div class="small muted">{% if r.overdue %}<span class="badge b-overdue">Overdue</span> {% endif %}Due {{ r.deadline|date:"j M, H:i" }}{% if r.owner %} · {{ r.owner.name }}{% else %} · Unassigned{% endif %}</div></div><span class="num">{{ r.amount_display }}</span></li>{% endfor %}</ul>
-  {% else %}<div class="empty"><div class="ico">0</div><b>No exceptions waiting</b>Every payment today has a clear outcome.</div>{% endif %}</section>
+  <section class="card reveal"><h2>Needs a decision <small><a href="/reviews/">Review queue</a></small></h2>
+  {% if urgent_reviews %}<ul class="list">{% for r in urgent_reviews %}<li><div><a href="/reviews/{{ r.id }}/"><b>{{ r.kind }}</b></a> · {{ r.customer_name }}<div class="small muted">{% if r.overdue %}<span class="badge b-overdue">Overdue</span> {% endif %}Deadline {{ r.deadline|date:"j M, H:i" }} · Owner: {{ r.owner.name }}</div></div><span class="num">{{ r.amount_display }}</span></li>{% endfor %}</ul>
+  {% else %}<div class="empty"><div class="ico" aria-hidden="true">0</div><b>Nothing needs a decision</b>There are no open review items.</div>{% endif %}</section>
   <section class="card reveal"><h2>Due today <small><a href="/collections/">Collections</a></small></h2>
   {% if instalments %}<div class="tablewrap"><table><thead><tr><th>Customer</th><th class="hide-sm">Loan</th><th>Status</th><th class="num">Outstanding</th></tr></thead><tbody>
-  {% for i in instalments %}<tr><td>{{ i.loan.customer.name }}{% if i.loan.on_hold %} <span class="badge b-hold">Hold</span>{% endif %}</td><td class="mono hide-sm">{{ i.loan.reference }}</td><td><span class="badge b-{{ i.status|slugify }}">{{ i.status }}</span></td><td class="num">{{ i.outstanding_display }}</td></tr>{% endfor %}
-  </tbody></table></div>{% else %}<div class="empty"><div class="ico">-</div><b>Nothing due today</b>Upcoming instalments live in Collections.</div>{% endif %}</section>
+  {% for i in instalments %}<tr><td>{{ i.loan.customer.name }}</td><td class="mono hide-sm">{{ i.loan.reference }}</td><td><span class="badge b-{{ i.status|slugify }}">{{ i.status }}</span></td><td class="num">{{ i.outstanding_display }}</td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty"><div class="ico" aria-hidden="true">-</div><b>Nothing is due today</b>See upcoming instalments in Collections.</div>{% endif %}</section>
 </div>
 <div>
   <section class="card reveal"><h2>Recent payments <small><a href="/payments/">Pay-by-bank</a></small></h2>
   {% if recent_payments %}<ul class="list">{% for p in recent_payments %}<li><div>{{ p.customer_name }}<div class="small muted mono">{{ p.reference }}</div></div><div style="text-align:right"><div class="num">{{ p.amount_display }}</div><span class="badge b-{{ p.status|slugify }}">{{ p.status }}</span></div></li>{% endfor %}</ul>
-  {% else %}<div class="empty"><b>No payments yet</b>Send a pay-by-bank request to start.</div>{% endif %}</section>
-  <section class="card reveal"><h2>Activity</h2>
+  {% else %}<div class="empty"><b>No confirmed payments yet</b>Payments appear here once they are confirmed.</div>{% endif %}</section>
+  <section class="card reveal"><h2>Recent activity</h2>
   {% if activity %}<ul class="list feed">{% for a in activity %}<li><div class="t">{{ a.created_at|date:"j M H:i" }} · {{ a.actor_name }}</div><b>{{ a.action }}</b> <span class="muted small">{{ a.detail }}</span></li>{% endfor %}</ul>
-  {% else %}<div class="empty"><b>Quiet so far</b>Every change will be logged here.</div>{% endif %}</section>
+  {% else %}<div class="empty"><b>No activity yet</b>Each change is recorded here.</div>{% endif %}</section>
 </div></div>
 {% endblock %}

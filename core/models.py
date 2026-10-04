@@ -1,8 +1,10 @@
 import secrets
 import uuid
+from datetime import timedelta
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from . import content
 
 
 def token():
@@ -35,6 +37,9 @@ class Member(Scoped):
     role = models.CharField(max_length=20)
     def __str__(self):
         return f"{self.name} · {self.role}"
+    @property
+    def role_description(self):
+        return content.ROLE.get(self.role, "")
 
 
 class Customer(Scoped):
@@ -64,6 +69,17 @@ class Loan(Scoped):
     @property
     def consent_max_display(self):
         return money(self.consent_max)
+    @property
+    def consent_meaning(self):
+        return content.CONSENT.get(self.consent_status, "")
+    @property
+    def consent_link_expires(self):
+        # A consent link works for 14 days after it is created (TRD 7.4); see views.public.
+        return self.consent_requested_at + timedelta(days=14) if self.consent_requested_at else None
+    @property
+    def unknown_instalments(self):
+        # Uses the prefetched instalments on the customer page.
+        return [i for i in self.instalments.all() if i.state == "Unknown"]
 
 
 class Instalment(Scoped):
@@ -120,6 +136,9 @@ class PaymentRequest(Scoped):
     @property
     def amount_display(self):
         return money(self.amount)
+    @property
+    def status_meaning(self):
+        return content.PAYMENT_REQUEST.get(self.status, "")
 
 
 class Payment(Scoped):
@@ -141,7 +160,7 @@ class Payment(Scoped):
 class Review(Scoped):
     # Money-affecting outcomes need an Admin or Reviewer who did not prepare the item (TRD FR-C5.5, BR-11).
     MONEY_KINDS = {"Unknown result", "Unclear match", "Possible duplicate", "Refund request", "Reversal"}
-    # These also need provider or bank evidence, which the sandbox cannot supply.
+    # These also need provider or bank evidence, which the demo cannot supply.
     EVIDENCE_KINDS = {"Unknown result", "Unclear match", "Possible duplicate", "Reversal"}
     instalment = models.ForeignKey(Instalment, on_delete=models.PROTECT)
     kind = models.CharField(max_length=50)
@@ -160,6 +179,9 @@ class Review(Scoped):
     @property
     def needs_evidence(self):
         return self.kind in self.EVIDENCE_KINDS
+    @property
+    def kind_meaning(self):
+        return content.REVIEW_KIND.get(self.kind, "")
     @property
     def decision_roles(self):
         # Preparers work the queue, so they may close items that cannot move money (TRD 4.1, FR-C5.5).

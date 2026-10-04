@@ -116,7 +116,9 @@ class ConsentAndHoldTests(WorkspaceTestCase):
 
     def test_active_consent_withdrawal_is_not_claimed(self):
         loan = self.loan_of("Chidi Nwosu")
-        self.assertIn("Provider deactivation is unavailable", " ".join(self.messages_in(self.act(loan, "withdraw"))))
+        said = " ".join(self.messages_in(self.act(loan, "withdraw")))
+        self.assertIn("Consent cannot be withdrawn in this demo", said)
+        self.assertIn("The consent is unchanged", said)
         loan.refresh_from_db()
         self.assertEqual(loan.consent_status, "Active")
 
@@ -124,7 +126,7 @@ class ConsentAndHoldTests(WorkspaceTestCase):
         loan = self.loan_of("Chidi Nwosu")
         self.act_as("Tunde Bello")
         self.act(loan, "hold")
-        self.assertIn("different Reviewer", " ".join(self.messages_in(self.act(loan, "release"))))
+        self.assertIn("a different person must release it", " ".join(self.messages_in(self.act(loan, "release"))))
         self.act_as("Zainab Yusuf")
         self.assertEqual(self.client.post(f"/loans/{loan.id}/action/", {"action": "release", "reason": "x"}).status_code, 403)
         self.act_as("Ada Okafor")

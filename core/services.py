@@ -6,6 +6,7 @@ from datetime import timedelta, date
 from decimal import Decimal, InvalidOperation
 from importlib import import_module
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest, Refund
@@ -64,14 +65,14 @@ def seed_demo():
                 if n == 0:
                     inst.state = "Unknown"
                     loan.on_hold = True
-                    loan.hold_reason = "Unknown result: awaiting final provider evidence."
+                    loan.hold_reason = "A payment on this loan has an Unknown result. Collection stays paused until the final result is known."
                     loan.held_by = prep
                     loan.save()
                 if n == 4:
                     inst.state = "Failed"
                 inst.save()
-                Review.objects.create(organisation=org, instalment=inst, kind=kind, amount=inst.amount, owner=reviewer, prepared_by=prep, deadline=timezone.now()+timedelta(days=-1 if n==0 else 2), evidence="Synthetic example for exploring the review process. No bank was contacted; no real money moved.")
-    audit(org, prep, "Demo workspace created", "Synthetic examples loaded. Live payment processing is disabled.")
+                Review.objects.create(organisation=org, instalment=inst, kind=kind, amount=inst.amount, owner=reviewer, prepared_by=prep, deadline=timezone.now()+timedelta(days=-1 if n==0 else 2), evidence="Sample item for trying out reviews. No bank or payment provider was contacted, and no money moved.")
+    audit(org, prep, "Demo workspace created", "Sample data loaded. No payment provider is connected, so no money can move.")
     return org, prep
 
 
@@ -124,55 +125,96 @@ def purge_demo_workspaces(idle_for=None, limit=None):
     return purged
 
 
+class RowProblem(ValueError):
+    """A problem with one CSV row, written for the person correcting the file."""
+    def __init__(self, message, column=None):
+        super().__init__(message)
+        self.column = column
+
+
+def shown(value):
+    # Echo a value from the file back to the person, shortened so one bad cell cannot flood the page.
+    return f"\"{value[:40]}\u2026\"" if len(value) > 40 else f"\"{value}\""
+
+
 def validate_csv(text, org):
     errors, rows = [], []
     try:
         reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
-        required = {"customer_id","name","email","phone","loan_id","product","amount","due_date"}
-        if not reader.fieldnames or not required.issubset(reader.fieldnames):
-            return ["Missing columns: " + ", ".join(sorted(required))], []
+        required = ["customer_id","name","email","phone","loan_id","product","amount","due_date"]
+        if not reader.fieldnames:
+            return ["The file is empty. Choose a CSV file or paste the data, starting with the row of column names."], []
+        missing = [k for k in required if k not in reader.fieldnames]
+        if missing:
+            return [f"The file is missing {'this column' if len(missing) == 1 else 'these columns'}: {', '.join(missing)}. "
+                    f"The first row must name all 8 columns: {', '.join(required)}. Download the CSV template to see the format."], []
         seen = set()
         loan_owners = {}
         existing = set(Loan.objects.filter(organisation=org).values_list("reference", flat=True))
         existing_customers = set(Customer.objects.filter(organisation=org).values_list("external_id", flat=True))
+        labels = {"name": "the customer's name", "customer_id": "the customer ID", "loan_id": "the loan ID"}
         for n, row in enumerate(reader, 2):
             if n > 5001:
-                errors.append("Maximum 5,000 instalments per import.")
+                errors.append("This file has more than 5,000 instalments. Split it into files of up to 5,000 rows and import them one at a time.")
                 break
             try:
-                if None in row or any(row.get(k) is None for k in required):
-                    raise ValueError("column count does not match the template")
+                if None in row:
+                    raise RowProblem("This row has more values than there are columns. Check for an extra comma, or put quotes around values that contain a comma.")
+                if any(row.get(k) is None for k in required):
+                    raise RowProblem("This row has fewer values than there are columns. Every row needs all 8 values: leave optional ones empty but keep their commas.")
                 row = {k: v.strip() for k,v in row.items()}
                 for k in ["name", "customer_id", "loan_id"]:
-                    if not row[k] or len(row[k]) > (120 if k == "name" else 60):
-                        raise ValueError(f"{k}: required and too long values are not allowed")
-                amount = Decimal(row["amount"])
-                if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2 or amount > Decimal("9999999999.99"):
-                    raise ValueError("amount: use a positive number with at most two decimal places")
-                due = date.fromisoformat(row["due_date"])
+                    if not row[k]:
+                        raise RowProblem(f"This value is missing. Enter {labels[k]}.", k)
+                    limit = 120 if k == "name" else 60
+                    if len(row[k]) > limit:
+                        raise RowProblem(f"This value is too long. Use up to {limit} characters.", k)
+                try:
+                    amount = Decimal(row["amount"])
+                except InvalidOperation:
+                    raise RowProblem(f"{shown(row['amount'])} is not a number. Enter the amount in naira, for example 18450.00.", "amount")
+                if not amount.is_finite():
+                    raise RowProblem(f"{shown(row['amount'])} is not a number. Enter the amount in naira, for example 18450.00.", "amount")
+                if amount <= 0:
+                    raise RowProblem("Enter an amount greater than zero.", "amount")
+                if amount.as_tuple().exponent < -2:
+                    raise RowProblem(f"{shown(row['amount'])} has more than 2 decimal places. Use no more than 2, for example 18450.50.", "amount")
+                if amount > Decimal("9999999999.99"):
+                    raise RowProblem("This amount is too large. Enter an amount below ₦10,000,000,000.", "amount")
+                try:
+                    due = date.fromisoformat(row["due_date"])
+                except ValueError:
+                    raise RowProblem(f"{shown(row['due_date'])} is not a date in the format YYYY-MM-DD. Enter it like 2026-11-15.", "due_date")
                 if row["loan_id"] in existing:
-                    raise ValueError("loan_id: already exists in this organisation")
+                    raise RowProblem(f"{row['loan_id']} is already used by a loan in your organisation. An import can only add new loans, so use a different loan ID.", "loan_id")
                 if row["customer_id"] in existing_customers:
-                    raise ValueError("customer_id: already exists; use the customer form for existing records")
+                    raise RowProblem(f"{row['customer_id']} already exists in your organisation. An import can only add new customers.", "customer_id")
                 if row["loan_id"] in loan_owners and loan_owners[row["loan_id"]] != row["customer_id"]:
-                    raise ValueError("loan_id: belongs to two different customers")
+                    raise RowProblem(f"{row['loan_id']} also appears with a different customer_id in this file. Each loan must belong to one customer.", "loan_id")
                 key = (row["loan_id"], row["due_date"])
                 if key in seen:
-                    raise ValueError("duplicate instalment for this loan and due date")
-                if len(row["phone"]) > 30 or len(row["product"]) > 80:
-                    raise ValueError("phone or product exceeds maximum length")
+                    raise RowProblem(f"Loan {row['loan_id']} already has an instalment due on {row['due_date']} earlier in this file. Remove the duplicate row.", "due_date")
+                if len(row["phone"]) > 30:
+                    raise RowProblem("This value is too long. Use up to 30 characters.", "phone")
+                if len(row["product"]) > 80:
+                    raise RowProblem("This value is too long. Use up to 80 characters.", "product")
                 if row["email"]:
                     from django.core.validators import validate_email
-                    validate_email(row["email"])
+                    try:
+                        validate_email(row["email"])
+                    except ValidationError:
+                        raise RowProblem(f"{shown(row['email'])} is not a valid email address. Correct it or leave it empty.", "email")
                 seen.add(key)
                 loan_owners[row["loan_id"]] = row["customer_id"]
                 rows.append({**row, "kobo": int(amount*100), "date": due})
-            except (ValueError, InvalidOperation, Exception) as exc:
-                errors.append(f"Row {n}: {exc}")
+            except RowProblem as exc:
+                errors.append(f"Row {n}, {exc.column}: {exc}" if exc.column else f"Row {n}: {exc}")
+            except Exception:
+                errors.append(f"Row {n}: this row could not be read. Check that it follows the CSV template.")
         if not rows and not errors:
-            errors.append("No instalments found.")
-    except csv.Error as exc:
-        errors.append(f"CSV format error: {exc}")
+            errors.append("The file has column names but no instalment rows. Add one row for each instalment.")
+    except csv.Error:
+        errors.append("The file could not be read as CSV. Save it from your spreadsheet as a comma-separated (.csv) file and try again.")
     return errors, rows
 
 

@@ -16,5 +16,5 @@ class WorkspaceMiddleware:
         if not isinstance(exception, WorkspaceRequired):
             return None
         if request.method == "POST":
-            messages.warning(request, "Your demo workspace has ended (workspaces close after 30 minutes without activity), so that change was not saved.")
+            messages.warning(request, "Your demo session has ended, so that change was not saved. Demo workspaces close after 30 minutes without activity. Open a new workspace to continue.")
         return redirect("today")
