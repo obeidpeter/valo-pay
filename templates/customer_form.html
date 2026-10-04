@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block content %}
-<div class="head"><div><div class="eyebrow"><a href="/customers/">Customers</a>{% if customer %} / <a href="/customers/{{ customer.id }}/">{{ customer.name }}</a>{% endif %}</div><h1>{% if customer %}Edit {{ customer.name }}{% else %}Add a customer{% endif %}</h1><p class="sub">Amounts are in naira. The loan is split into equal instalments starting on the first due date.</p></div></div>
+<div class="head"><div><div class="eyebrow"><a href="/customers/">Customers</a>{% if customer %} / <a href="/customers/{{ customer.id }}/">{{ customer.name }}</a>{% endif %}</div><h1>{% if customer %}Edit {{ customer.name }}{% else %}Add a customer{% endif %}</h1><p class="sub">{% if customer %}You can change the customer's name, customer ID, email, phone and loan product.{% else %}Enter the customer's details and their loan. Amounts are in naira.{% endif %}</p></div></div>
 <div class="grid g2"><section class="card"><form method="post" class="form">{% csrf_token %}{{ form.as_p }}
-<div class="actions"><button class="btn" type="submit">{% if customer %}Save changes{% else %}Create customer{% endif %}</button><a class="btn ghost" href="{% if customer %}/customers/{{ customer.id }}/{% else %}/customers/{% endif %}">Cancel</a></div></form></section>
-<aside class="note">Synthetic data only. Do not enter real borrower names, BVNs, or account numbers in this sandbox.</aside></div>
+<div class="actions"><button class="btn" type="submit">{% if customer %}Save changes{% else %}Add customer{% endif %}</button><a class="btn ghost" href="{% if customer %}/customers/{{ customer.id }}/{% else %}/customers/{% endif %}">Cancel</a></div></form></section>
+<aside class="note">Use made-up details only. Do not enter real customer names, Bank Verification Numbers (BVNs) or account numbers in this demo.</aside></div>
 {% endblock %}

@@ -40,7 +40,8 @@ class BorrowerPageTests(WorkspaceTestCase):
         self.assertEqual(self.borrower.get(f"/pay/{self.item.token}/").context["kind"], "payment")
         response = self.borrower.post(f"/pay/{self.item.token}/")
         self.assertEqual(response.context["kind"], "confirmation")
-        self.assertContains(response, "no money has moved")
+        self.assertContains(response, "<b>no money moved</b>")
+        self.assertNotContains(response, "Payment received")
 
     def test_consent_hand_off_is_truthful(self):
         loan = self.loan_of("Oluwaseun Adeyemi")
@@ -77,12 +78,12 @@ class RecordTests(WorkspaceTestCase):
     def test_import_is_all_or_nothing(self):
         response = self.import_csv(["CUS-7001,Good,,,LN-7001,Personal finance,100.00,2026-11-01",
                                     "CUS-7002,Bad,,,LN-7002,Personal finance,100.005,2026-11-01"])
-        self.assertIn("Row 3: amount", " ".join(response.context["errors"]))
+        self.assertIn("Row 3, amount:", " ".join(response.context["errors"]))
         self.assertFalse(Customer.objects.filter(organisation=self.org, external_id__in=["CUS-7001", "CUS-7002"]).exists())
 
     def test_duplicate_loan_ids_are_rejected(self):
         response = self.import_csv(["CUS-7001,Dup,,,LN-2041,Personal finance,100.00,2026-11-01"])
-        self.assertIn("loan_id: already exists", " ".join(response.context["errors"]))
+        self.assertIn("Row 2, loan_id: LN-2041 is already used", " ".join(response.context["errors"]))
 
     def test_audit_hash_chain_verifies(self):
         self.client.post(f"/loans/{self.loan_of('Chidi Nwosu').id}/action/", {"action": "hold", "reason": "check"})
