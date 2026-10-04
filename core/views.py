@@ -14,7 +14,7 @@ from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from .models import *
-from . import content
+from . import content, tour
 from .forms import CustomerForm, RequestForm, RefundForm, SettingsForm
 from .services import WorkspaceRequired, context, audit, month_date, validate_csv, commit_csv, seed_demo, workspace_exists, purge_demo_workspaces
 
@@ -44,6 +44,7 @@ def page(request, template, ctx, **extra):
     ctx.update(extra)
     ctx.setdefault("page", template)
     ctx.setdefault("title", TITLES.get(template, template.replace("_"," ").capitalize()))
+    ctx.setdefault("tour", tour.bar(request.session.get("guide_step")))
     return render(request, template+".html", ctx)
 
 
@@ -90,6 +91,7 @@ def start(request):
         request.session["org"] = str(org.id)
         request.session["actor"] = actor.id
         request.session.pop("guide_seen", None)
+        request.session.pop("guide_step", None)
         if previous:
             # Mark the replaced workspace idle so the purge below deletes it now, not after 24 hours.
             stale = timezone.now() - django_settings.DEMO_WORKSPACE_RETENTION - timedelta(minutes=1)
@@ -415,12 +417,16 @@ def settings(request):
     return page(request,"settings",c,form=form,billing=billing,gate_items=gates,can_edit=c["actor"].role=="Admin")
 
 
+def act_as(request, member):
+    request.session["actor"]=member.pk
+    messages.info(request,f"You're now acting as {member.name} ({member.role}). This is for the demo only; it is not signing in.")
+
+
 @require_POST
 def demo_role(request):
     c=context(request); member=lookup_or_404(Member.objects.filter(organisation=c["org"]),request.POST.get("member"))
-    request.session["actor"]=member.pk
-    messages.info(request,f"You're now acting as {member.name} ({member.role}). This is for the demo only; it is not signing in.")
-    # The demo guide switches person and opens the step in one click; only pages on this site are allowed.
+    act_as(request,member)
+    # One click can switch person and open a page; only pages on this site are allowed.
     nxt=request.POST.get("next","")
     if nxt.startswith("/") and url_has_allowed_host_and_scheme(nxt,allowed_hosts={request.get_host()},require_https=request.is_secure()):
         return redirect(nxt)
@@ -428,26 +434,27 @@ def demo_role(request):
 
 
 def guide(request):
-    c=context(request); org=c["org"]
+    c=context(request)
     request.session["guide_seen"]=True
-    # Steps open the sample records seed_demo() creates; if one was changed, the step falls back to its list page.
-    customer=lambda ref: Customer.objects.filter(organisation=org,external_id=ref).first()
-    member=lambda name: Member.objects.filter(organisation=org,name=name).first()
-    chidi,amara,oluwaseun=customer("CUS-1002"),customer("CUS-1001"),customer("CUS-1004")
-    request_url="/collections/"
-    if chidi:
-        busy=set(PaymentRequest.objects.filter(organisation=org,status__in=["Awaiting approval","Awaiting confirmation","Unknown"]).values_list("instalment_id",flat=True))
-        inst=next((i for i in Instalment.objects.filter(loan__customer=chidi,loan__status="Open",loan__on_hold=False).select_related("loan").order_by("loan_id","sequence")
-                   if i.requestable and i.id not in busy),None)
-        if inst: request_url=f"/payments/new/?instalment={inst.id}"
-    payment=Payment.objects.filter(organisation=org,status="Confirmed",instalment__loan__customer=chidi).first() if chidi else None
-    review=Review.objects.filter(organisation=org,kind="Consent problem",status__in=["Open","In progress"]).first()
-    return page(request,"guide",c,ada=member("Ada Okafor"),tunde=member("Tunde Bello"),
-                chidi_url=f"/customers/{chidi.id}/" if chidi else "/customers/",
-                amara_url=f"/customers/{amara.id}/" if amara else "/customers/",
-                oluwaseun_url=f"/customers/{oluwaseun.id}/" if oluwaseun else "/customers/",
-                request_url=request_url,refund_url=f"/refunds/{payment.id}/new/" if payment else "/payments/",
-                review_url=f"/reviews/{review.id}/" if review else "/reviews/")
+    return page(request,"guide",c,steps=tour.STEPS,guide_step=request.session.get("guide_step"),
+                ada=Member.objects.filter(organisation=c["org"],name=tour.ADA).first())
+
+
+@require_POST
+def guide_go(request):
+    """Open a tour step: switch to the person it names, remember the step for the step bar, open its page."""
+    c=context(request); n=tour.number(request.POST.get("step"))
+    member=tour.person(c["org"],n)
+    if member and member.pk!=c["actor"].pk:
+        act_as(request,member)
+    request.session["guide_step"]=n
+    return redirect(tour.target(c["org"],n))
+
+
+@require_POST
+def guide_end(request):
+    request.session.pop("guide_step",None)
+    return redirect("guide")
 
 
 def preview(request,workspace):
