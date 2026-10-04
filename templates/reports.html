@@ -5,7 +5,7 @@
 <div class="stat"><div class="k">Confirmed this month</div><div class="v">{{ metrics.collected_display }}</div><div class="small muted">{{ metrics.confirmed_count }} sample payment{{ metrics.confirmed_count|pluralize }} since {{ metrics.month_start|date:"j M" }}</div></div>
 <a class="stat alert" href="/collections/?filter=failed"><div class="k">Failed instalments</div><div class="v">{{ metrics.failed_count }}</div></a>
 <a class="stat hold" href="/reviews/"><div class="k">Open reviews</div><div class="v">{{ metrics.review_count }}</div></a>
-<a class="stat" href="/collections/?filter=hold"><div class="k">Instalments on hold</div><div class="v">{{ metrics.held_count }}</div></a>
+<a class="stat" href="/collections/?filter=hold"><div class="k">Instalments on hold</div><div class="v">{{ metrics.held_count }}</div>{% if metrics.held_loans %}<div class="small muted">on {{ metrics.held_loans }} loan{{ metrics.held_loans|pluralize }}</div>{% endif %}</a>
 <div class="stat"><div class="k">Active consents</div><div class="v">{{ metrics.active_consents }}</div><div class="small muted">of {{ metrics.loan_count }} loan{{ metrics.loan_count|pluralize }}</div></div>
 <a class="stat" href="/customers/"><div class="k">Customers</div><div class="v">{{ metrics.customer_count }}</div></a>
 </div>

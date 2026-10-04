@@ -18,7 +18,7 @@ button{width:100%;font:600 16px inherit;padding:14px;border-radius:10px;border:0
 .f{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
-<div class="sb" role="note">Demo · Sample data only · No real payments</div>
+<div class="sb" role="note">Demo · Customer's view · No real payments</div>
 <div class="w">
 <div class="top"><div class="m" aria-hidden="true">V</div><div><b>{{ lender }}</b><small>Valo Pay is a service provider to {{ lender }} · Loan {{ loan_ref }}</small></div></div>
 {% if messages %}{% for message in messages %}<div class="n {% if message.tags == 'error' %}bad{% endif %}" role="status">{{ message }}</div>{% endfor %}{% endif %}

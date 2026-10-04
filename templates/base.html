@@ -1,6 +1,6 @@
 {% load static %}<!doctype html>
 <html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay demo: collections and Pay-by-bank software for Nigerian lenders and cooperatives, shown with sample data."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=5"></head>
+<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay demo: collections and Pay-by-bank software for Nigerian lenders and cooperatives, shown with sample data."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=6"></head>
 <body>
 <div class="sandbox" role="note">Demo · <b>Sample data only</b> · No real payments</div>
 <div class="shell">
@@ -16,7 +16,12 @@
     <a href="/reports/" class="{% if page == 'reports' %}on{% endif %}">Reports</a>
   </nav>
   <div class="subwrap">
-    <div class="navlabel">Account</div>
+    <div class="navlabel">Demo</div>
+    <nav class="nav sub" aria-label="Demo">
+      <a href="/guide/" class="{% if page == 'guide' %}on{% endif %}">Demo guide</a>
+      <a href="/start/">Start page</a>
+    </nav>
+    <div class="navlabel" style="margin-top:14px">Account</div>
     <nav class="nav sub" aria-label="Account"><a href="/settings/" class="{% if page == 'settings' %}on{% endif %}">Settings &amp; team</a></nav>
     <div class="navlabel" style="margin-top:14px">Previews</div>
     <nav class="nav sub" aria-label="Previews">

@@ -5,21 +5,21 @@ This records the October 2026 review and rewrite of every user-facing word in th
 | Document | What it holds |
 |---|---|
 | [content-guide.md](content-guide.md) | Voice, style, terminology, roles, state meanings and rules for borrower pages, messages and legal text |
-| [copy-inventory.csv](copy-inventory.csv) | 91 entries: each change with location, audience, before, after, intended meaning, issue, priority, source, status and verification |
-| [copy-walk-diff.csv](copy-walk-diff.csv) | The complete before-and-after log: 241 distinct changes found by walking every route, role and state before and after the rewrite |
+| [copy-inventory.csv](copy-inventory.csv) | 97 entries: each change with location, audience, before, after, intended meaning, issue, priority, source, status and verification |
+| [copy-walk-diff.csv](copy-walk-diff.csv) | The complete before-and-after log: 244 distinct changes found by walking every route, role and state before and after the rewrite |
 | This file | Coverage, test results, discrepancies, owner approvals and the comprehension test script |
 
 ## Status at a glance
 
 | Status | Meaning | Count |
 |---|---|---|
-| Implemented and tested | In the code, and covered by automated tests, the browser check or the reviewed walk diff | 76 inventory entries |
-| Implemented; awaiting owner review | In the code because the old wording was wrong or misleading, but the owner should confirm the new wording | 12 |
+| Implemented and tested | In the code, and covered by automated tests, the browser check or the reviewed walk diff | 81 inventory entries |
+| Implemented; awaiting owner review | In the code because the old wording was wrong or misleading, but the owner should confirm the new wording | 13 |
 | Unchanged; awaiting owner review | Legal or security wording deliberately left as it was, with proposed alternatives below | 2 |
 | Not changed; owner decision | Needs a product or engineering decision first | 1 |
 | Unverified | Nothing has been tested with real lenders, borrowers or screen-reader users. The comprehension test script below has **not been run**. | All |
 
-Priorities in the inventory: P1 (money, consent, security or state meaning) 32, P2 (blocks a task, recovery or accessibility) 42, P3 (consistency and style) 17.
+Priorities in the inventory: P1 (money, consent, security or state meaning) 32, P2 (blocks a task, recovery or accessibility) 45, P3 (consistency and style) 20.
 
 No real borrower was contacted, no real collection was triggered and nothing was deployed. All checks ran locally against sample data.
 
@@ -63,12 +63,13 @@ A script opened a fresh local demo workspace and walked 126 scenes: every route,
 | Sign-in, invitations, two-step verification | Not built; the demo has no sign-in. Wording says so. |
 | Loading states, pagination, tooltips, HTMX partials, PDFs | None exist in this build |
 | Marketing site and brochure | Not part of this repository; not edited. Discrepancies are recorded below. |
+| Demo navigation | Added for presenting: a Demo group in the sidebar (Demo guide, Start page), the start page reachable from inside the demo with Continue and Start again, and a ten-step demo guide. See below. |
 
 ## Test results
 
-### Automated tests: 79 passed
+### Automated tests: 93 passed
 
-`uv run pytest` passes 79 tests: the 52 existing behaviour tests and 27 copy checks in `core/tests/test_copy.py`.
+`uv run pytest` passes 93 tests: the 52 existing behaviour tests, 27 copy checks in `core/tests/test_copy.py` and 14 demo-navigation tests in `core/tests/test_demo.py`.
 
 The copy checks render every staff page for all four roles, the borrower pages in each state, the error pages and every CSV export. They fail on any of the following:
 
@@ -123,8 +124,8 @@ Each fix from the independent review (below) was also undone in a scratch copy, 
 ### Walk diff
 
 - **Same 126 scenes:** before and after, with identical HTTP status codes.
-- **No banned wording:** none in any of the 8,041 text segments after the rewrite.
-- **Every change read:** all 241 distinct changes were reviewed for accuracy against the code and the TRD.
+- **No banned wording:** none in any of the 8,346 text segments after the rewrite.
+- **Every change read:** all 244 distinct changes were reviewed for accuracy against the code and the TRD.
 - **Problems found by reading the diff, then fixed:**
   - The Today date format.
   - A doubled "Approved" on refunds.
@@ -150,7 +151,18 @@ After the first pull request merged, five independent reviewers each read the wh
 - The unnamed-button check counted later page text as the button's name (fixed, with its own test).
 - Two inventory rows claimed tests that did not exist, and one count was wrong (tests added, count corrected).
 
-### Browser checks: 166 passed
+### Demo navigation for presenting
+
+The owner reported that there was no clear way back to the landing page once a demo workspace was open, and asked for the demo to be easy to understand and navigate in an investor presentation. Added:
+
+- A Demo group in the sidebar, visible on every staff page and in the phone menu: **Demo guide** and **Start page**.
+- The start page is reachable from inside the demo. With a workspace open it offers **Continue the demo**, **Demo guide** and **Start again with fresh sample data**, which asks first, then replaces the workspace (the old one is deleted). Opening the start page never creates a workspace.
+- A **Demo guide**: ten steps through the sample lender, each opening the right record. Where a step needs a different person, one click switches to them and opens the page; switching only ever opens a page on this site.
+- Today points to the guide until it has been opened. Customer pages are labelled "Customer's view". The Instalments on hold figure says how many loans they belong to.
+
+Tests: 14 new tests cover each of these, including the whole tour from request to decision to refund. Each behaviour was broken in a scratch copy, and the tests failed for 12 of 13; the other change made no difference, because the app already falls back to the first team member after starting again.
+
+### Browser checks: 199 passed
 
 Chromium, with reduced motion, at 1280 px (desktop), 360 px (phone) and 320 px (reflow equivalent to 400% zoom). The walkthrough covered:
 - opening the demo
@@ -163,6 +175,8 @@ Chromium, with reduced motion, at 1280 px (desktop), 360 px (phone) and 320 px (
 - the Viewer and 403 pages
 - the 404 page
 - an ended session
+- the way back to the start page and Continue the demo
+- the demo guide, its one-click switch to Tunde Bello, and Start again
 
 At each width the browser checked:
 - no sideways page scroll
@@ -227,6 +241,7 @@ The live app currently shows the "Current wording" column. Nothing in this table
 | O11 | CSV exports | Daily summary columns metric, value, period, data; payments column sample_data; reviews add prepared_by and decided_by | Confirm before anyone builds on these files | Plain labels, periods and maker-checker evidence | Product owner, finance users |
 | O12 | Settings, go-live checklist | Eight items, "not done" | Align with the ten TRD 16.4 items (D2) | Live mode stays blocked until every item is done | Product owner, compliance |
 | O13 | Credit Desk and Cash Desk previews | Planned feature lists, "Preview · Not available yet" | Confirm the lists match the Roadmap and the brochure (D5) | No dates, no working-feature claims | Product and marketing owners |
+| O14 | Demo guide | "How Valo Pay works" (consent, collection, confirmation, review) and the ten-step tour | Confirm the narrative matches how you present Valo Pay to investors and customers | No claims beyond the TRD and the Business Plan; live-service behaviour is marked "In the live service" | Product owner |
 
 ## Comprehension test script (not run; results unverified)
 

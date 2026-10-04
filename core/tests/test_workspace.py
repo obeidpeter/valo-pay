@@ -33,7 +33,9 @@ class NoWorkspaceTests(TestCase):
         self.assertEqual(Organisation.objects.count(), 0)
 
     def test_get_start_does_not_create_a_workspace(self):
-        self.assertRedirects(self.client.get("/start/"), "/", fetch_redirect_response=False)
+        response = self.client.get("/start/")
+        self.assertTemplateUsed(response, "start.html")
+        self.assertContains(response, "Open the demo workspace")
         self.assertEqual(Organisation.objects.count(), 0)
 
     def test_start_creates_exactly_one_demo_workspace(self):
