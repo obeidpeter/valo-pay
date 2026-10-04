@@ -3,6 +3,7 @@ import logging
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from django.conf import settings as django_settings
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction, IntegrityError
@@ -10,6 +11,7 @@ from django.db.models import F, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from .models import *
 from . import content
@@ -35,7 +37,7 @@ def lookup_or_404(queryset, pk):
 
 TITLES = {"today": "Today", "customers": "Customers", "customer_detail": "Customer", "customer_form": "Customer details", "import": "Import instalments",
           "collections": "Collections", "payments": "Pay-by-bank", "request_form": "New payment request", "request_detail": "Payment request",
-          "reviews": "Reviews", "review_detail": "Review", "refund_form": "Request a refund", "reports": "Reports", "settings": "Settings"}
+          "reviews": "Reviews", "review_detail": "Review", "refund_form": "Request a refund", "reports": "Reports", "settings": "Settings", "guide": "Demo guide"}
 
 
 def page(request, template, ctx, **extra):
@@ -57,6 +59,7 @@ def metrics(org):
             "failed_count":Instalment.objects.filter(organisation=org,state="Failed").count(),
             "review_count":Review.objects.filter(organisation=org,status__in=["Open","In progress"]).count(),
             "held_count":Instalment.objects.filter(organisation=org,loan__on_hold=True).exclude(state="Paid").count(),
+            "held_loans":Loan.objects.filter(organisation=org,on_hold=True).count(),
             "active_consents":Loan.objects.filter(organisation=org,consent_status="Active").count(),
             "customer_count":Customer.objects.filter(organisation=org).count()}
 
@@ -67,7 +70,7 @@ def home(request):
     except WorkspaceRequired:
         return render(request, "start.html")
     org = c["org"]
-    return page(request,"today",c,metrics=metrics(org),
+    return page(request,"today",c,metrics=metrics(org),show_guide_hint=not request.session.get("guide_seen"),
                 recent_payments=Payment.objects.filter(organisation=org).select_related("instalment__loan__customer").order_by("-paid_at")[:6],
                 urgent_reviews=Review.objects.filter(organisation=org,status__in=["Open","In progress"]).select_related("owner","instalment__loan__customer").order_by("deadline")[:4],
                 instalments=Instalment.objects.filter(organisation=org,due_date=c["today"]).select_related("loan__customer"),
@@ -75,11 +78,23 @@ def home(request):
 
 
 def start(request):
-    if request.method == "POST" and not workspace_exists(request):
+    has_workspace = workspace_exists(request)
+    if request.method != "POST":
+        # The start page stays reachable from inside the demo; a GET never creates a workspace.
+        return render(request, "start.html", {"has_workspace": has_workspace})
+    restart = has_workspace and request.POST.get("restart") == "1"
+    if restart or not has_workspace:
+        previous = request.session.get("org") if restart else None
         org, actor = seed_demo()
         request.session.cycle_key()
         request.session["org"] = str(org.id)
         request.session["actor"] = actor.id
+        request.session.pop("guide_seen", None)
+        if previous:
+            # Mark the replaced workspace idle so the purge below deletes it now, not after 24 hours.
+            stale = timezone.now() - django_settings.DEMO_WORKSPACE_RETENTION - timedelta(minutes=1)
+            Organisation.objects.filter(pk=previous, demo=True).update(last_seen_at=stale)
+            messages.success(request, "A fresh demo workspace is ready, with new sample data.")
         try:
             # Housekeeping only: a failure here must never stop a visitor opening the demo.
             purge_demo_workspaces(limit=10)
@@ -405,7 +420,34 @@ def demo_role(request):
     c=context(request); member=lookup_or_404(Member.objects.filter(organisation=c["org"]),request.POST.get("member"))
     request.session["actor"]=member.pk
     messages.info(request,f"You're now acting as {member.name} ({member.role}). This is for the demo only; it is not signing in.")
+    # The demo guide switches person and opens the step in one click; only pages on this site are allowed.
+    nxt=request.POST.get("next","")
+    if nxt.startswith("/") and url_has_allowed_host_and_scheme(nxt,allowed_hosts={request.get_host()},require_https=request.is_secure()):
+        return redirect(nxt)
     return redirect("settings")
+
+
+def guide(request):
+    c=context(request); org=c["org"]
+    request.session["guide_seen"]=True
+    # Steps open the sample records seed_demo() creates; if one was changed, the step falls back to its list page.
+    customer=lambda ref: Customer.objects.filter(organisation=org,external_id=ref).first()
+    member=lambda name: Member.objects.filter(organisation=org,name=name).first()
+    chidi,amara,oluwaseun=customer("CUS-1002"),customer("CUS-1001"),customer("CUS-1004")
+    request_url="/collections/"
+    if chidi:
+        busy=set(PaymentRequest.objects.filter(organisation=org,status__in=["Awaiting approval","Awaiting confirmation","Unknown"]).values_list("instalment_id",flat=True))
+        inst=next((i for i in Instalment.objects.filter(loan__customer=chidi,loan__status="Open",loan__on_hold=False).select_related("loan").order_by("loan_id","sequence")
+                   if i.requestable and i.id not in busy),None)
+        if inst: request_url=f"/payments/new/?instalment={inst.id}"
+    payment=Payment.objects.filter(organisation=org,status="Confirmed",instalment__loan__customer=chidi).first() if chidi else None
+    review=Review.objects.filter(organisation=org,kind="Consent problem",status__in=["Open","In progress"]).first()
+    return page(request,"guide",c,ada=member("Ada Okafor"),tunde=member("Tunde Bello"),
+                chidi_url=f"/customers/{chidi.id}/" if chidi else "/customers/",
+                amara_url=f"/customers/{amara.id}/" if amara else "/customers/",
+                oluwaseun_url=f"/customers/{oluwaseun.id}/" if oluwaseun else "/customers/",
+                request_url=request_url,refund_url=f"/refunds/{payment.id}/new/" if payment else "/payments/",
+                review_url=f"/reviews/{review.id}/" if review else "/reviews/")
 
 
 def preview(request,workspace):

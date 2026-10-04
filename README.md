@@ -24,6 +24,10 @@ For development, `uv run python manage.py runserver 0.0.0.0:8000` is also availa
 
 Validate configuration with `uv run python manage.py check`. A visitor without a workspace sees a start page; choosing **Open the demo workspace** creates sample records in an isolated session workspace. Plain visits (crawlers, link previews, health checks) create nothing.
 
+## Presenting the demo
+
+The sidebar's Demo group has the **Demo guide**, a ten-step tour of the sample lender in which each step opens the right page and switches person in one click where needed, and the **Start page**, which offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
+
 ## Demo workspace cleanup
 
 `uv run python manage.py purge_demo_workspaces` deletes demo workspaces with no activity for 24 hours, and expired sessions. Each new workspace also clears up to 10 idle ones, but schedule the command daily too (for example a scheduled deployment or cron job). Workspaces that existed before migration 0002 count as active from the moment it runs, so the first daily run a day later clears that backlog. `--idle-hours` overrides the period.

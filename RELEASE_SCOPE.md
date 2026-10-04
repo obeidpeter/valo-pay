@@ -18,6 +18,7 @@ This build is a working foundation and interactive demonstration, **not completi
 - CSV reports, customer histories, consent registers and Admin-only audit export.
 - Settings, retry preset, demo team-member switching (not sign-in), price example and blocked go-live checklist.
 - Credit Desk / Cash Desk are previews only.
+- Demo guide (a ten-step tour with one-click person switching), a start page reachable from inside the demo, and Start again with fresh sample data.
 - Automated tests (pytest) and CI on PostgreSQL 17 for every push; locked dependencies.
 - User-facing wording rewritten to the content guide (docs/content/), with automated copy checks. Legal consent and withdrawal wording is unchanged and awaits owner review (docs/content/copy-review.md).
 

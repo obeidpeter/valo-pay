@@ -1,6 +1,7 @@
 {% extends "base.html" %}{% block content %}
 <div class="head reveal"><div><div class="eyebrow">{{ today|date:"l j M Y" }}</div><h1>Good day, {{ actor.name }}</h1><p class="sub">What is due, what has been confirmed and what needs a decision.</p></div>
 <div class="actions">{% if actor.role == 'Admin' or actor.role == 'Preparer' %}<a class="btn ghost" href="/payments/new/">New payment request</a>{% endif %}<a class="btn" href="/reviews/">Review queue ({{ metrics.review_count }} open)</a></div></div>
+{% if show_guide_hint %}<div class="note" style="margin-bottom:16px">New to Valo Pay? <a href="/guide/">Open the demo guide</a> for a step-by-step tour of this sample lender.</div>{% endif %}
 <section class="hero reveal">
   <div class="l"><div class="lab">Confirmed this month · sample data</div><div class="big">{{ metrics.collected_display }}</div>
     <div style="color:#d8cfb7">{{ metrics.due_display }} outstanding on {{ metrics.due_count }} instalment{{ metrics.due_count|pluralize }} due today</div>
@@ -8,7 +9,7 @@
   <div class="r">
     <div><div class="lab">Failed instalments</div><div class="val">{{ metrics.failed_count }}</div></div>
     <div><div class="lab">Open reviews</div><div class="val">{{ metrics.review_count }}</div></div>
-    <div><div class="lab">Instalments on hold</div><div class="val">{{ metrics.held_count }}</div></div>
+    <div><div class="lab">Instalments on hold</div><div class="val">{{ metrics.held_count }}{% if metrics.held_loans %} <span style="font-size:13px;color:#b9b19c">on {{ metrics.held_loans }} loan{{ metrics.held_loans|pluralize }}</span>{% endif %}</div></div>
     <div><div class="lab">Active consents</div><div class="val">{{ metrics.active_consents }} <span style="font-size:13px;color:#b9b19c">of {{ metrics.loan_count }} loan{{ metrics.loan_count|pluralize }}</span></div></div>
   </div>
 </section>

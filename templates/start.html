@@ -4,7 +4,10 @@
   <h1>See how Valo Pay runs loan collections</h1>
   <p class="sub">Valo Pay is software for the team that collects loan repayments. It is designed to keep each customer's consent to be debited, their instalments and their payments in one place, link each confirmed payment to the instalment it covers, and send anything unclear to a review queue. Valo Pay never holds money: each lender connects its own Paystack account.</p>
   <p class="sub">This demo gives you your own copy of Meridian Finance, a made-up lender, with sample customers, instalments, consents, payments and items waiting for review.</p>
-  <form method="post" action="/start/">{% csrf_token %}<button class="btn" type="submit">Open the demo workspace</button></form>
+  {% if has_workspace %}<p class="sub">Your demo workspace is still open. Continue where you left off, or start again with fresh sample data.</p>
+  <div class="actions" style="margin:12px 0 8px"><a class="btn" href="/">Continue the demo</a><a class="btn ghost" href="/guide/">Demo guide</a><form method="post" action="/start/" style="margin:0" data-confirm="Start again with fresh sample data? Changes you made in this workspace will be lost.">{% csrf_token %}<input type="hidden" name="restart" value="1"><button class="btn ghost" type="submit">Start again with fresh sample data</button></form></div>
+  {% else %}<form method="post" action="/start/">{% csrf_token %}<button class="btn" type="submit">Open the demo workspace</button></form>
+  <p class="small muted" style="margin:0">Once it is open, the demo guide walks you through Valo Pay step by step.</p>{% endif %}
   <h2 style="font-size:16px;margin-top:8px">Before you start</h2>
   <ul class="list small">
     <li>Every name, loan and payment is sample data. Do not enter real customer details.</li>

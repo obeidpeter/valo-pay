@@ -21,6 +21,7 @@ urlpatterns = [
     path("reports/",v.reports,name="reports"),
     path("settings/",v.settings,name="settings"),
     path("demo-role/",v.demo_role,name="demo_role"),
+    path("guide/",v.guide,name="guide"),
     path("credit/",v.preview,{"workspace":"credit"},name="credit"),
     path("cash/",v.preview,{"workspace":"cash"},name="cash"),
     path("consent/<str:token>/",v.public,{"kind":"consent"},name="consent"),

@@ -1,6 +1,6 @@
 {% load static %}<!doctype html>
 <html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{% block title %}Valo Pay demo{% endblock %}</title><meta name="description" content="Valo Pay demo: collections and Pay-by-bank software for Nigerian lenders and cooperatives, shown with sample data."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=5"></head>
+<title>{% block title %}Valo Pay demo{% endblock %}</title><meta name="description" content="Valo Pay demo: collections and Pay-by-bank software for Nigerian lenders and cooperatives, shown with sample data."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=6"></head>
 <body>
 <div class="sandbox" role="note">Demo · <b>Sample data only</b> · No real payments</div>
 <main class="start">
@@ -8,4 +8,5 @@
   {% if messages %}<ul class="msgs" role="status">{% for message in messages %}<li class="{{ message.tags }}">{{ message }}</li>{% endfor %}</ul>{% endif %}
   {% block content %}{% endblock %}
 </main>
+<script src="{% static 'valo.js' %}" defer></script>
 </body></html>
