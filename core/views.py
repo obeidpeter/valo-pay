@@ -6,7 +6,7 @@ from decimal import Decimal
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction, IntegrityError
-from django.db.models import Prefetch, Q, Sum
+from django.db.models import F, Prefetch, Q, Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
@@ -185,7 +185,9 @@ def loan_action(request,pk):
             audit(c["org"],c["actor"],"Consent link created",loan.reference)
             messages.success(request,f"Consent link created for {loan.reference}. Copy it below and share it with the customer; it works for 14 days. Nothing was sent: this demo does not send emails.")
     elif action=="hold":
-        if loan.on_hold:
+        if loan.status!="Open":
+            messages.error(request,"This loan is closed, so it cannot be put on hold.")
+        elif loan.on_hold:
             messages.error(request,"This loan is already on hold.")
         else:
             loan.on_hold=True; loan.hold_reason=reason; loan.held_by=c["actor"]; loan.save()
@@ -201,7 +203,8 @@ def loan_action(request,pk):
         else:
             loan.on_hold=False; loan.hold_reason=""; loan.save()
             audit(c["org"],c["actor"],"Hold released",f"{loan.reference}: {reason}")
-            messages.success(request,f"Hold released. Payment requests can be created for {loan.reference} again.")
+            messages.success(request,f"Hold released. Payment requests can be created for {loan.reference} again." if loan.status=="Open" else
+                             f"Hold released for {loan.reference}. The loan is closed, so payment requests still cannot be created for it.")
     elif action=="withdraw":
         if loan.consent_status in ["Active","Awaiting bank"]:
             messages.error(request,"Consent cannot be withdrawn in this demo. Withdrawing it means cancelling it at Paystack, and no Paystack account is connected. The consent is unchanged.")
@@ -210,7 +213,7 @@ def loan_action(request,pk):
         else:
             loan.consent_status="Withdrawn"; loan.save()
             audit(c["org"],c["actor"],"Unused consent link withdrawn",f"{loan.reference}: {reason}")
-            messages.success(request,"Consent withdrawn. The consent link no longer works.")
+            messages.success(request,"Consent link withdrawn. The customer had not used it, and the link no longer works.")
     elif action=="close":
         if loan.status=="Closed":
             messages.error(request,"This loan is already closed.")
@@ -421,7 +424,7 @@ def public(request,kind,token):
         expired=loan.consent_status!="Requested" or not loan.consent_requested_at or loan.consent_requested_at+timedelta(days=14)<timezone.now()
         lender=loan.organisation.name
         ctx={"lender":lender,"first_name":loan.customer.name.split()[0],"loan_ref":loan.reference,
-             "instalments":loan.instalments.all().order_by("sequence"),"max_display":loan.consent_max_display,"expiry":loan.consent_expiry,
+             "instalments":loan.instalments.filter(paid__lt=F("amount"),due_date__gte=timezone.localdate()).order_by("sequence"),"max_display":loan.consent_max_display,"expiry":loan.consent_expiry,
              "retry_text":content.RETRY_FOR_CUSTOMER.get(loan.organisation.retry_preset,"").format(lender=lender)}
     else:
         item=get_object_or_404(PaymentRequest.objects.select_related("instalment__loan__customer","organisation"),token=token)

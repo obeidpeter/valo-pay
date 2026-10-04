@@ -32,7 +32,7 @@ class CustomerForm(PlainForm):
     amount = forms.DecimalField(label="Amount of each instalment (₦)", max_digits=12, decimal_places=2, min_value=Decimal("0.01"),
                                 help_text="For example, 18450.00.", error_messages=AMOUNT_ERRORS)
     due_date = forms.DateField(label="First due date", input_formats=["%Y-%m-%d"], widget=forms.DateInput(attrs={"type": "date"}),
-                               help_text="Later instalments fall on the same day of each following month.",
+                               help_text="Later instalments fall on the same day of each following month, or on the last day of a shorter month.",
                                error_messages={"required": "Enter the first due date.", "invalid": "Enter the date as YYYY-MM-DD, for example 2026-11-15."})
     instalment_count = forms.IntegerField(label="Number of instalments", min_value=1, max_value=120, initial=6, help_text="From 1 to 120, one each month.",
                                           error_messages={key: "Enter a whole number from 1 to 120." for key in ["required", "invalid", "min_value", "max_value"]})

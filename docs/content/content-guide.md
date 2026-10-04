@@ -109,6 +109,7 @@ Borrowers should never need to understand Valo Pay's internal terms.
 
 - Write to the customer as "you". Put the lender's name first and describe Valo Pay only as "service provider to {lender}" (FR-CP1).
 - Show only first name, amount, instalment, lender and loan reference (FR-CP2). On the consent page, also show the schedule, maximum per debit, end date, what happens if a debit does not go through, and how to withdraw (TRD 8.2).
+- On the consent page, list only instalments that can still be collected. Never show paid or past dates under "the dates below". On the payment page, do not say the amount settles the instalment: it can be part of it.
 - Do not use "we": it could mean the lender or Valo Pay.
 - When a result is pending or unclear, explain it and do not suggest paying again.
 - No urgency, shame or threats. No promises about timing, delivery or safety ("your money is safe", "you have not been charged").
@@ -118,12 +119,14 @@ Borrowers should never need to understand Valo Pay's internal terms.
 - **Success:** say what was done to what, and the consequence. Example: "Payment request cancelled. The link no longer works."
 - **Errors:** give the reason and a safe next step, without blame. Do not suggest repeating an action that moves money until its outcome is known.
 - **Blocked actions:** give the real reason and the permitted next step. Never suggest a way round a safeguard.
+- **Actions by role:** show a button or link only to roles that can use it. Where a role cannot act, say who can ("An Admin or Preparer can …").
 - **Empty states:** tell apart no records yet, no matches for a search or filter, no permission, and data that is unavailable. Offer only actions the person can take.
 - **Notifications:** never claim a message was sent, delivered or received unless the system did it. Queued is not sent; sent is not delivered.
 
 ## Legal, consent and evidence text
 
 - Do not change the meaning of consent statements, withdrawal terms, fee conditions, retention periods, privacy or security notices. Put proposed wording in [copy-review.md](copy-review.md) for the owner to decide.
+- Make no integrity or security claim, such as "tamper-proof" or "changes can be detected", unless the system enforces and checks it. The security owner approves that wording.
 - Never rewrite audit entries, decision notes, imported narrations or other saved records. Change only the labels and explanations around them, and the wording of future messages.
 - Pages hosted by Paystack or a bank are outside Valo Pay. Do not describe them as if Valo Pay controls their wording.
 
