@@ -1,37 +1,31 @@
 {% extends "base.html" %}{% block content %}
-<div class="head"><div><div class="eyebrow">Demo</div><h1>Demo guide</h1><p class="sub">A short tour of Valo Pay using Meridian Finance, a made-up lender. Each step opens the right page. Nothing here moves real money.</p></div>
-<div class="actions"><a class="btn ghost" href="/start/">Start page</a></div></div>
-<section class="card" style="margin-top:0"><h2>How Valo Pay works</h2>
-<ul class="list small">
-<li><span><b>Consent.</b> The customer authorises the lender, at their bank, to debit their account for a loan, up to a maximum for each debit.</span><span class="muted" style="white-space:nowrap">Step 4</span></li>
-<li><span><b>Collection.</b> In the live service, instalments are collected by direct debit on their due dates, or the customer pays one instalment from their bank with Pay-by-bank.</span><span class="muted" style="white-space:nowrap">Step 5</span></li>
-<li><span><b>Confirmation.</b> A payment counts only once Paystack confirms it, and it is linked to the instalment it covers.</span><span class="muted" style="white-space:nowrap">Steps 1 and 2</span></li>
-<li><span><b>Review.</b> Anything unclear goes to a person, and anything that moves money needs a second person.</span><span class="muted" style="white-space:nowrap">Steps 3, 6 and 7</span></li>
-</ul>
-<p class="small muted" style="margin:10px 0 0">Each lender connects its own Paystack account; Valo Pay never holds money. In this demo, no bank or Paystack account is connected.</p></section>
-<p class="small muted" style="margin:22px 0 10px">You are acting as {{ actor.name }} ({{ actor.role }}). When a step needs a different person, its button switches for you.</p>
-<ol class="steps" role="list">
-<li><h2>See what needs attention today</h2><p>Today shows what is due, what has been confirmed this month, failed instalments, instalments on hold and items waiting for a decision.</p>
-<div class="actions"><a class="btn ghost sm" href="/">Open Today</a></div></li>
-<li><h2>Follow one customer</h2><p>Chidi Nwosu has an active consent. The customer page shows the loan, its consent, every instalment, payments and an audit trail of who did what.</p>
-<div class="actions"><a class="btn ghost sm" href="{{ chidi_url }}">Open Chidi Nwosu</a></div></li>
-<li><h2>See a safeguard: an Unknown result</h2><p>A payment for Amara Okeke has no final result. Valo Pay never treats Unknown as paid or failed: the loan stays on hold, so no new payment can be requested until the result is known, and the item waits in the review queue.</p>
-<div class="actions"><a class="btn ghost sm" href="{{ amara_url }}">Open Amara Okeke</a></div></li>
-<li><h2>Ask a customer for consent</h2><p>On Oluwaseun Adeyemi's page, choose Create a consent link under Loan actions, then Preview to see the page the customer opens on their phone: the lender's name, the repayment schedule, the maximum for each debit and how to withdraw. In this demo, the bank step is not connected.</p>
-<div class="actions">{% include "guide_action.html" with url=oluwaseun_url label="Open Oluwaseun Adeyemi" switch_label="Act as Ada Okafor and open Oluwaseun Adeyemi" %}</div></li>
-<li><h2>Request a payment by bank</h2><p>Create a payment request for Chidi Nwosu's next instalment, then preview the payment link. The customer sees the lender's name, the amount and the instalment; in the live service, they approve the payment at their bank. Creating a request sends nothing and moves no money.</p>
-<div class="actions">{% include "guide_action.html" with url=request_url label="Request a payment from Chidi Nwosu" switch_label="Act as Ada Okafor and request a payment" %}</div></li>
-<li><h2>Two people for every decision</h2><p>Ada Okafor prepared the consent problem for Oluwaseun Adeyemi, so Ada cannot decide it. Switch to Tunde Bello, the Reviewer, and record a decision with a note. Every decision is saved with who made it.</p>
-<div class="actions"><a class="btn ghost sm" href="{{ review_url }}">Open the consent problem</a>{% if tunde and actor.id != tunde.id %}<form method="post" action="/demo-role/" style="display:inline">{% csrf_token %}<input type="hidden" name="member" value="{{ tunde.id }}"><input type="hidden" name="next" value="{{ review_url }}"><button class="btn ghost sm" type="submit">Act as Tunde Bello and decide it</button></form>{% endif %}</div></li>
-<li><h2>Refunds need a second person</h2><p>Request a refund on one of Chidi Nwosu's payments, then switch to Tunde Bello to approve it. The refund then shows as Approved, not yet refunded: in the live service, Paystack processes approved refunds.</p>
-<div class="actions">{% include "guide_action.html" with url=refund_url label="Request a refund" switch_label="Act as Ada Okafor and request a refund" %}</div></li>
-<li><h2>Bring in a loan book</h2><p>Import customers and instalments from a spreadsheet. Every row is checked first, and nothing is imported if any row has a problem.</p>
-<div class="actions">{% include "guide_action.html" with url="/import/" label="Open Import" switch_label="Act as Ada Okafor and open Import" %}<a class="btn ghost sm" href="/exports/template/" download>Download the CSV template</a></div></li>
-<li><h2>Reports, roles and the road to live</h2><p>Reports has CSV downloads for reconciliation and audit. Settings shows the four roles, a price example and the checklist that must be complete before live payments can be switched on.</p>
-<div class="actions"><a class="btn ghost sm" href="/reports/">Open Reports</a><a class="btn ghost sm" href="/settings/">Open Settings</a></div></li>
-<li><h2>What comes next</h2><p>Credit Desk and Cash Desk are previews of workspaces planned for later releases. They do not work yet.</p>
-<div class="actions"><a class="btn ghost sm" href="/credit/">Credit Desk preview</a><a class="btn ghost sm" href="/cash/">Cash Desk preview</a></div></li>
+<div class="head"><div><div class="eyebrow">Demo</div><h1>Demo guide</h1><p class="sub">A step-by-step tour of Valo Pay, using Meridian Finance, a made-up lender. Each step opens the right page for you. Nothing in this demo moves real money.</p></div>
+<div class="actions">{% if guide_step %}<form method="post" action="/guide/go/">{% csrf_token %}<input type="hidden" name="step" value="{{ guide_step }}"><button class="btn" type="submit">Continue the tour</button></form><form method="post" action="/guide/end/">{% csrf_token %}<button class="btn ghost" type="submit">End tour</button></form>{% else %}<form method="post" action="/guide/go/">{% csrf_token %}<input type="hidden" name="step" value="1"><button class="btn" type="submit">Start the tour</button></form><a class="btn ghost" href="/start/">Start page</a>{% endif %}</div></div>
+<section class="card howto"><h2>How to use this guide</h2>
+<ol>
+<li>Choose <b>Start the tour</b>.</li>
+<li>On each page, the bar at the bottom of the screen tells you what to show. Choose <b>Next step</b> to move on.</li>
+<li>To go back to any step, choose <b>All steps</b> in the bar, or open the step below.</li>
+</ol></section>
+<p class="acting">You are acting as {{ actor.name }} ({{ actor.role }}). Steps that need someone else switch person for you.</p>
+<ol class="steps tour" role="list">
+{% for s in steps %}<li id="step-{{ forloop.counter }}"{% if forloop.counter == guide_step %} class="now"{% endif %}>
+<div class="step-top"><h2>{{ s.title }}</h2>{% if forloop.counter == guide_step %}<span class="now-tag">Current step</span>{% endif %}</div>
+<p>{{ s.text }}</p>
+<p class="do"><b>On the page:</b> {{ s.hint }}</p>
+<div class="actions"><form method="post" action="/guide/go/">{% csrf_token %}<input type="hidden" name="step" value="{{ forloop.counter }}"><button class="btn sm{% if forloop.counter != guide_step %} ghost{% endif %}" type="submit">{{ s.label }}</button></form>{% for label, url in s.links %}<a class="btn ghost sm" href="{{ url }}">{{ label }}</a>{% endfor %}{% if s.person %}<span class="as">As {{ s.person }}</span>{% endif %}</div>
+</li>{% endfor %}
 </ol>
-<section class="card"><h2>Start again</h2><p class="small" style="margin:0 0 12px">To run the tour again from the beginning, start again with fresh sample data. Changes you made in this workspace will be lost.</p>
+<section class="card"><h2>Also in the demo: import a loan book</h2><p class="small" style="margin:0 0 12px">Import customers and instalments from a spreadsheet. Every row is checked first, and nothing is imported if any row has a problem.</p>
+<div class="actions">{% include "guide_action.html" with url="/import/" label="Open Import" switch_label="Act as Ada Okafor and open Import" %}<a class="btn ghost sm" href="/exports/template/" download>Download the CSV template</a></div></section>
+<section class="card"><h2>How Valo Pay works</h2>
+<ol class="flow" role="list">
+<li><b>Consent</b><span>The customer gives the lender permission, at their bank, to debit their account for one loan, up to a maximum each time.</span></li>
+<li><b>Collection</b><span>In the live service, instalments are collected by direct debit on their due dates. A customer can also pay one instalment with Pay-by-bank.</span></li>
+<li><b>Confirmation</b><span>A payment counts only when Paystack confirms it. It is then linked to its instalment.</span></li>
+<li><b>Review</b><span>Anything unclear goes to a person. Anything that moves money needs a second person.</span></li>
+</ol>
+<p class="small muted" style="margin:12px 0 0">Each lender uses its own Paystack account, and Valo Pay never holds money. In this demo, no bank or Paystack account is connected.</p></section>
+<section class="card"><h2>Start again</h2><p class="small" style="margin:0 0 12px">To run the tour again with clean data, start again with fresh sample data. Changes you made in this workspace will be lost.</p>
 <form method="post" action="/start/" data-confirm="Start again with fresh sample data? Changes you made in this workspace will be lost.">{% csrf_token %}<input type="hidden" name="restart" value="1"><button class="btn ghost sm" type="submit">Start again with fresh sample data</button></form></section>
 {% endblock %}

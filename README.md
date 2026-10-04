@@ -26,7 +26,7 @@ Validate configuration with `uv run python manage.py check`. A visitor without a
 
 ## Presenting the demo
 
-The sidebar's Demo group has the **Demo guide**, a ten-step tour of the sample lender in which each step opens the right page and switches person in one click where needed, and the **Start page**, which offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
+The sidebar's Demo group has the **Demo guide** and the **Start page**. In the guide, choose **Start the tour**: an eleven-step tour of the sample lender in which each step opens the right page as the right person. While the tour runs, a bar at the bottom of every page shows the step, what to do on that page, and **Next step**, **All steps** and **End tour**. The **Start page** offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
 
 ## Demo workspace cleanup
 

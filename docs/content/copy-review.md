@@ -63,7 +63,7 @@ A script opened a fresh local demo workspace and walked 126 scenes: every route,
 | Sign-in, invitations, two-step verification | Not built; the demo has no sign-in. Wording says so. |
 | Loading states, pagination, tooltips, HTMX partials, PDFs | None exist in this build |
 | Marketing site and brochure | Not part of this repository; not edited. Discrepancies are recorded below. |
-| Demo navigation | Added for presenting: a Demo group in the sidebar (Demo guide, Start page), the start page reachable from inside the demo with Continue and Start again, and a ten-step demo guide. See below. |
+| Demo navigation | Added for presenting: a Demo group in the sidebar (Demo guide, Start page), the start page reachable from inside the demo with Continue and Start again, and an eleven-step demo guide with a step bar. See below. |
 
 ## Test results
 
@@ -157,10 +157,20 @@ The owner reported that there was no clear way back to the landing page once a d
 
 - A Demo group in the sidebar, visible on every staff page and in the phone menu: **Demo guide** and **Start page**.
 - The start page is reachable from inside the demo. With a workspace open it offers **Continue the demo**, **Demo guide** and **Start again with fresh sample data**, which asks first, then replaces the workspace (the old one is deleted). Opening the start page never creates a workspace.
-- A **Demo guide**: ten steps through the sample lender, each opening the right record. Where a step needs a different person, one click switches to them and opens the page; switching only ever opens a page on this site.
+- A **Demo guide**: steps through the sample lender, each opening the right record as the right person (see the rewrite below).
 - Today points to the guide until it has been opened. Customer pages are labelled "Customer's view". The Instalments on hold figure says how many loans they belong to.
 
 Tests: 14 new tests cover each of these, including the whole tour from request to decision to refund. Each behaviour was broken in a scratch copy, and the tests failed for 12 of 13; the other change made no difference, because the app already falls back to the first team member after starting again.
+
+#### Demo guide rewrite
+
+The owner found the guide's wording hard to follow and asked for it to be simple and easy to use while presenting. The guide was rewritten in plain words and turned into a fixed tour:
+
+- **Eleven steps, one page each.** Every step says what it shows and, under **On the page**, what to do there. The person a step needs is named on it ("As Ada Okafor", "As Tunde Bello"), and opening the step switches to them. Multi-part steps were split, so seeing the two-person rule and deciding as Tunde Bello are separate steps, as are requesting and approving a refund. The order follows the presenter script. Importing a loan book moved out of the tour into "Also in the demo".
+- **A step bar** on every staff page while a tour is running: **Step 4 of 11 · As Ada Okafor**, the step title, what to do on the page, then **All steps**, **Next step** and **End tour**. The presenter never has to go back to the guide. The bar is not shown on the guide itself, which instead marks the current step and offers **Continue the tour**.
+- **How it works:** steps open only through a form (POST, with the usual CSRF check), and only steps 1 to 11 exist. Pages are found when a step is opened, from the workspace's own records, so step 9 opens the newest refund request rather than one made while rehearsing. **Start again** ends any tour. **How Valo Pay works** moved below the steps, without the step numbers that pointed into the old tour.
+
+Tests: 7 new and 2 rewritten tests cover every step for every role (copy checks, the page opens, the right person), the sample records each step opens, person switching, form-only and bounded steps, the bar from first to last step, Start again, the newest refund request and the tour end to end (99 tests in all). Seven behaviours were broken on purpose; the tests caught 6, and caught the seventh (step 9 opening the oldest refund request) once a test for it was added. Browser: the whole tour, walked with only **Start the tour**, the on-page actions and **Next step**, at 1280 and 390 px: 63 checks passed, with no sideways scroll, no errors, the bar clear of the sidebar and the end of each page visible above it.
 
 ### Browser checks: 199 passed
 
@@ -241,7 +251,7 @@ The live app currently shows the "Current wording" column. Nothing in this table
 | O11 | CSV exports | Daily summary columns metric, value, period, data; payments column sample_data; reviews add prepared_by and decided_by | Confirm before anyone builds on these files | Plain labels, periods and maker-checker evidence | Product owner, finance users |
 | O12 | Settings, go-live checklist | Eight items, "not done" | Align with the ten TRD 16.4 items (D2) | Live mode stays blocked until every item is done | Product owner, compliance |
 | O13 | Credit Desk and Cash Desk previews | Planned feature lists, "Preview · Not available yet" | Confirm the lists match the Roadmap and the brochure (D5) | No dates, no working-feature claims | Product and marketing owners |
-| O14 | Demo guide | "How Valo Pay works" (consent, collection, confirmation, review) and the ten-step tour | Confirm the narrative matches how you present Valo Pay to investors and customers | No claims beyond the TRD and the Business Plan; live-service behaviour is marked "In the live service" | Product owner |
+| O14 | Demo guide | "How Valo Pay works" (consent, collection, confirmation, review) and the eleven-step tour with its step bar | Confirm the narrative matches how you present Valo Pay to investors and customers | No claims beyond the TRD and the Business Plan; live-service behaviour is marked "In the live service" | Product owner |
 
 ## Comprehension test script (not run; results unverified)
 
