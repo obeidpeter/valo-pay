@@ -4,9 +4,18 @@ import io
 import calendar
 from datetime import timedelta, date
 from decimal import Decimal, InvalidOperation
+from importlib import import_module
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest
+from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest, Refund
+
+# Delete order for a workspace: each model before the rows it protects (on_delete=PROTECT).
+PURGE_ORDER = [Refund, Review, PaymentRequest, Payment, Instalment, Loan, Customer, Audit, Member]
+
+
+class WorkspaceRequired(Exception):
+    """The session has no live demo workspace; WorkspaceMiddleware sends the visitor to the start page."""
 
 
 def audit(org, actor, action, detail):
@@ -14,8 +23,9 @@ def audit(org, actor, action, detail):
     Organisation.objects.select_for_update().get(pk=org.pk)
     prev = Audit.objects.filter(organisation=org).first()
     previous = prev.digest if prev else ""
-    digest = hashlib.sha256(f"{previous}|{actor.name}|{action}|{detail}".encode()).hexdigest()
-    Audit.objects.create(organisation=org, actor_name=actor.name, action=action, detail=detail, previous_hash=previous, digest=digest)
+    name = actor.name if actor else "System"
+    digest = hashlib.sha256(f"{previous}|{name}|{action}|{detail}".encode()).hexdigest()
+    Audit.objects.create(organisation=org, actor_name=name, action=action, detail=detail, previous_hash=previous, digest=digest)
 
 
 def month_date(start, offset):
@@ -27,7 +37,7 @@ def month_date(start, offset):
 
 @transaction.atomic
 def seed_demo():
-    org = Organisation.objects.create()
+    org = Organisation.objects.create(demo=True)
     prep = Member.objects.create(organisation=org, name="Ada Okafor", role="Admin")
     reviewer = Member.objects.create(organisation=org, name="Tunde Bello", role="Reviewer")
     Member.objects.create(organisation=org, name="Zainab Yusuf", role="Preparer")
@@ -65,23 +75,53 @@ def seed_demo():
     return org, prep
 
 
+def workspace_exists(request):
+    org_id = request.session.get("org")
+    return bool(org_id) and Organisation.objects.filter(pk=org_id).exists()
+
+
 def context(request):
+    # Workspaces are created only from the start page (a POST), never on a plain visit,
+    # so crawlers, link previews and health checks cannot fill the database.
     org_id = request.session.get("org")
     org = Organisation.objects.filter(pk=org_id).first() if org_id else None
     if org is None:
-        org, actor = seed_demo()
-        request.session["org"] = str(org.id)
-        request.session["actor"] = actor.id
+        raise WorkspaceRequired
+    now = timezone.now()
+    if org.last_seen_at < now - timedelta(minutes=5):
+        Organisation.objects.filter(pk=org.pk).update(last_seen_at=now)
     actor = Member.objects.filter(organisation=org, pk=request.session.get("actor")).first() or Member.objects.filter(organisation=org).first()
-    # Expiry is a business state change, not a display-only label.
+    # Expiry is a business state change, not a display-only label. The system expires it, not the viewer.
     with transaction.atomic():
-        expired = PaymentRequest.objects.select_for_update().filter(organisation=org, status="Awaiting approval", expires_at__lte=timezone.now())
+        expired = PaymentRequest.objects.select_for_update().filter(organisation=org, status="Awaiting approval", expires_at__lte=now)
         for item in expired:
             item.status = "Expired"
             item.save(update_fields=["status"])
-            audit(org, actor, "Payment request expired", item.reference)
+            audit(org, None, "Payment request expired", item.reference)
     return {"org": org, "actor": actor, "members": Member.objects.filter(organisation=org),
             "today": timezone.localdate(), "open_review_count": Review.objects.filter(organisation=org, status__in=["Open","In progress"]).count()}
+
+
+def purge_demo_workspaces(idle_for=None, limit=None):
+    """Delete demo workspaces idle longer than idle_for (default DEMO_WORKSPACE_RETENTION), then expired sessions.
+
+    Sessions end after 30 idle minutes, so a purged workspace can no longer be opened. Returns the number deleted.
+    """
+    cutoff = timezone.now() - (settings.DEMO_WORKSPACE_RETENTION if idle_for is None else idle_for)
+    purged = 0
+    while limit is None or purged < limit:
+        size = 50 if limit is None else min(50, limit - purged)
+        with transaction.atomic():
+            # skip_locked lets concurrent purges share the backlog instead of waiting on each other.
+            ids = list(Organisation.objects.select_for_update(skip_locked=True).filter(demo=True, last_seen_at__lt=cutoff).values_list("pk", flat=True)[:size])
+            if not ids:
+                break
+            for model in PURGE_ORDER:
+                model.objects.filter(organisation_id__in=ids).delete()
+            Organisation.objects.filter(pk__in=ids).delete()
+        purged += len(ids)
+    import_module(settings.SESSION_ENGINE).SessionStore.clear_expired()
+    return purged
 
 
 def validate_csv(text, org):

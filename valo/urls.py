@@ -3,6 +3,7 @@ from core import views as v
 
 urlpatterns = [
     path("",v.home,name="today"),
+    path("start/",v.start,name="start"),
     path("customers/",v.customers,name="customers"),
     path("customers/new/",v.customer_form,name="customer_new"),
     path("customers/<int:pk>/",v.customer_detail,name="customer_detail"),

@@ -7,10 +7,13 @@
 <div class="note warn" style="margin-top:16px">Unknown outcomes, unclear matches, possible duplicates and reversals need <b>provider evidence</b> before they can be resolved. That integration is not connected yet, so those outcomes are blocked here. No payment can be marked paid by hand. Refund approvals are only marked Approved in the sandbox; no provider processes them.{% if review.prepared_by %} The preparer ({{ review.prepared_by.name }}) cannot approve their own item.{% endif %}</div>
 </div><div>
 {% if review.status != 'Resolved' and review.status != 'Dismissed' and review.status != 'Approved' %}
-<section class="card"><h2>Assign</h2><form method="post" class="form">{% csrf_token %}<input type="hidden" name="action" value="assign"><p><label for="owner">Owner</label><select id="owner" name="owner">{% for m in members %}<option value="{{ m.id }}" {% if review.owner and review.owner.name == m.name %}selected{% endif %}>{{ m.name }} — {{ m.role }}</option>{% endfor %}</select></p><button class="btn ghost" type="submit">Assign</button></form></section>
-<section class="card"><h2>Decide</h2><form method="post" class="form">{% csrf_token %}<input type="hidden" name="action" value="resolve">
-<p><label for="outcome">Outcome</label><select id="outcome" name="outcome"><option value="Resolved">Resolve</option><option value="Dismissed">Dismiss</option></select></p>
+<section class="card"><h2>Assign</h2><form method="post" class="form">{% csrf_token %}<input type="hidden" name="action" value="assign"><p><label for="owner">Owner</label><select id="owner" name="owner">{% for m in owners %}<option value="{{ m.id }}" {% if review.owner and review.owner.name == m.name %}selected{% endif %}>{{ m.name }} — {{ m.role }}</option>{% endfor %}</select></p><button class="btn ghost" type="submit">Assign</button></form></section>
+<section class="card"><h2>Decide</h2>
+{% if review.needs_evidence %}<p class="small muted" style="margin:0">This needs provider or bank evidence, which is not connected in the sandbox, so it cannot be decided here.</p>
+{% elif not can_decide %}<p class="small muted" style="margin:0">{% if review.prepared_by_id == actor.id %}You prepared this item, so a different person must decide it.{% elif review.affects_money %}Only an Admin or Reviewer who did not prepare this item can decide it.{% else %}Viewers have read-only access.{% endif %} <a href="/settings/#role">Simulate another role</a></p>
+{% else %}<form method="post" class="form">{% csrf_token %}<input type="hidden" name="action" value="resolve">
+<p><label for="outcome">Outcome</label><select id="outcome" name="outcome">{% if review.kind == 'Refund request' %}<option value="Resolved">Approve refund</option><option value="Dismissed">Reject refund</option>{% else %}<option value="Resolved">Resolve</option><option value="Dismissed">Dismiss</option>{% endif %}</select></p>
 <p><label for="note">Decision note</label><textarea id="note" name="note" required style="min-height:90px;font-family:var(--sans)" placeholder="What you checked and why"></textarea></p>
-<button class="btn" type="submit">Record decision</button></form></section>
+<button class="btn" type="submit">Record decision</button></form>{% endif %}</section>
 {% else %}<section class="card"><div class="empty"><b>Closed</b>{{ review.outcome }}</div></section>{% endif %}
 </div></div>{% endblock %}

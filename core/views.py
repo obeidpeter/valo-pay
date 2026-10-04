@@ -1,23 +1,35 @@
 import csv
+import logging
 import uuid
 from datetime import timedelta
 from decimal import Decimal
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction, IntegrityError
-from django.db.models import Q, Sum
-from django.http import HttpResponse
+from django.db.models import Prefetch, Q, Sum
+from django.http import Http404, HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from .models import *
 from .forms import CustomerForm, RequestForm, RefundForm, SettingsForm
-from .services import context, audit, month_date, validate_csv, commit_csv
+from .services import WorkspaceRequired, context, audit, month_date, validate_csv, commit_csv, seed_demo, workspace_exists, purge_demo_workspaces
+
+logger = logging.getLogger(__name__)
 
 
 def permitted(ctx, roles):
     if ctx["actor"].role not in roles:
         raise PermissionDenied("This simulated role is not permitted to perform this action.")
+
+
+def lookup_or_404(queryset, pk):
+    # IDs from query strings and forms are untrusted: anything that is not an integer is a 404, not a 500.
+    try:
+        pk = int(pk)
+    except (TypeError, ValueError):
+        raise Http404("No such record.")
+    return get_object_or_404(queryset, pk=pk)
 
 
 def page(request, template, ctx, **extra):
@@ -29,7 +41,9 @@ def page(request, template, ctx, **extra):
 
 def metrics(org):
     due = Instalment.objects.filter(organisation=org, due_date=timezone.localdate())
-    payments = Payment.objects.filter(organisation=org, status="Confirmed", paid_at__gte=timezone.now().replace(day=1,hour=0,minute=0,second=0))
+    # The month starts at midnight in Lagos, not UTC (BR-13: stored in UTC, shown in WAT).
+    month_start = timezone.localtime().replace(day=1,hour=0,minute=0,second=0,microsecond=0)
+    payments = Payment.objects.filter(organisation=org, status="Confirmed", paid_at__gte=month_start)
     return {"due_display":money(sum(i.amount-i.paid for i in due)), "due_count":due.exclude(state="Paid").count(),
             "collected_display":money(payments.aggregate(s=Sum("amount"))["s"] or 0), "confirmed_count":payments.count(),
             "failed_count":Instalment.objects.filter(organisation=org,state="Failed").count(),
@@ -40,7 +54,11 @@ def metrics(org):
 
 
 def home(request):
-    c = context(request); org = c["org"]
+    try:
+        c = context(request)
+    except WorkspaceRequired:
+        return render(request, "start.html")
+    org = c["org"]
     return page(request,"today",c,metrics=metrics(org),
                 recent_payments=Payment.objects.filter(organisation=org).select_related("instalment__loan__customer").order_by("-paid_at")[:6],
                 urgent_reviews=Review.objects.filter(organisation=org,status__in=["Open","In progress"]).select_related("owner","instalment__loan__customer").order_by("deadline")[:4],
@@ -48,9 +66,23 @@ def home(request):
                 activity=Audit.objects.filter(organisation=org)[:5])
 
 
+def start(request):
+    if request.method == "POST" and not workspace_exists(request):
+        org, actor = seed_demo()
+        request.session.cycle_key()
+        request.session["org"] = str(org.id)
+        request.session["actor"] = actor.id
+        try:
+            # Housekeeping only: a failure here must never stop a visitor opening the demo.
+            purge_demo_workspaces(limit=10)
+        except Exception:
+            logger.exception("Purging idle demo workspaces failed")
+    return redirect("today")
+
+
 def customers(request):
     c=context(request); q=request.GET.get("q","").strip(); filt=request.GET.get("filter","")
-    items=Customer.objects.filter(organisation=c["org"]).prefetch_related("loans__instalments").order_by("name")
+    items=Customer.objects.filter(organisation=c["org"]).prefetch_related(Prefetch("loans",queryset=Loan.objects.order_by("id"))).order_by("name")
     if q:
         items=items.filter(Q(name__icontains=q)|Q(email__icontains=q)|Q(phone__icontains=q)|Q(external_id__icontains=q)|Q(loans__reference__icontains=q)).distinct()
     if filt=="hold": items=items.filter(loans__on_hold=True)
@@ -61,12 +93,15 @@ def customers(request):
 
 def customer_detail(request,pk):
     c=context(request); customer=get_object_or_404(Customer,pk=pk,organisation=c["org"])
-    loan=customer.loans.first()
-    return page(request,"customer_detail",c,customer=customer,loan=loan,
-                instalments=loan.instalments.all().order_by("sequence"),
-                payments=Payment.objects.filter(organisation=c["org"],instalment__loan=loan),
-                reviews=Review.objects.filter(organisation=c["org"],instalment__loan=loan),
-                activity=Audit.objects.filter(organisation=c["org"],detail__contains=loan.reference))
+    # A customer can hold several loans (CSV import allows it); the page covers all of them.
+    loans=list(customer.loans.order_by("id").prefetch_related(Prefetch("instalments",queryset=Instalment.objects.order_by("sequence"))))
+    # Loan audit details are "<ref>" or "<ref>: …", so match exactly: LN-1 must not pick up LN-10.
+    mentions=Q(pk__in=[])
+    for loan in loans: mentions|=Q(detail=loan.reference)|Q(detail__startswith=f"{loan.reference}:")
+    return page(request,"customer_detail",c,customer=customer,loans=loans,
+                payments=Payment.objects.filter(organisation=c["org"],instalment__loan__customer=customer).select_related("instalment__loan"),
+                reviews=Review.objects.filter(organisation=c["org"],instalment__loan__customer=customer),
+                activity=Audit.objects.filter(organisation=c["org"]).filter(mentions))
 
 
 def customer_form(request,pk=None):
@@ -74,7 +109,10 @@ def customer_form(request,pk=None):
     customer=get_object_or_404(Customer,pk=pk,organisation=c["org"]) if pk else None
     initial={}
     if customer:
-        loan=customer.loans.first(); inst=loan.instalments.first()
+        # ?loan= picks which of the customer's loans to edit; default is the first.
+        loan=lookup_or_404(customer.loans,request.GET["loan"]) if "loan" in request.GET else customer.loans.order_by("id").first()
+        if loan is None: raise Http404("This customer has no loan to edit.")
+        inst=loan.instalments.order_by("sequence").first()
         initial={"name":customer.name,"external_id":customer.external_id,"email":customer.email,"phone":customer.phone,
                  "loan_id":loan.reference,"product":loan.product,"amount":Decimal(inst.amount)/100,"due_date":inst.due_date,"instalment_count":loan.instalments.count()}
     form=CustomerForm(request.POST or None,initial=initial)
@@ -152,12 +190,17 @@ def loan_action(request,pk):
     elif action=="withdraw":
         if loan.consent_status in ["Active","Awaiting bank"]:
             messages.error(request,"Provider deactivation is unavailable. No withdrawal has been claimed; live processing is disabled.")
+        elif loan.consent_status!="Requested":
+            messages.error(request,"There is no unused consent link to withdraw.")
         else:
             loan.consent_status="Withdrawn"; loan.save()
             audit(c["org"],c["actor"],"Unused consent link withdrawn",f"{loan.reference}: {reason}")
     elif action=="close":
-        if PaymentRequest.objects.filter(instalment__loan=loan,status__in=["Awaiting confirmation","Unknown"]).exists():
-            messages.error(request,"Resolve in-progress money states before closing this loan.")
+        if loan.status=="Closed":
+            messages.error(request,"This loan is already closed.")
+        # An Unknown result holds the instalment until it is resolved (BR-05, FR-P3.2).
+        elif loan.instalments.filter(state__in=["Unknown","In progress"]).exists() or PaymentRequest.objects.filter(instalment__loan=loan,status__in=["Awaiting confirmation","Unknown"]).exists():
+            messages.error(request,"A payment on this loan is still in progress or has an Unknown result. Resolve it before closing the loan.")
         else:
             loan.status="Closed"; loan.save()
             PaymentRequest.objects.filter(instalment__loan=loan,status="Awaiting approval").update(status="Cancelled")
@@ -192,8 +235,8 @@ def payments(request):
 def request_form(request):
     c=context(request); permitted(c,["Admin","Preparer"])
     initial={}
-    if request.GET.get("instalment","").isdigit():
-        inst=get_object_or_404(Instalment,pk=request.GET["instalment"],organisation=c["org"])
+    if request.GET.get("instalment"):
+        inst=lookup_or_404(Instalment.objects.filter(organisation=c["org"]),request.GET["instalment"])
         initial={"instalment":inst.pk,"amount":Decimal(inst.amount-inst.paid)/100}
     form=RequestForm(request.POST or None,org=c["org"],initial=initial)
     if request.method=="POST" and form.is_valid():
@@ -236,8 +279,11 @@ def cancel_request(request,pk):
 def reviews(request):
     c=context(request); filt=request.GET.get("filter",""); q=request.GET.get("q","")
     items=Review.objects.filter(organisation=c["org"]).select_related("owner","instalment__loan__customer").order_by("deadline")
+    # The queue holds open items; closed ones have their own view.
+    if filt=="closed": items=items.exclude(status__in=["Open","In progress"])
+    else: items=items.filter(status__in=["Open","In progress"])
     if filt=="mine": items=items.filter(owner=c["actor"])
-    elif filt=="overdue": items=items.filter(deadline__lt=timezone.now(),status__in=["Open","In progress"])
+    elif filt=="overdue": items=items.filter(deadline__lt=timezone.now())
     if request.GET.get("type"): items=items.filter(kind=request.GET["type"])
     if q: items=items.filter(Q(instalment__loan__customer__name__icontains=q)|Q(kind__icontains=q))
     return page(request,"reviews",c,reviews=items,q=q,filter=filt)
@@ -248,17 +294,21 @@ def review_detail(request,pk):
     c=context(request); item=get_object_or_404(Review.objects.select_for_update(),pk=pk,organisation=c["org"])
     if request.method=="POST":
         action=request.POST.get("action")
-        if action=="assign":
+        if item.status in ["Resolved","Dismissed"]: messages.error(request,"This review is already closed.")
+        elif action=="assign":
             permitted(c,["Admin","Preparer","Reviewer"])
-            item.owner=get_object_or_404(Member,pk=request.POST.get("owner"),organisation=c["org"]); item.save()
-            audit(c["org"],c["actor"],"Review assigned",f"{item.id} → {item.owner.name}")
-            messages.success(request,"Owner updated.")
+            owner=lookup_or_404(Member.objects.filter(organisation=c["org"]),request.POST.get("owner"))
+            # Owners work the item; anyone allowed may still decide it (TRD FR-C5.4, 4.2). Viewers are read-only.
+            if owner.role=="Viewer": messages.error(request,"Viewers have read-only access, so they cannot own review items.")
+            else:
+                item.owner=owner; item.save()
+                audit(c["org"],c["actor"],"Review assigned",f"{item.id} → {item.owner.name}")
+                messages.success(request,"Owner updated.")
         elif action=="resolve":
-            permitted(c,["Admin","Reviewer"]); note=request.POST.get("note","").strip(); outcome=request.POST.get("outcome","")
-            if item.status in ["Resolved","Dismissed"]: messages.error(request,"This review is already closed.")
-            elif item.prepared_by_id==c["actor"].id: messages.error(request,"A different person must review this item.")
-            elif not note or outcome not in ["Resolved","Dismissed","Failed"]: messages.error(request,"Select an outcome and add a note.")
-            elif item.kind in ["Unknown result","Unclear match","Possible duplicate","Reversal"]:
+            permitted(c,item.decision_roles); note=request.POST.get("note","").strip(); outcome=request.POST.get("outcome","")
+            if item.prepared_by_id==c["actor"].id: messages.error(request,"A different person must review this item.")
+            elif not note or outcome not in ["Resolved","Dismissed"]: messages.error(request,"Select an outcome and add a note.")
+            elif item.needs_evidence:
                 messages.error(request,"Provider or bank evidence is required. Financial resolution is disabled until the integration is connected.")
             else:
                 item.status="Dismissed" if outcome=="Dismissed" else "Resolved"
@@ -267,7 +317,9 @@ def review_detail(request,pk):
                 audit(c["org"],c["actor"],"Review resolved",f"{item.id}: {outcome}. {note}")
                 messages.success(request,"Decision saved. Approved refunds remain unprocessed until a provider is connected.")
         return redirect("review_detail",pk=pk)
-    return page(request,"review_detail",c,review=item)
+    actor=c["actor"]
+    return page(request,"review_detail",c,review=item,owners=[m for m in c["members"] if m.role!="Viewer"],
+                can_decide=actor.role in item.decision_roles and actor.id!=item.prepared_by_id)
 
 
 def refund_form(request,pk):
@@ -311,7 +363,7 @@ def settings(request):
 
 @require_POST
 def demo_role(request):
-    c=context(request); member=get_object_or_404(Member,pk=request.POST.get("member"),organisation=c["org"])
+    c=context(request); member=lookup_or_404(Member.objects.filter(organisation=c["org"]),request.POST.get("member"))
     request.session["actor"]=member.pk
     messages.info(request,f"Simulating {member.name} ({member.role}). This is not authentication.")
     return redirect("settings")
@@ -321,7 +373,8 @@ def preview(request,workspace):
     c=context(request)
     features={"credit":["Statement-based ability-to-repay assessments","Separate data-access and assessment permissions","Second-person review with applicant explanations","No credit scores or automated approvals"],
               "cash":["Cash balances with freshness dates","30- and 90-day collection forecasts","Reviewed accounting drafts and CSV exports","VAT records and payroll funding plans — no payouts"]}
-    return page(request,"preview",c,page=workspace,workspace="Credit Desk" if workspace=="credit" else "Cash Desk",features=features[workspace])
+    name="Credit Desk" if workspace=="credit" else "Cash Desk"
+    return page(request,"preview",c,page=workspace,workspace=name,title=name,features=features[workspace])
 
 
 def public(request,kind,token):
@@ -335,7 +388,8 @@ def public(request,kind,token):
         expired=item.status in ["Expired","Cancelled"] or item.expires_at<timezone.now()
         ctx={"lender":item.organisation.name,"first_name":item.customer_name.split()[0],"loan_ref":item.instalment.loan.reference,"amount_display":item.amount_display,"expiry":item.expires_at}
     if request.method=="POST" and not expired:
-        messages.error(request,"Bank authorisation is unavailable in this demo. No bank was contacted and no payment was made.")
+        # The hand-off page: truthful in the sandbox, since no provider is connected and nothing was authorised or paid.
+        kind="confirmation"
     return render(request,"public.html",{**ctx,"kind":"expired" if expired else kind,"token":token})
 
 
@@ -365,7 +419,7 @@ def exports(request,kind):
         row(["time","actor","action","detail","previous_hash","hash"])
         for a in Audit.objects.filter(organisation=org): row([a.created_at.isoformat(),a.actor_name,a.action,a.detail,a.previous_hash,a.digest])
     elif kind=="customer":
-        customer=get_object_or_404(Customer,organisation=org,pk=request.GET.get("customer"))
+        customer=lookup_or_404(Customer.objects.filter(organisation=org),request.GET.get("customer"))
         row(["loan","sequence","due_date","amount_ngn","paid_ngn","status"])
         for i in Instalment.objects.filter(organisation=org,loan__customer=customer): row([i.loan.reference,i.sequence,i.due_date,f"{Decimal(i.amount)/100:.2f}",f"{Decimal(i.paid)/100:.2f}",i.status])
     elif kind=="daily":

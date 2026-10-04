@@ -7,8 +7,8 @@
 <a class="chip {% if filter == 'overdue' %}on{% endif %}" href="?filter=overdue{% if q %}&q={{ q|urlencode }}{% endif %}">Overdue</a>
 <a class="chip {% if filter == 'hold' %}on{% endif %}" href="?filter=hold{% if q %}&q={{ q|urlencode }}{% endif %}">On hold</a>
 <a class="chip {% if filter == 'no-consent' %}on{% endif %}" href="?filter=no-consent{% if q %}&q={{ q|urlencode }}{% endif %}">No consent</a></div>
-{% if customers %}<div class="tablewrap"><table><thead><tr><th>Name</th><th class="hide-sm">External ID</th><th class="hide-sm">Contact</th><th></th></tr></thead><tbody>
-{% for c in customers %}<tr><td><a href="/customers/{{ c.id }}/"><b>{{ c.name }}</b></a></td><td class="mono hide-sm">{{ c.external_id }}</td><td class="small hide-sm">{{ c.email }}<br><span class="muted">{{ c.phone }}</span></td><td style="text-align:right"><a class="btn ghost sm" href="/customers/{{ c.id }}/">Open</a></td></tr>{% endfor %}
+{% if customers %}<div class="tablewrap"><table><thead><tr><th>Name</th><th>Loans</th><th class="hide-sm">External ID</th><th class="hide-sm">Contact</th><th class="hide-sm"></th></tr></thead><tbody>
+{% for c in customers %}<tr><td><a href="/customers/{{ c.id }}/"><b>{{ c.name }}</b></a></td><td class="small">{% for l in c.loans.all %}<div><span class="mono">{{ l.reference }}</span> <span class="badge b-{{ l.consent_status|slugify }}">{{ l.consent_status }}</span>{% if l.on_hold %} <span class="badge b-hold">On hold</span>{% endif %}{% if l.status != 'Open' %} <span class="badge b-{{ l.status|slugify }}">{{ l.status }}</span>{% endif %}</div>{% endfor %}</td><td class="mono hide-sm">{{ c.external_id }}</td><td class="small hide-sm">{{ c.email }}<br><span class="muted">{{ c.phone }}</span></td><td class="hide-sm" style="text-align:right"><a class="btn ghost sm" href="/customers/{{ c.id }}/">Open</a></td></tr>{% endfor %}
 </tbody></table></div>
 {% else %}<div class="empty"><div class="ico">?</div><b>No customers match</b>{% if q or filter %}<a href="/customers/">Clear filters</a>{% else %}Add one or import a CSV of instalments.{% endif %}</div>{% endif %}
 </section>{% endblock %}

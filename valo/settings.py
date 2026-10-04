@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from pathlib import Path
 import dj_database_url
 
@@ -15,7 +16,8 @@ MIDDLEWARE = ["django.middleware.security.SecurityMiddleware",
               "django.middleware.common.CommonMiddleware",
               "django.middleware.csrf.CsrfViewMiddleware",
               "django.contrib.messages.middleware.MessageMiddleware",
-              "django.middleware.clickjacking.XFrameOptionsMiddleware"]
+              "django.middleware.clickjacking.XFrameOptionsMiddleware",
+              "core.middleware.WorkspaceMiddleware"]
 ROOT_URLCONF = "valo.urls"
 TEMPLATES = [{"BACKEND": "django.template.backends.django.DjangoTemplates",
               "DIRS": [BASE_DIR / "templates"], "APP_DIRS": True,
@@ -37,5 +39,10 @@ SESSION_COOKIE_AGE = 1800
 SESSION_SAVE_EVERY_REQUEST = True
 CSRF_COOKIE_SECURE = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Sent only on HTTPS responses (TRD SEC-01). HTTP-to-HTTPS redirects stay with the reverse proxy.
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 X_FRAME_OPTIONS = "SAMEORIGIN"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 3 * 1024 * 1024
+# Idle demo workspaces are deleted after this; sessions already end after 30 idle minutes.
+DEMO_WORKSPACE_RETENTION = timedelta(hours=24)

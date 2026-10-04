@@ -1,0 +1,22 @@
+{% load static %}<!doctype html>
+<html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Valo Pay demo</title><meta name="description" content="Valo Pay — a synthetic-data collections and Pay-by-bank operations sandbox for Nigerian lenders."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=3"></head>
+<body>
+<div class="sandbox" role="note">Demo sandbox · <b>Synthetic data only</b> · No real payments</div>
+<main class="start">
+  <div class="brand"><span class="mark">V</span>Valo Pay</div>
+  {% if messages %}<ul class="msgs" role="status">{% for message in messages %}<li class="{{ message.tags }}">{{ message }}</li>{% endfor %}</ul>{% endif %}
+  <section class="card reveal">
+    <div class="eyebrow">Collections and Pay-by-bank</div>
+    <h1>Explore a sample lender's workspace</h1>
+    <p class="sub">You get your own copy of Meridian Finance, a made-up lender with customers, instalment schedules, consents, payments and items waiting for review.</p>
+    <form method="post" action="/start/">{% csrf_token %}<button class="btn" type="submit">Open the demo workspace</button></form>
+    <ul class="list small">
+      <li>Every name, loan and payment is synthetic. Never enter real customer data.</li>
+      <li>No bank or payment provider is connected, so no money can move.</li>
+      <li>You can switch between four team roles. This is a simulation, not sign-in.</li>
+      <li>Workspaces close after 30 minutes without activity and are then deleted.</li>
+    </ul>
+  </section>
+</main>
+</body></html>
