@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/payments/">Pay-by-bank</a></li><li aria-current="page">Refund request</li></ol></nav><h1>Request a refund</h1><p class="sub">Prepare a refund for a second person to approve.</p></div></div>
+<p class="note" role="status">{{ deadline_notice }}</p>
+<div class="grid g2"><section class="card"><h2>Payment</h2><dl class="kv" style="margin-bottom:16px"><dt>Customer</dt><dd>{{ payment.customer_name }}</dd><dt>Reference</dt><dd class="mono">{{ payment.reference }}</dd><dt>Confirmed amount</dt><dd class="mono">{{ payment.amount_display }}</dd></dl>
+<form method="post" class="form" novalidate data-confirm="Submit this refund request for second approval?">{% csrf_token %}{% include "includes/form.html" with form=form %}<div class="actions"><button class="btn" type="submit"{% if not deadline_available %} disabled{% endif %}>Submit for approval</button><a class="btn ghost" href="/payments/">Cancel</a></div></form></section>
+<aside class="stack"><div class="note warn"><b>Two people are required.</b> You are preparing this as {{ actor.name }}. A different Admin or Reviewer must approve it in <a href="/reviews/">Reviews</a>.</div><div class="note">In the sandbox, approval only marks the request Approved. No money is returned and no provider processes it.</div></aside></div>
+{% endblock %}

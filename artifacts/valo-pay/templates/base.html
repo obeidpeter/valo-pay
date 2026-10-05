@@ -1,0 +1,49 @@
+{% load static %}<!doctype html>
+<html lang="en-NG" class="no-js"><head><script>document.documentElement.className="js"</script><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block doctitle %}{{ title }}{% endblock %} · {{ org.name }} · Valo Pay {% if not staff_mode %}demo{% endif %}</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="preload" href="{% static 'fonts/pjs-latin.woff2' %}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{% static 'valo.css' %}?v=8"></head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<div class="sandbox" role="note">{% if staff_mode %}Verified staff · {{ org.name }}{% else %}Demo sandbox{% endif %} · <b>Synthetic preview only</b> · No real payments or messages{% if not staff_mode %} <a class="sandbox-website" href="/">Valo Pay website</a>{% endif %}</div>
+<div class="shell">
+<header class="side">
+  {% include "includes/ribbon.html" with cls="ribbon-mini" rid="s" %}
+  <div class="sidebar-top"><a href="/today/" class="brand">{% include "includes/logo.html" %}Valo Pay</a>
+  <button type="button" class="menu-toggle" aria-expanded="false" aria-controls="sidepanel" hidden><span class="mt-icon" aria-hidden="true"></span><span class="mt-label">Menu</span><span class="mt-current">{% if page == 'today' %}Dashboard{% elif page == 'customers' or page == 'customer_detail' or page == 'customer_form' or page == 'import' %}Customers{% elif page == 'collections' %}Collections{% elif page == 'payments' or page == 'request_form' or page == 'request_detail' or page == 'refund_form' %}Pay-by-bank{% elif page == 'reviews' or page == 'review_detail' %}Reviews{% elif page == 'reports' %}Reports{% elif page == 'settings' %}Settings{% endif %}</span></button></div>
+  <div class="sidepanel" id="sidepanel">
+  <div class="org"><span class="vh">Organisation: </span>{{ org.name }}<br><span class="env">Sandbox environment</span></div>
+  <nav aria-label="Main"><ul class="nav">
+    <li><a href="/today/"{% if page == 'today' %} aria-current="page"{% endif %}>Dashboard</a></li>
+    <li><a href="/customers/"{% if page == 'customers' or page == 'customer_detail' or page == 'customer_form' or page == 'import' %} aria-current="page"{% endif %}>Customers</a></li>
+    <li><a href="/collections/"{% if page == 'collections' %} aria-current="page"{% endif %}>Collections</a></li>
+    <li><a href="/payments/"{% if page == 'payments' or page == 'request_form' or page == 'request_detail' or page == 'refund_form' %} aria-current="page"{% endif %}>Pay-by-bank</a></li>
+    <li><a href="/reviews/"{% if page == 'reviews' or page == 'review_detail' %} aria-current="page"{% endif %}>Reviews{% if open_review_count %} <span class="count"><span aria-hidden="true">{{ open_review_count }}</span><span class="vh">, {{ open_review_count }} open</span></span>{% endif %}</a></li>
+    <li><a href="/reports/"{% if page == 'reports' %} aria-current="page"{% endif %}>Reports</a></li>
+  </ul></nav>
+  <details class="acct">
+    <summary><span class="who"><b>{{ actor.name }}</b><span>{{ actor.role }} · {% if staff_mode %}verified membership{% else %}simulated role{% endif %}</span></span><span class="vh">Account menu</span></summary>
+    <ul>
+      <li><a href="/settings/"{% if page == 'settings' %} aria-current="page"{% endif %}>Settings</a></li>
+      {% if staff_mode %}<li><a href="/access/organisations/">Switch organisation</a></li><li><a href="/access/workspace/">Account and team access</a></li><li><form method="post" action="/access/logout/">{% csrf_token %}<button class="btn ghost" type="submit">Sign out</button></form></li>{% else %}<li><a href="/settings/#role">Switch simulated role</a></li>{% endif %}
+    </ul>
+    {% if not staff_mode %}<p class="previews">Separate sample previews, not live:<br><a href="/credit/"{% if page == 'credit' %} aria-current="page"{% endif %}>Credit Desk</a> · <a href="/cash/"{% if page == 'cash' %} aria-current="page"{% endif %}>Cash Desk</a></p><p class="previews">Demo help:<br><a href="/demo/guide/"{% if page == 'demo_guide' %} aria-current="page"{% endif %}>Demo guide</a> · <a href="/demo/">Start page</a></p>{% endif %}
+  </details>
+  </div>
+</header>
+<main class="main" id="main" tabindex="-1">
+  {% include "includes/messages.html" %}
+  {% if actor.role == "Viewer" %}<p class="note">Read-only access: you can inspect records and permitted exports. Creating requests, changing customers or loans, assigning reviews and saving settings require an authorised role.</p>{% elif actor.role == "Reviewer" %}<p class="note small">Reviewer access: you may assign and independently review items or manage holds. Creating customers, payment requests and consent links requires an Admin or Preparer.</p>{% elif actor.role == "Preparer" %}<p class="note small">Preparer access: you may prepare records and requests. Independent decisions and hold release require a separate Reviewer or Admin; settings require an Admin.</p>{% endif %}
+  {% if staff_mode %}<section class="card" id="idle" data-remaining="{{ idle_remaining }}" hidden><h2>Your session is about to end</h2><p id="idle-msg" role="alert"></p><p id="idle-clock" aria-hidden="true"></p><form method="post" action="/access/continue/">{% csrf_token %}<input type="hidden" name="next" value="{{ request.path }}"><button class="btn" type="submit">Stay signed in</button></form></section>{% endif %}
+  {% include "includes/demo_tour.html" %}
+  {% block content %}{% endblock %}
+  {% if payment_page %}{% include "includes/pagination.html" with pager=payment_page query_key="records_page" label="Payment records" %}{% endif %}
+  {% if request_page %}{% include "includes/pagination.html" with pager=request_page query_key="requests_page" label="Payment requests" %}{% endif %}
+  {% if page_obj %}<nav aria-label="Results pages" class="pagefoot"><p>Showing {{ page_obj.start_index }}–{{ page_obj.end_index }} of {{ page_obj.paginator.count }} records. Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}.</p>{% if page_obj.has_previous %}<a class="btn ghost" href="?page={{ page_obj.previous_page_number }}&amp;q={{ q|urlencode }}&amp;filter={{ filter|urlencode }}">Previous page</a>{% endif %} {% if page_obj.has_next %}<a class="btn ghost" href="?page={{ page_obj.next_page_number }}&amp;q={{ q|urlencode }}&amp;filter={{ filter|urlencode }}">Next page</a>{% endif %}</nav>{% endif %}
+</main>
+</div>
+<div id="live" class="vh" role="status" aria-live="polite"></div>
+<script src="{% static 'valo.js' %}?v=5" defer></script>
+{% if staff_mode %}<script src="{% static 'access.js' %}" defer></script>{% endif %}
+</body></html>

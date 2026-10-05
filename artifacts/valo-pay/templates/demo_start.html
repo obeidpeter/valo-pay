@@ -1,0 +1,43 @@
+{% load static %}<!doctype html><html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="same-origin"><title>{% if restart_confirm %}Restart the demo{% else %}Synthetic demo{% endif %} · Valo Pay</title><link rel="preload" href="{% static 'fonts/pjs-latin.woff2' %}" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="{% static 'valo.css' %}?v=7"></head><body>
+<a class="skip" href="#content">Skip to content</a><div class="sandbox" role="note">Demo sandbox · <b>Synthetic preview only</b> · No real payments or messages</div>
+<div class="auth">
+<aside class="auth-brand" aria-label="About the demo">
+{% include "includes/ribbon.html" with rid="a" %}
+<a href="/" class="brand">{% include "includes/logo.html" %}Valo Pay</a>
+<div><h2>A sample lender, ready to explore.</h2>
+<p>The demo opens a workspace filled with made-up customers, loans and payments so you can try every screen without real data.</p>
+<ul><li>Synthetic records only</li><li>No real money moves and nothing is delivered</li><li>A ten-step guide walks you through it</li></ul></div>
+</aside>
+<div class="auth-form">
+<header class="auth-mhead"><a href="/" class="brand">{% include "includes/logo.html" %}Valo Pay</a><a href="/demo/guide/">Guide</a></header>
+<main id="content" class="inner" tabindex="-1">
+{% if restart_confirm %}
+<header style="margin-bottom:var(--s5)"><p class="eyebrow">Synthetic demo · Restart</p><h1>Start again with fresh sample data?</h1>
+<p class="helptext">A new sample workspace is created and this browser is detached from the current one.</p></header>
+<form method="post" action="/demo/restart/" class="card">{% csrf_token %}
+<h2>Before you restart</h2>
+<ul><li>Your current sample workspace is detached from this browser; you will not be able to return to it.</li><li>The old synthetic data is retained and is not automatically purged.</li><li>No real money, accounts or messages are affected.</li></ul>
+<label class="check" for="confirm"><input type="checkbox" id="confirm" name="confirm" value="yes" required> <span>I understand my current sample workspace will be detached and replaced.</span></label>
+<p class="btnrow actions"><button class="btn" type="submit">Restart the demo</button><a class="btn ghost" href="/demo/">Cancel</a></p>
+</form>
+{% else %}
+<header style="margin-bottom:var(--s5)"><p class="eyebrow">Synthetic demo · No sign-up</p><h1>{% if demo_available %}Your sample workspace is ready{% else %}Explore Valo Pay with sample data{% endif %}</h1>
+<p class="helptext">Everything you see belongs to a made-up lender. Nothing here is real.</p></header>
+{% if demo_available %}
+<section class="card" aria-labelledby="cont-h"><h2 id="cont-h">Pick up where you left off</h2>
+<p class="actions"><a class="btn" href="/today/">Continue to Dashboard</a><a class="btn ghost" href="/demo/guide/">Open the ten-step guide</a></p>
+<p class="hint">Want a clean slate? <a href="/demo/restart/">Restart with fresh sample data</a></p></section>
+{% else %}
+<form method="post" action="/demo/start/" class="card">{% csrf_token %}
+<h2>Create a sample workspace</h2>
+<p>We create a workspace with synthetic customers, loans and payments for this browser.</p>
+<p class="actions"><button class="btn" type="submit">Start the demo</button></p></form>
+{% endif %}
+<section class="card" aria-labelledby="how-h"><h2 id="how-h">How the demo session works</h2>
+<ul><li>Your demo session ends after 30 minutes of inactivity. Ending the session does not delete the sample data.</li>
+<li>Synthetic data you create is retained and is not automatically purged.</li>
+<li>Restarting detaches the old sample workspace from this browser and creates a new one.</li>
+<li>No real money moves and no messages are delivered.</li></ul></section>
+{% endif %}
+<nav aria-label="Other pages" class="auth-links-wrap"><p><a href="/">Back to home</a></p><p><a href="/access/login/">Staff sign in</a></p></nav>
+</main></div></div></body></html>

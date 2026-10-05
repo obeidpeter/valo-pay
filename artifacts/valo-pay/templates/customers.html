@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><h1>Customers</h1><p class="sub">Find a borrower by name, email, phone, customer ID or loan reference.</p></div>
+<div class="actions">{% if can_prepare %}<a class="btn ghost" href="/import/">Import CSV</a><a class="btn" href="/customers/new/">Add customer</a>{% endif %}</div></div>
+<section class="card" aria-labelledby="list-h"><h2 id="list-h" class="vh">Customer list</h2>
+{% include "includes/pagination.html" with pager=page_obj record_label="customers" pagination_label="Customer pages" %}
+<form method="get" class="toolbar" action="/customers/" role="search"><div class="search"><div class="f"><label for="q">Search customers</label><input type="search" id="q" name="q" value="{{ q }}" autocomplete="off"></div>{% if filter %}<input type="hidden" name="filter" value="{{ filter }}">{% endif %}<button class="btn ghost" type="submit">Search</button></div></form>
+<ul class="chips" aria-label="Filter customers">
+<li><a class="chip" href="/customers/{% if q %}?q={{ q|urlencode }}{% endif %}"{% if not filter %} aria-current="true"{% endif %}>All</a></li>
+<li><a class="chip" href="?filter=overdue{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'overdue' %} aria-current="true"{% endif %}>Overdue</a></li>
+<li><a class="chip" href="?filter=hold{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'hold' %} aria-current="true"{% endif %}>On hold</a></li>
+<li><a class="chip" href="?filter=no-consent{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'no-consent' %} aria-current="true"{% endif %}>No active consent</a></li></ul>
+<p class="resultline" role="status">{{ customers|length }} customer{{ customers|length|pluralize }}{% if q %} matching “{{ q }}”{% endif %}{% if filter %} · filter: {{ filter }}{% endif %}{% if q or filter %} · <a href="/customers/">Clear</a>{% endif %}</p>
+{% if customers %}<div class="tablewrap" role="region" aria-labelledby="list-h" tabindex="0"><table class="stack"><caption class="vh">Customers</caption><thead><tr><th scope="col">Name</th><th scope="col">Customer ID</th><th scope="col">Contact</th><th scope="col"><span class="vh">Action</span></th></tr></thead><tbody>
+{% for c in customers %}<tr><th scope="row" style="font:inherit;text-transform:none;letter-spacing:0;color:inherit;white-space:normal;border-bottom:1px solid var(--line)"><a href="/customers/{{ c.id }}/"><b>{{ c.name }}</b></a></th><td class="mono">{{ c.external_id }}</td><td class="small">{{ c.email }}<br><span class="muted">{{ c.phone }}</span></td><td style="text-align:right"><a class="btn ghost sm" href="/customers/{{ c.id }}/">Open<span class="vh"> {{ c.name }}</span></a></td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}<div class="empty"><div class="ico" aria-hidden="true"></div><b>No customers match</b>{% if q or filter %}Try a different spelling or <a href="/customers/">clear the search and filters</a>.{% elif can_prepare %}<a href="/customers/new/">Add a customer</a> or <a href="/import/">import a CSV of instalments</a>.{% else %}An Admin or Preparer can add customer records.{% endif %}</div>{% endif %}
+</section>{% endblock %}

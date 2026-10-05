@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block doctitle %}Demo guide{% endblock %}
+{% block content %}
+<div class="head"><div><p class="eyebrow">Sample-data demo</p><h1>Demo guide</h1><p class="sub">A ten-step tour using made-up customers, loans and payments. No real money moves or messages are sent. Follow the steps in order or skip a step.</p></div></div>
+<section class="card" aria-labelledby="guide-start-h">
+<h2 id="guide-start-h">Before you start</h2>
+<p>Opening a step switches to the sample person and role shown on its button. It opens a screen; it does not complete the task for you.</p>
+<p>The step bar stays with you as you explore. Choose ‘Next step’ or ‘Previous step’ to move through the guide, or ‘End tour’ to keep exploring without it.</p>
+<ul>
+<li><b>Preparer:</b> sets up requests.</li>
+<li><b>Reviewer:</b> checks another person’s requests.</li>
+<li><b>Admin:</b> can prepare and review requests and use Settings, but cannot approve their own request.</li>
+</ul>
+<p>Some actions may be unavailable for the sample records you see. Read the reason and continue to another step.</p>
+<h3>Return to this guide</h3>
+<p>On desktop, open the name/role Account menu near the bottom of the sidebar and choose ‘Demo guide’. On mobile, open ‘Menu’ first, then the Account menu. If a customer preview opens a new tab, return to the original tab.</p>
+</section>
+<ol class="steps" role="list" aria-label="Guide steps">
+{% for s in steps %}
+<li><section class="card" style="margin:0" aria-labelledby="step-{{ s.number }}-h">
+<h2 id="step-{{ s.number }}-h"><span class="vh">Step {{ s.number }}: </span>{{ s.title }}</h2>
+<p>{{ s.description }}</p>
+<p class="hint">Sample role: {{ s.role }}</p>
+<form method="post" action="/demo/guide/action/">{% csrf_token %}<input type="hidden" name="step" value="{{ s.number }}"><button class="btn sm" type="submit" aria-describedby="step-{{ s.number }}-h">Open step {{ s.number }} as {{ s.role }}</button></form>
+</section></li>
+{% empty %}<li><p>No guide steps are available.</p></li>
+{% endfor %}
+</ol>
+<details class="card"><summary>What do the status labels mean?</summary><p>These labels describe sample records. No bank is connected and no real money moves in this demo.</p><dl>{% for word, explanation in state_explanations %}<dt style="margin-top:12px"><strong>{{ word }}</strong></dt><dd style="margin:4px 0 0">{{ explanation }}</dd>{% endfor %}</dl></details>
+<section class="card"><h2>Start again</h2><p class="small">Restarting creates fresh sample data in a new workspace for this browser. The old sample records are kept and are not automatically deleted. You must confirm on the next page.</p><p class="actions"><a class="btn ghost" href="/demo/restart/">Restart the demo</a><a class="btn ghost" href="/demo/">Demo start page</a></p></section>
+{% endblock %}

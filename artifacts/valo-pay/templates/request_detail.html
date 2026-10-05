@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% load state_help %}{% block content %}
+<p class="note">{{ payment_request.status|state_help }}</p>
+<div class="head"><div><nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/payments/">Pay-by-bank</a></li><li aria-current="page">Request</li></ol></nav><h1 class="mono" style="font-size:clamp(1.2rem,3vw,1.7rem);overflow-wrap:anywhere">{{ payment_request.reference }}</h1><p class="sub">{{ payment_request.customer_name }} · {{ payment_request.amount_display }} · {% include "includes/badge.html" with s=payment_request.status %}</p></div></div>
+<div class="note warn" style="margin-bottom:16px"><b>Stored request status: {{ payment_request.status }}.</b> Link creation, opening, cancellation or expiry does not by itself establish whether funds moved. Reconcile any earlier unresolved attempt before creating another payment. Provider execution is unavailable.</div>
+<div class="grid g2"><section class="card" aria-labelledby="sh-h"><h2 id="sh-h">Share link</h2>
+<label class="lbl" for="share">Customer payment link</label>
+<div class="copy"><input id="share" type="text" readonly value="{{ share_url }}" data-abs><button type="button" class="btn sm" data-copy="share">Copy link</button></div>
+<p class="small muted">Send it through your usual channel. The sandbox sends nothing.</p>
+<div class="actions"><a class="btn ghost sm" href="{{ share_url }}" target="_blank" rel="noopener">Preview customer page<span class="vh"> (opens in new tab)</span></a></div></section>
+<section class="card" aria-labelledby="dt-h"><h2 id="dt-h">Details</h2><dl class="kv"><dt>Customer</dt><dd>{{ payment_request.customer_name }}</dd><dt>Recipient</dt><dd>{{ org.name }}</dd><dt>Amount</dt><dd class="mono">{{ payment_request.amount_display }}</dd><dt>Expires</dt><dd>{{ payment_request.expires_at|date:"j M Y, H:i" }}</dd><dt>Status</dt><dd>{{ payment_request.status }}</dd></dl>
+{% if payment_request.status == 'Awaiting approval' and can_prepare %}<form method="post" action="/payments/{{ payment_request.id }}/cancel/" style="margin-top:16px" data-confirm="Cancel request {{ payment_request.reference }}? The customer link will stop working.">{% csrf_token %}<p class="small">Cancelling disables this pending request. It does not establish the result of earlier payments.</p><button class="btn warn sm" type="submit">Cancel request</button></form>{% endif %}
+<p style="margin-top:16px"><a href="/payments/">Back to Pay-by-bank</a></p></section></div>
+<p class="small">Instalment due date: {{ payment_request.instalment.due_date|date:"j M Y" }}. Stored link state alone does not establish whether earlier payments moved funds. Reconcile an unresolved attempt before paying again.</p>
+{% endblock %}

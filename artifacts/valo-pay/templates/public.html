@@ -1,0 +1,78 @@
+{% load static %}<!doctype html><html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="same-origin">
+<title>{% if kind == 'consent' %}Review your repayment authorisation{% elif kind == 'payment' %}Payment request{% elif kind == 'confirmation' %}Payment status{% else %}Link unavailable{% endif %} · {{ lender }}</title>
+<link rel="preload" href="{% static 'fonts/pjs-latin.woff2' %}" as="font" type="font/woff2" crossorigin>
+<style>
+.actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}.actions .btn{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;border:1.5px solid #182333;border-radius:8px;background:#fff;color:#182333}.resultline{font-size:.875rem;color:#5C6573}
+@font-face{font-family:"Plus Jakarta Sans";src:url("{% static 'fonts/pjs-latin-ext.woff2' %}") format("woff2");font-weight:400 700;font-display:swap;unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0}
+@font-face{font-family:"Plus Jakarta Sans";src:url("{% static 'fonts/pjs-vietnamese.woff2' %}") format("woff2");font-weight:400 700;font-display:swap;unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB}
+@font-face{font-family:"Plus Jakarta Sans";src:url("{% static 'fonts/pjs-latin.woff2' %}") format("woff2");font-weight:400 700;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+:root{--ff:"Plus Jakarta Sans",ui-sans-serif,system-ui,sans-serif;--paper:#FFFDFA;--card:#fff;--ink:#111D2B;--ink2:#182333;--mute:#5C6573;--line:#E2DBD1;--ctl:#8A8F99;--accent:#F47735;--accentd:#BA390C;--pale:#FFF0E7;--warnb:#FFF4DC;--warnt:#7A4A00;--unkb:var(--warnb);--unkt:var(--warnt);--okb:#E6F4EC;--okt:#1D6440;--red:#FBE6E1;--redt:#A3301F}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink2);font:16px/1.55 "Plus Jakarta Sans",ui-sans-serif,system-ui,sans-serif;min-height:100dvh;overflow-wrap:break-word;font-variant-numeric:tabular-nums lining-nums}
+.skip{position:absolute;left:8px;top:-60px;background:var(--ink);color:#FFFDFA;padding:10px 14px;border-radius:6px;z-index:10}.skip:focus{top:8px}
+.sb{background:var(--pale);color:var(--accentd);font:600 12px/1.4 var(--ff);letter-spacing:.02em;text-align:center;padding:7px 12px;border-bottom:1px solid #F6D3BE}
+.sandbox-website{display:inline-block;margin-inline:8px;padding:6px 2px;color:inherit;text-decoration:underline;text-underline-offset:3px;white-space:nowrap}
+.sandbox-website:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.w{max-width:480px;margin:0 auto;padding:24px 16px 40px}
+header{display:flex;align-items:center;gap:12px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.m{width:44px;height:44px;border-radius:12px;background:var(--ink);color:#FFFDFA;display:grid;place-items:center;font:700 18px/1 var(--ff);flex:none;position:relative}
+.m::after{content:"";position:absolute;right:-3px;bottom:-3px;width:12px;height:12px;border-radius:4px;background:var(--accent);border:2px solid var(--paper)}
+header b{display:block;font-size:1.125rem;color:var(--ink);letter-spacing:-.01em}header small{display:block;color:var(--mute);font-size:.8125rem;line-height:1.4}
+.c{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 20px;box-shadow:0 1px 2px rgba(17,29,43,.05),0 8px 24px -16px rgba(17,29,43,.18)}
+h1{font:700 1.5rem/1.25 var(--ff);letter-spacing:-.02em;color:var(--ink);margin:0 0 10px}
+h2{font:700 1rem/1.3 var(--ff);color:var(--ink);margin:22px 0 6px}
+.amt{font:700 2.25rem/1.1 var(--ff);letter-spacing:-.02em;color:var(--ink);margin:4px 0 12px;white-space:nowrap}
+.k{font:600 12px/1.4 var(--ff);text-transform:uppercase;letter-spacing:.08em;color:var(--accentd);margin:0 0 6px}
+dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 16px;margin:14px 0;font-size:.9375rem;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}dt{color:var(--mute)}dd{margin:0;font-weight:600;color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:.9375rem;margin:6px 0}th{text-align:left;font-size:.75rem;letter-spacing:.04em;text-transform:uppercase;color:var(--mute);padding:6px 0;border-bottom:1.5px solid var(--ink)}td{padding:9px 0;border-bottom:1px solid var(--line)}td:last-child,th:last-child{text-align:right;white-space:nowrap;font-weight:600}
+.n{background:var(--warnb);border:1px solid #EBCB8B;border-left:4px solid #C98A00;border-radius:10px;padding:12px 14px;font-size:.9375rem;margin:16px 0;color:var(--warnt)}.n.bad{background:var(--red);border-color:var(--redt);color:var(--redt)}
+.st{display:inline-flex;align-items:center;gap:6px;font:700 .75rem/1 var(--ff);letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;border-radius:999px;margin-bottom:12px;border:1.5px solid currentColor}
+.st .si{flex:none}.st.ok{color:var(--okt);background:var(--okb)}.st.warn{color:#7A4A00;background:#FFF4DC}.st.bad{color:#A3221B;background:var(--red)}.st.neutral{color:#4F5866;background:#EEF0F2}
+.ck{display:flex;gap:12px;font-size:.95rem;margin:16px 0;align-items:flex-start}.ck input{margin-top:3px;width:22px;height:22px;accent-color:var(--ink);flex:none}
+button{width:100%;min-height:48px;font:600 1rem/1.2 var(--ff);padding:12px;border-radius:10px;border:2px solid var(--ink);background:var(--ink);color:#FFFDFA;cursor:pointer;transition:background-color .12s}
+button:hover{background:#22344A}button:active{transform:translateY(1px)}
+button[aria-busy=true]{opacity:.7;cursor:progress}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px;box-shadow:0 0 0 5px var(--paper),0 0 0 7px var(--accentd)}
+.help{font-size:.9rem;color:var(--mute)}
+.f{font-size:.8125rem;color:var(--mute);text-align:center;margin-top:20px}
+.pb{display:block;margin-top:6px;font-size:.75rem;color:var(--mute)}
+ul{padding-left:20px;margin:6px 0}li{margin:4px 0}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media(forced-colors:active){.st,.n,.c{border:1px solid CanvasText}}
+</style></head><body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="sb" role="note">Demo sandbox · Synthetic data only · No real payments <a class="sandbox-website" href="/">Valo Pay website</a></div>
+<div class="w">
+<header><div class="m" aria-hidden="true">{{ lender|first }}</div><div><b>{{ lender }}</b><small>Loan {{ loan_ref }}</small><small class="pb">Page provided for {{ lender }} by Valo Pay, its service provider</small></div></header>
+<main id="main">
+{% if messages %}{% for message in messages %}<div class="n {% if message.tags == 'error' %}bad{% endif %}" role="alert"><b>{% if message.tags == 'error' %}Not completed.{% else %}Note.{% endif %}</b> {{ message }}</div>{% endfor %}{% endif %}
+<div class="c">
+{% if status_heading %}
+<p class="k">Latest stored state</p>{% with h=status_heading|lower %}{% if 'confirmed' in h and 'awaiting' not in h %}<span class="st ok">{% include "includes/status_icon.html" with icon="tick" %}Confirmed</span>{% elif 'unresolved' in h %}<span class="st warn">{% include "includes/status_icon.html" with icon="question" %}Unknown</span>{% elif 'unknown' in h %}<span class="st warn">{% include "includes/status_icon.html" with icon="question" %}No action available</span>{% elif 'awaiting' in h %}<span class="st neutral">{% include "includes/status_icon.html" with icon="clock" %}Pending</span>{% elif 'failed' in h %}<span class="st bad">{% include "includes/status_icon.html" with icon="cross" %}Failed</span>{% elif 'reversed' in h %}<span class="st bad">{% include "includes/status_icon.html" with icon="return" %}Reversed</span>{% else %}<span class="st neutral">{% include "includes/status_icon.html" with icon="dash" %}No action available</span>{% endif %}{% endwith %}<h1>{{ status_heading }}</h1><p>{{ status_detail }}</p><p class="help">This is synthetic sample data, not evidence from a connected payment provider.</p>
+{% elif kind == 'consent' %}
+<p class="k">Direct debit authorisation</p><h1>Hello {{ first_name }}, please review your repayment plan.</h1>
+<p>This is a sample repayment schedule for {{ lender }}, including historical instalments. It is not an approved bank authorisation. No consent can be given here.</p>
+<dl><dt>Loan</dt><dd>{{ loan_ref }}</dd><dt>Maximum per debit</dt><dd>{{ max_display }}</dd>{% if expiry %}<dt>Authorisation ends</dt><dd>{{ expiry|date:"j M Y" }}</dd>{% endif %}{% if retry_preset %}<dt>If a debit fails</dt><dd>{{ retry_preset }}</dd>{% endif %}</dl>
+{% if instalments %}<h2 id="sched">Repayment schedule</h2><table aria-labelledby="sched"><thead><tr><th scope="col">Due date</th><th scope="col">Amount</th></tr></thead><tbody>{% for i in instalments %}<tr><td>{{ i.due_date|date:"j M Y" }}</td><td>{{ i.amount_display }}</td></tr>{% endfor %}</tbody></table>{% include "includes/pagination.html" with pager=instalments record_label="instalments" pagination_label="Repayment schedule pages" %}{% endif %}
+<h2>Approval required</h2><p class="help">Consent authorisation, withdrawal wording and legal notices require owner approval before real use. Do not enter bank details or rely on this sample as a legal agreement.</p>
+<h2>Privacy</h2><p class="help">An approved privacy notice is not available here. Contact your lender using its usual contact details. No privacy or terms destination has been assumed.</p>
+<div class="n">Authorisation is unavailable: no provider is configured. No consent can be activated here.</div><form method="post">{% csrf_token %}<button type="submit">Check current availability</button></form>
+<p class="help" style="margin-top:10px">Next, you would confirm with your bank through the payment provider. In this demo no bank is contacted.</p>
+{% elif kind == 'payment' %}
+<p class="k">Payment request</p><h1>Hello {{ first_name }}</h1><p>{{ lender }} has asked for a payment towards loan {{ loan_ref }}.</p>
+<p class="k" style="margin-top:14px">Amount</p><p class="amt">{{ amount_display }}</p>
+<dl><dt>Pay to</dt><dd>{{ lender }}</dd><dt>Loan</dt><dd>{{ loan_ref }}</dd>{% if expiry %}<dt>Link expires</dt><dd>{{ expiry|date:"j M Y, H:i" }}</dd>{% endif %}</dl>
+<p class="help">This request may cover only part of an instalment. Provider handoff is unavailable; do not enter bank passwords or send funds from this sample page.</p>
+<div class="n">Payment handoff is unavailable: no provider is configured. Do not send funds based on this sample page.</div><form method="post">{% csrf_token %}<button type="submit">Check current availability</button></form>
+{% elif kind == 'confirmation' %}
+<p class="k">Payment status</p><h1>Your payment has not been confirmed.</h1>
+<div class="n">This preview has no connected payment provider. A browser redirect is not payment confirmation. Contact {{ lender }} to reconcile any earlier attempt before paying again.</div>
+<p class="help"><b>Do not pay again</b> if you think you already paid. Contact {{ lender }} first so a second payment is not taken.</p>
+{% else %}
+<p class="k">Link unavailable</p><h1>This link has expired, was used, or was cancelled.</h1><p>Link availability does not establish the outcome of any earlier payment or authorisation.</p><p class="help">Contact {{ lender }} using the phone number or email on your loan agreement.</p>
+{% endif %}
+</div>
+</main>
+<p class="f">Need help? Contact {{ lender }} directly. Valo Pay never asks for your card PIN, BVN or bank password.</p>
+</div>
+<script>document.addEventListener("submit",function(e){var f=e.target;if(f.dataset.s){e.preventDefault();return}f.dataset.s=1;var b=f.querySelector("button");if(b){b.setAttribute("aria-busy","true");b.textContent="Please wait…"}});</script>
+</body></html>

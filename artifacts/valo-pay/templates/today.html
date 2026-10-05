@@ -1,0 +1,52 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><p class="eyebrow">{{ today|date:"l, j F Y" }}</p><h1>Dashboard</h1><p class="sub">{% if staff_mode %}Verified{% else %}Simulated{% endif %} {{ actor.role }} ({{ actor.name }}). Start with anything that needs a decision, then work through what is due.</p></div>
+<div class="actions">{% if can_prepare %}<a class="btn ghost" href="/payments/new/">New payment request</a>{% endif %}<a class="btn" href="/reviews/">Open reviews ({{ metrics.review_count }})</a></div></div>
+
+<h2 class="vh" id="attn">Needs attention</h2>
+<ul class="metrics" aria-labelledby="attn">
+<li><a class="metric m-err" href="/reviews/?filter=overdue"><span class="v{% if not metrics.review_count %} zero{% endif %}">{{ metrics.review_count }}</span><span class="k">Open reviews <span class="vh">— see overdue first</span></span><span class="d">Unknown results, unclear matches, refunds awaiting a second person</span></a></li>
+<li><a class="metric m-err" href="/collections/?filter=failed"><span class="v{% if not metrics.failed_count %} zero{% endif %}">{{ metrics.failed_count }}</span><span class="k">Failed instalments <span class="vh">— view failed</span></span><span class="d">Collection attempts that did not succeed</span></a></li>
+<li><a class="metric m-warn" href="/collections/?filter=hold"><span class="v{% if not metrics.held_count %} zero{% endif %}">{{ metrics.held_count }}</span><span class="k">Instalments on hold <span class="vh">— view holds</span></span><span class="d">On {{ metrics.held_loans }} loan{{ metrics.held_loans|pluralize }}. No collection runs.</span></a></li>
+<li><a class="metric m-unk" href="/payments/?filter=unknown"><span class="v na">Not counted here</span><span class="k">Unknown results</span><span class="d">This summary does not total Unknown results. Open the Unknown list to see each one. Never retry these.</span></a></li>
+</ul>
+
+<section class="ledger" aria-labelledby="money-h">
+  {% include "includes/ribbon.html" with cls="ribbon-mini" rid="l" %}
+  <div><h2 class="lab" id="money-h">Confirmed this month · sample records</h2>
+    <p class="big">{{ metrics.collected_display }}</p>
+    <p>{{ metrics.confirmed_count }} sample payment{{ metrics.confirmed_count|pluralize }} marked Confirmed this month. Excludes other payment statuses and payments whose own instalment has an open review or Unknown/In progress state. A review on another instalment does not exclude this payment. No real money moved.</p></div>
+  <dl>
+    <dt>Still outstanding today</dt><dd>{{ metrics.due_display }}</dd>
+    <dt>Instalments due today, unpaid</dt><dd>{{ metrics.due_count }}</dd>
+    <dt>Active consents</dt><dd>{{ metrics.active_consents }} of {{ metrics.customer_count }} customers</dd>
+  </dl>
+</section>
+
+<section class="card" id="due-today" aria-labelledby="due-h"><h2 id="due-h">Due today <small><a href="/collections/?filter=upcoming">Upcoming in Collections</a></small></h2>
+{% if demo_due_rows %}
+<p class="small">Sample records only. This simulation contacts no bank, moves no money and schedules no retries.</p>
+{% if can_run_demo %}<form method="post" action="/demo/debits/run/">{% csrf_token %}<button class="btn sm" type="submit">Run today's sample debits</button></form>{% endif %}
+<div class="tablewrap" role="region" aria-labelledby="due-h" tabindex="0"><table class="stack"><caption class="vh">Sample instalments due today and simulation eligibility</caption><thead><tr><th scope="col">Customer</th><th scope="col">Loan</th><th scope="col">Status</th><th scope="col">Sample debit</th><th scope="col" class="num">Outstanding</th></tr></thead><tbody>
+{% for i, outcome, words in demo_due_rows %}<tr><td><a href="/customers/{{ i.loan.customer.id }}/">{{ i.loan.customer.name }}</a></td><td class="mono">{{ i.loan.reference }}</td><td>{% include "includes/badge.html" with s=i.status %}</td><td>{{ words }}</td><td class="num">{{ i.outstanding_display }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% elif instalments %}<div class="tablewrap" role="region" aria-labelledby="due-h" tabindex="0"><table class="stack"><caption class="vh">Instalments due today</caption><thead><tr><th scope="col">Customer</th><th scope="col">Loan</th><th scope="col">Status</th><th scope="col" class="num">Outstanding</th></tr></thead><tbody>
+{% for i in instalments %}<tr><td><a href="/customers/{{ i.loan.customer.id }}/">{{ i.loan.customer.name }}</a>{% if i.loan.on_hold %} {% include "includes/badge.html" with s="On hold" %}{% endif %}</td><td class="mono">{{ i.loan.reference }}</td><td>{% include "includes/badge.html" with s=i.status %}</td><td class="num">{{ i.outstanding_display }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="empty"><b>Nothing due today</b>Upcoming instalments are in <a href="/collections/?filter=upcoming">Collections</a>.</div>{% endif %}
+</section>
+<div class="grid g2">
+<div>
+  <section class="card" aria-labelledby="dec-h"><h2 id="dec-h">Needs a decision <small><a href="/reviews/">All reviews</a></small></h2>
+  {% if urgent_reviews %}<ul class="rows">{% for r in urgent_reviews %}<li><span class="t1"><a href="/reviews/{{ r.id }}/">{{ r.kind }}<span class="vh"> for {{ r.customer_name }}</span></a> <span class="muted" style="font-weight:500">· {{ r.customer_name }}</span></span><span class="amt">{{ r.amount_display }}</span><span class="t2">{% if r.overdue %}{% include "includes/badge.html" with s="Overdue" %}{% endif %}<span>Stored deadline {{ r.deadline|date:"j M Y, H:i" }} WAT</span><span>{% if r.owner %}Owner {{ r.owner.name }}{% else %}Unassigned{% endif %}</span><span>{{ r.deadline_label }}</span></span></li>{% endfor %}</ul>
+  {% else %}<div class="empty"><div class="ico" aria-hidden="true"></div><b>No reviews waiting</b>Nothing needs a second person right now.</div>{% endif %}</section>
+
+</div>
+<div>
+  <section class="card" aria-labelledby="pay-h"><h2 id="pay-h">Latest payment records <small><a href="/payments/">Pay-by-bank</a></small></h2>
+  <p class="small muted">These are stored synthetic examples, not evidence from a connected provider. Pending or Unknown is not counted as money received.</p>
+  {% if recent_payments %}<ul class="rows">{% for p in recent_payments %}<li><span class="t1" style="font-weight:600">{{ p.customer_name }}</span><span class="side-r"><span class="amt">{{ p.amount_display }}</span>{% include "includes/badge.html" with s=p.status %}</span><span class="t2 mono">{{ p.reference }} · {{ p.source }}</span></li>{% endfor %}</ul>
+  {% else %}<div class="empty"><div class="ico" aria-hidden="true"></div><b>No payment records yet</b>Create a request from a due instalment.</div>{% endif %}</section>
+  <section class="card" aria-labelledby="act-h"><h2 id="act-h">Recent activity</h2>
+  {% if activity %}<ul class="list feed">{% for a in activity %}<li><div class="t">{{ a.created_at|date:"j M H:i" }} · {{ a.actor_name }}</div><b>{{ a.action }}</b> <span class="muted small">{{ a.detail }}</span></li>{% endfor %}</ul>
+  {% else %}<div class="empty"><div class="ico" aria-hidden="true"></div><b>No activity yet</b>Every change is recorded in the audit log.</div>{% endif %}</section>
+</div></div>
+{% endblock %}
