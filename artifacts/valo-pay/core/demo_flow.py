@@ -79,7 +79,7 @@ STEP_TEXT = [
      "Choose the instalment. Keep the amount at or below what is owed, tick the box, then choose Create request link.", "Preparer"),
     ("Review another person's request",
      "Anything that affects money needs a second person. The person who prepared an item cannot decide it.",
-     "Open an item. Under Decision, choose an outcome, add a decision note and choose Record decision.", "Reviewer"),
+     "Open Consent problem. Under Decision, choose Resolved, add a decision note and choose Record decision. Then confirm.", "Reviewer"),
     ("Request a refund",
      "Refunds also need two people: one asks and another approves. Approving does not send money.",
      "Check the payment. Enter the refund amount and a reason, then choose Submit for approval.", "Preparer"),
