@@ -56,25 +56,66 @@ def restart(request):
                                              "restart_confirm": True})
 
 
+# The ten steps in plain words (owner request: easy to follow while presenting). Each is
+# (title, what the step shows, what to do on the page, sample role). Pages come from steps().
+STEP_TEXT = [
+    ("See what needs attention",
+     "The Dashboard is the team's home screen. It shows what needs a decision and what is due today. "
+     "Run today's sample debits to see how automatic collection works. It uses made-up data: no bank is contacted and no money moves.",
+     "Point to the figures at the top. Then choose Run today's sample debits and read the Sample debit column.", "Admin"),
+    ("Check a customer's repayments",
+     "Each customer has one page with their loans, every instalment and what is still owed.",
+     "Scroll to Instalments. Compare Amount, Paid and Outstanding.", "Preparer"),
+    ("Understand an unclear payment result",
+     "Sometimes we do not know yet if a payment went through. Valo Pay then puts the loan on hold, so the customer "
+     "is not charged twice, until the bank or payment service confirms the result.",
+     "Read Problem and evidence. The payment must not be requested again.", "Reviewer"),
+    ("Ask for permission to collect payments",
+     "Before money can be taken by direct debit, the customer must give permission at their bank. This is called consent. "
+     "You create a link for the customer to give it.",
+     "Under the loan's Actions, open Create consent link and choose Create consent link. Then choose Preview customer page.", "Preparer"),
+    ("Create a payment request",
+     "A payment request gives the customer a link to pay one instalment from their bank. Creating it sends nothing and moves no money.",
+     "Choose the instalment. Keep the amount at or below what is owed, tick the box, then choose Create request link.", "Preparer"),
+    ("Review another person's request",
+     "Anything that affects money needs a second person. The person who prepared an item cannot decide it.",
+     "Open an item. Under Decision, choose an outcome, add a decision note and choose Record decision.", "Reviewer"),
+    ("Request a refund",
+     "Refunds also need two people: one asks and another approves. Approving does not send money.",
+     "Check the payment. Enter the refund amount and a reason, then choose Submit for approval.", "Preparer"),
+    ("Add repayments from a spreadsheet",
+     "A lender can add many repayments at once from a spreadsheet (a CSV file). If any row has a mistake, nothing is added.",
+     "Choose Download CSV template. Put made-up rows in CSV data, then choose Validate rows.", "Preparer"),
+    ("View and download reports",
+     "Finance teams and auditors can download payments, consents, reviews and the activity log as spreadsheets.",
+     "Point to the totals. Then open a download under CSV exports. Settings is in the sidebar under Organisation.", "Admin"),
+    ("Explore planned features",
+     "Credit Desk and Cash Desk are previews of what comes next. They do not work yet.",
+     "Read Planned capabilities. Then choose Cash Desk under Coming later in the sidebar.", "Admin"),
+]
+
+
 def steps(org):
     loans = org.loan_set.order_by("reference")
     customer = loans.first()
     consent = loans.filter(consent_status="Not requested", status="Open").first()
     review = Review.objects.filter(organisation=org, kind="Unknown result").first()
     payment = Payment.objects.filter(organisation=org, status="Confirmed").first()
-    entries = [
-        ("See what needs attention", "On the Dashboard, look at ‘Needs a decision’ and ‘Due today’. Choose ‘Run today's sample debits’ to simulate eligible payments. Paid and failed outcomes are made up; blocked items show why they cannot run. Running again does not repeat paid or failed attempts. No real money moves and no retries are scheduled.", "/today/", "Admin"),
-        ("Check a customer's repayments", "If Customers opens, choose a name. Under each loan, read ‘Instalments’ — the separate repayments due. ‘Outstanding’ is the amount still owed; compare it with ‘Amount’ and ‘Paid’.", f"/customers/{customer.customer_id}/" if customer else "/customers/", "Preparer"),
-        ("Understand an unclear payment result", "If Reviews opens, choose an item, then read ‘Problem and evidence’ and ‘Decision’. Unknown is not Failed: collection stays on hold until there is a verified result from the bank or payment service. Do not request payment again. If the review is closed or its decision is blocked, read the reason and move on.", f"/reviews/{review.pk}/" if review else "/reviews/", "Reviewer"),
-        ("Ask for permission to collect payments", "Consent means permission; if Customers opens, choose a name first. Under a loan’s ‘Actions’, open ‘Create consent link’ and choose the button with the same name, then ‘Preview customer page’. This creates a sample link only and does not contact a bank. The action may be unavailable for some records; read the reason and continue.", f"/customers/{consent.customer_id}/" if consent else "/customers/", "Preparer"),
-        ("Create a payment request", "On New payment request, choose ‘Instalment’ and fill in ‘Amount (₦)’ and ‘Link expires after (hours)’. Keep the amount at or below what is still owed. Read and tick the checkbox, then choose ‘Create request link’ if the record allows it. This creates a sample link, not a payment.", "/payments/new/", "Preparer"),
-        ("Review another person's request", "On Reviews, open an item and read ‘Problem and evidence’. Under ‘Decision’, if a decision is available, choose an outcome, add a ‘Decision note’ and select ‘Record decision’. The person who prepared the request cannot approve it. If a decision is blocked, read the reason and continue.", "/reviews/", "Reviewer"),
-        ("Request a refund", "If Pay-by-bank opens, look for a Confirmed payment with ‘Request refund’, if available. On Request a refund, check the payment, then enter ‘Refund amount (₦)’ and ‘Reason’. Choose ‘Submit for approval’ to ask another person to review it. Approval does not send a refund.", f"/refunds/{payment.pk}/new/" if payment else "/payments/", "Preparer"),
-        ("Add repayments from a spreadsheet", "Choose ‘Download CSV template’ — CSV is a spreadsheet file — and fill it with made-up data only. Add it using ‘CSV file (optional)’ or paste it into ‘CSV data’, then choose ‘Validate rows’. Check every row and fix any errors before confirming with ‘Import … rows’. If any row has an error, nothing is imported.", "/import/", "Preparer"),
-        ("View and download reports", "On Reports, read the totals and open a download under ‘CSV exports’. Each export includes matching records for this sample organisation, including rows beyond those on screen. For team and setup information, you can also open the Account menu and choose ‘Settings’.", "/reports/", "Admin"),
-        ("Explore planned features", "Start at Credit Desk and read ‘Planned capabilities’. Open the Account menu and choose ‘Cash Desk’ to see the other preview. Both describe planned services; neither is available to use. Return to the Dashboard when you finish.", "/credit/", "Admin"),
+    paths = [
+        "/today/",
+        f"/customers/{customer.customer_id}/" if customer else "/customers/",
+        f"/reviews/{review.pk}/" if review else "/reviews/",
+        f"/customers/{consent.customer_id}/" if consent else "/customers/",
+        "/payments/new/",
+        "/reviews/",
+        f"/refunds/{payment.pk}/new/" if payment else "/payments/",
+        "/import/",
+        "/reports/",
+        "/credit/",
     ]
-    return [dict(number=n, title=t, description=d, path=p, role=r) for n,(t,d,p,r) in enumerate(entries,1)]
+    people = {m.role: m.name for m in Member.objects.filter(organisation=org, user__isnull=True).order_by("-pk")}
+    return [dict(number=n, title=t, description=d, hint=h, path=p, role=r, person=people.get(r, ""))
+            for n, ((t, d, h, r), p) in enumerate(zip(STEP_TEXT, paths), 1)]
 
 
 def guide(request):
@@ -82,9 +123,9 @@ def guide(request):
     if not available(request):
         return redirect("demo")
     c = context(request)
-    from .content import GUIDE_STATE_HELP
+    from .content import GUIDE_STATE_HELP, STATE_LABEL
     return render(request, "demo_guide.html", {**c, "steps": steps(c["org"]), "title": "Demo guide", "page":"demo_guide",
-                                             "state_explanations": GUIDE_STATE_HELP.items()})
+                                             "state_explanations": [(STATE_LABEL.get(word, word), meaning) for word, meaning in GUIDE_STATE_HELP.items()]})
 
 
 @require_POST
@@ -107,10 +148,12 @@ def action(request):
 
 def tour_bar(request):
     number = request.session.get("demo_tour_step")
-    if type(number) is not int or not 1 <= number <= 10 or not available(request):
+    total = len(STEP_TEXT)
+    if type(number) is not int or not 1 <= number <= total or not available(request):
         return None
-    return {"number": number, "total": 10, "next": number + 1 if number < 10 else None,
-            "previous": number - 1 if number > 1 else None}
+    title, _, hint, _ = STEP_TEXT[number - 1]
+    return {"number": number, "total": total, "title": title, "hint": hint,
+            "next": number + 1 if number < total else None, "previous": number - 1 if number > 1 else None}
 
 
 @require_POST

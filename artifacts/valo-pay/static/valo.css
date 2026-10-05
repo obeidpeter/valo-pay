@@ -475,3 +475,20 @@ dl.totals dd{margin:4px 0 0;font:700 1.125rem/1.2 var(--font);font-variant-numer
  .acct{background:var(--c-navy)}
 }
 .head>div{min-width:0;max-width:100%}.head h1,.head .sub,.crumbs li{overflow-wrap:anywhere}
+
+/* ===== grouped sidebar (owner request, 5 Oct 2026): pages in working-day order, demo links in view ===== */
+.sidepanel{gap:var(--s3)}
+.mainnav{display:flex;flex-direction:column;gap:2px}
+.navgroup{margin:10px 12px 2px;font:700 var(--fs-xs)/1.2 var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--text-inverse-muted)}
+.navmini{list-style:none;margin:0;padding:0 12px;display:flex;flex-wrap:wrap;gap:0 16px;font-size:var(--fs-sm)}
+.navmini a{display:inline-flex;align-items:center;min-height:32px;color:var(--c-warm);text-underline-offset:3px}
+.navmini a[aria-current=page]{font-weight:700}
+.demonav{margin-top:auto;border-top:1px solid rgba(211,216,223,.18);padding-top:2px}
+.demonav+.acct{margin-top:0}
+@media(min-width:901px){.side{padding:var(--s4) var(--s3);gap:var(--s3);scroll-padding-block:var(--s3)}.side .org{padding:8px 12px}.sidepanel{gap:var(--s2)}.mainnav .nav a{min-height:34px;padding:5px 12px}.navgroup{margin-top:8px}}
+@media(max-width:900px){.navgroup{margin:8px 0 2px}.navmini{padding:0}.demonav{margin-top:0}.mainnav .nav li:only-child{grid-column:1/-1}}
+/* one-line meaning under each item in Needs a decision */
+.rows .t3{flex:1 1 100%;font-size:var(--fs-sm);color:var(--text-body)}
+/* demo tour card: the step, what it shows and what to do */
+.tourcard .tour-title{margin:4px 0 0;font-weight:700;font-size:var(--fs-lg)}
+.tourcard .tour-hint{margin:4px 0 12px}

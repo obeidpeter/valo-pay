@@ -44,7 +44,7 @@ def _today_context(fixture):
                  status=statuses[i % 5]) for i in range(n_pay)]
     act = [] if empty else [N(created_at=datetime(2026, 10, 4, 9, 12), actor_name="Ada Okafor (Synthetic)",
                               action="Demo workspace created", detail="Synthetic examples loaded. Live payment processing is disabled.")]
-    return dict(title="Today", page="today", today=date(2026, 10, 4), staff_mode=False, can_prepare=True,
+    return dict(title="Dashboard", page="today", today=date(2026, 10, 4), staff_mode=False, can_prepare=True,
                 org=N(name="Ìlú Àjọ Cooperative Multipurpose Society — Synthetic Review Fixture" if long else "Meridian Finance (Synthetic)"),
                 actor=N(name="Ada Okafor (Synthetic)", role="Admin"), open_review_count=n_rev,
                 metrics=dict(review_count=n_rev, failed_count=0 if empty else 2, held_count=0 if empty else 5,

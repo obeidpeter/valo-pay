@@ -1,5 +1,6 @@
 """Presentation-only mapping of stored status words to TRD 8.3 colour + icon. No logic changes."""
 from django import template
+from core.content import STATE_LABEL
 
 register = template.Library()
 
@@ -22,6 +23,12 @@ _MAP = {
     "dismissed": ("neutral", "dot"), "approved": ("ok", "dot"), "completed": ("ok", "dot"),
     "not-requested": ("neutral", "dot"),
 }
+
+
+@register.filter
+def status_word(word):
+    """The word people read for a stored status: the TRD word, or its plain name where the owner chose one."""
+    return STATE_LABEL.get(str(word), word)
 
 
 @register.filter

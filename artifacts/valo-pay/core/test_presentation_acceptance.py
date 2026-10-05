@@ -12,6 +12,7 @@ from pathlib import Path
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.test import override_settings
+from core.content import STATE_LABEL
 from django.utils import timezone
 
 from .models import Customer, Instalment, Loan, Member, Organisation, Payment, PaymentRequest, Review
@@ -122,7 +123,8 @@ class PresentationAcceptanceTests(StaticLiveServerTestCase):
                 page = ctx.new_page()
                 page.goto(self.live_server_url + f"/customers/{self.customer.pk}/")
                 page.wait_for_load_state("networkidle")
-                navs = page.locator(".nav a").count()
+                # The six product pages; Settings and the previews sit in their own sidebar group.
+                navs = page.locator('nav[aria-label="Main"] a').count()
                 if vw <= 900:
                     page.locator(".menu-toggle").click()
                 summary = page.locator(".acct summary")
@@ -138,16 +140,18 @@ class PresentationAcceptanceTests(StaticLiveServerTestCase):
                 d["summary_focused"] = page.evaluate("document.activeElement.matches('.acct summary')")
                 page.keyboard.press("Enter")
                 page.keyboard.press("Tab")
-                d["settings_focused"] = page.evaluate("document.activeElement.getAttribute('href')") == "/settings/"
-                d["settings_visible"] = page.evaluate("""()=>{const a=document.querySelector('.acct a[href="/settings/"]');const r=a.getBoundingClientRect();
+                d["role_switch_focused"] = page.evaluate("document.activeElement.getAttribute('href')") == "/settings/#role"
+                d["role_switch_visible"] = page.evaluate("""()=>{const a=document.querySelector('.acct a[href="/settings/#role"]');const r=a.getBoundingClientRect();
                   const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return r.top>=0&&r.bottom<=innerHeight&&!!hit&&a.contains(hit)}""")
+                d["settings_in_sidebar"] = page.evaluate("""()=>{const a=document.querySelector('nav[aria-label="Organisation"] a[href="/settings/"]');
+                  if(!a)return false;const r=a.getBoundingClientRect();return r.width>0&&r.height>0}""")
                 d["demo_identity"] = "Synthetic Admin" in page.inner_text(".acct summary")
                 d["menu_state_kept"] = (vw > 900) or page.get_attribute(".menu-toggle", "aria-expanded") == "true"
                 report["desktop"].append(d)
                 self._check(navs == 6, f"{tag} nav count {navs}", problems)
                 if tag == "desktop":
                     self._check(d["summary_y_load"] is not None and box["y"] + box["height"] <= vh, f"desktop summary at y{d['summary_y_load']}", problems)
-                for k in ("summary_focused", "settings_focused", "settings_visible", "demo_identity", "menu_state_kept"):
+                for k in ("summary_focused", "role_switch_focused", "role_switch_visible", "settings_in_sidebar", "demo_identity", "menu_state_kept"):
                     self._check(d[k], f"{tag} {k} failed", problems)
                 self._mask(page)
                 page.screenshot(path=str(OUT / f"account-open-{tag}-{vw}x{vh}.png"))
@@ -162,7 +166,8 @@ class PresentationAcceptanceTests(StaticLiveServerTestCase):
                 report["badges"] = badges
                 seen = {b["word"]: b for b in badges}
                 for word, (tone, icon) in TRD_83.items():
-                    b = seen.get(word)
+                    # Badges show the plain name where the owner chose one (Unknown reads "Result not known").
+                    b = seen.get(STATE_LABEL.get(word, word))
                     self._check(b and b["tone"] == tone and b["icon"] == icon, f"badge {word} mapping {b}", problems)
                     if b:
                         self._check(b["text"] >= 4.5 and b["icon_ratio"] >= 3 and b["icon_hidden"] == "true", f"badge {word} contrast {b}", problems)

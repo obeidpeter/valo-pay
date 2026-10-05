@@ -4,17 +4,17 @@
 
 <h2 class="vh" id="attn">Needs attention</h2>
 <ul class="metrics" aria-labelledby="attn">
-<li><a class="metric m-err" href="/reviews/?filter=overdue"><span class="v{% if not metrics.review_count %} zero{% endif %}">{{ metrics.review_count }}</span><span class="k">Open reviews <span class="vh">— see overdue first</span></span><span class="d">Unknown results, unclear matches, refunds awaiting a second person</span></a></li>
+<li><a class="metric m-err" href="/reviews/?filter=overdue"><span class="v{% if not metrics.review_count %} zero{% endif %}">{{ metrics.review_count }}</span><span class="k">Open reviews <span class="vh">— see overdue first</span></span><span class="d">Payment results not known, unclear matches, refunds awaiting a second person</span></a></li>
 <li><a class="metric m-err" href="/collections/?filter=failed"><span class="v{% if not metrics.failed_count %} zero{% endif %}">{{ metrics.failed_count }}</span><span class="k">Failed instalments <span class="vh">— view failed</span></span><span class="d">Collection attempts that did not succeed</span></a></li>
 <li><a class="metric m-warn" href="/collections/?filter=hold"><span class="v{% if not metrics.held_count %} zero{% endif %}">{{ metrics.held_count }}</span><span class="k">Instalments on hold <span class="vh">— view holds</span></span><span class="d">On {{ metrics.held_loans }} loan{{ metrics.held_loans|pluralize }}. No collection runs.</span></a></li>
-<li><a class="metric m-unk" href="/payments/?filter=unknown"><span class="v na">Not counted here</span><span class="k">Unknown results</span><span class="d">This summary does not total Unknown results. Open the Unknown list to see each one. Never retry these.</span></a></li>
+<li><a class="metric m-unk" href="/payments/?filter=unknown"><span class="v na">Not counted here</span><span class="k">Payment results not known</span><span class="d">This summary does not count them. Open the list to see each one. Do not ask for these payments again until the result is known.</span></a></li>
 </ul>
 
 <section class="ledger" aria-labelledby="money-h">
   {% include "includes/ribbon.html" with cls="ribbon-mini" rid="l" %}
   <div><h2 class="lab" id="money-h">Confirmed this month · sample records</h2>
     <p class="big">{{ metrics.collected_display }}</p>
-    <p>{{ metrics.confirmed_count }} sample payment{{ metrics.confirmed_count|pluralize }} marked Confirmed this month. Excludes other payment statuses and payments whose own instalment has an open review or Unknown/In progress state. A review on another instalment does not exclude this payment. No real money moved.</p></div>
+    <p>{{ metrics.confirmed_count }} sample payment{{ metrics.confirmed_count|pluralize }} marked Confirmed this month. Excludes other payment statuses, and payments whose own instalment has an open review, a result not known yet or a payment still in progress. A review on another instalment does not exclude this payment. No real money moved.</p></div>
   <dl>
     <dt>Still outstanding today</dt><dd>{{ metrics.due_display }}</dd>
     <dt>Instalments due today, unpaid</dt><dd>{{ metrics.due_count }}</dd>
@@ -36,13 +36,13 @@
 <div class="grid g2">
 <div>
   <section class="card" aria-labelledby="dec-h"><h2 id="dec-h">Needs a decision <small><a href="/reviews/">All reviews</a></small></h2>
-  {% if urgent_reviews %}<ul class="rows">{% for r in urgent_reviews %}<li><span class="t1"><a href="/reviews/{{ r.id }}/">{{ r.kind }}<span class="vh"> for {{ r.customer_name }}</span></a> <span class="muted" style="font-weight:500">· {{ r.customer_name }}</span></span><span class="amt">{{ r.amount_display }}</span><span class="t2">{% if r.overdue %}{% include "includes/badge.html" with s="Overdue" %}{% endif %}<span>Stored deadline {{ r.deadline|date:"j M Y, H:i" }} WAT</span><span>{% if r.owner %}Owner {{ r.owner.name }}{% else %}Unassigned{% endif %}</span><span>{{ r.deadline_label }}</span></span></li>{% endfor %}</ul>
+  {% if urgent_reviews %}<ul class="rows">{% for r in urgent_reviews %}<li><span class="t1"><a href="/reviews/{{ r.id }}/">{{ r.label }}<span class="vh"> for {{ r.customer_name }}</span></a> <span class="muted" style="font-weight:500">· {{ r.customer_name }}</span></span><span class="amt">{{ r.amount_display }}</span>{% if r.hint %}<span class="t3">{{ r.hint }}</span>{% endif %}<span class="t2">{% if r.overdue %}{% include "includes/badge.html" with s="Overdue" %}{% endif %}<span>Stored deadline {{ r.deadline|date:"j M Y, H:i" }} WAT</span><span>{% if r.owner %}Owner {{ r.owner.name }}{% else %}Unassigned{% endif %}</span><span>{{ r.deadline_label }}</span></span></li>{% endfor %}</ul>
   {% else %}<div class="empty"><div class="ico" aria-hidden="true"></div><b>No reviews waiting</b>Nothing needs a second person right now.</div>{% endif %}</section>
 
 </div>
 <div>
   <section class="card" aria-labelledby="pay-h"><h2 id="pay-h">Latest payment records <small><a href="/payments/">Pay-by-bank</a></small></h2>
-  <p class="small muted">These are stored synthetic examples, not evidence from a connected provider. Pending or Unknown is not counted as money received.</p>
+  <p class="small muted">These are stored synthetic examples, not evidence from a connected provider. Pending payments and payments whose result is not known are not counted as money received.</p>
   {% if recent_payments %}<ul class="rows">{% for p in recent_payments %}<li><span class="t1" style="font-weight:600">{{ p.customer_name }}</span><span class="side-r"><span class="amt">{{ p.amount_display }}</span>{% include "includes/badge.html" with s=p.status %}</span><span class="t2 mono">{{ p.reference }} · {{ p.source }}</span></li>{% endfor %}</ul>
   {% else %}<div class="empty"><div class="ico" aria-hidden="true"></div><b>No payment records yet</b>Create a request from a due instalment.</div>{% endif %}</section>
   <section class="card" aria-labelledby="act-h"><h2 id="act-h">Recent activity</h2>

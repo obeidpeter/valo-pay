@@ -85,7 +85,7 @@ def calendar_notice(*, synthetic=False):
         return str(exc)
     return (
         f"{basis['reference']}. Coverage {basis['coverage_start']} to {basis['coverage_end']}. "
-        "Targets: Unknown 1, refund request 2, other reviews 3, refund after withdrawal 5 business days. "
+        "Targets: payment result not known 1, refund request 2, other reviews 3, refund after withdrawal 5 business days. "
         "Exclude the opening day, weekends and configured holidays; retain the opening WAT time. "
         "Each proposed deadline must stay within coverage. Historical deadlines are not recalculated."
     )

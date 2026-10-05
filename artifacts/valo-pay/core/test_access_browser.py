@@ -86,7 +86,7 @@ class IsolatedBrowserJourney(StaticLiveServerTestCase):
             submit()
             page.locator("select[name=organisation]").select_option(index=1)
             submit()
-            expect(page.get_by_role("heading", name="Today", exact=True)).to_be_visible()
+            expect(page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
             visit("/import/")
             page.locator("#csv_data").fill("customer_id,name,email,phone,loan_id,product,amount,due_date\nBROWSER-1,Synthetic Borrower,borrower@example.invalid,,BROWSER-L1,Test,100.00,2027-01-01")
             page.get_by_role("button",name="Validate rows",exact=True).click()

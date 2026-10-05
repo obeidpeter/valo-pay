@@ -1,1 +1,1 @@
-{% load status_badges %}{% with k=s|slugify %}{% with tone=k|status_tone icon=k|status_icon %}<span class="badge b-{{ k }} t-{{ tone }}" data-tone="{{ tone }}" data-icon="{{ icon }}">{% include "includes/status_icon.html" with icon=icon %}{{ s }}</span>{% endwith %}{% endwith %}
+{% load status_badges %}{% with k=s|slugify %}{% with tone=k|status_tone icon=k|status_icon %}<span class="badge b-{{ k }} t-{{ tone }}" data-tone="{{ tone }}" data-icon="{{ icon }}">{% include "includes/status_icon.html" with icon=icon %}{{ s|status_word }}</span>{% endwith %}{% endwith %}

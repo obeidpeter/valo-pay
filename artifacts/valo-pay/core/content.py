@@ -16,6 +16,23 @@ STATE_HELP = {
     "Reversed": "A reversal is recorded. Reconcile the balance before taking another action.",
 }
 
+# Plain names shown on screen for stored TRD words (owner request, 5 Oct 2026). The stored value, filter
+# addresses and CSV exports keep the TRD word; only what people read changes.
+STATE_LABEL = {"Unknown": "Result not known"}
+REVIEW_LABEL = {"Unknown result": "Payment result not known"}
+
+# One-line meaning under each review item on the Dashboard.
+REVIEW_HINT = {
+    "Unknown result": "We do not know yet if this payment went through.",
+    "Unclear match": "A payment may belong here, but it could not be matched automatically.",
+    "Possible duplicate": "Two payments may cover the same instalment.",
+    "Non-retryable failure": "A debit failed, and trying again will not fix it.",
+    "Consent problem": "Something is wrong with the customer's consent.",
+    "Refund request": "A team member asked to return money to a customer.",
+    "Refund after withdrawal": "Money was taken after the customer withdrew consent and must be returned.",
+    "Reversal": "The bank reversed a confirmed payment.",
+}
+
 # Guide-only wording; keep shared status help in other journeys unchanged.
 GUIDE_STATE_HELP = {
     "Unknown": "The payment result is not clear. Do not try again; collection stays on hold until there is a verified result from the bank or payment service.",

@@ -3,6 +3,7 @@ import uuid
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from . import content
 
 
 def token():
@@ -170,6 +171,12 @@ class Review(Scoped):
     @property
     def amount_display(self):
         return money(self.amount)
+    @property
+    def label(self):
+        return content.REVIEW_LABEL.get(self.kind, self.kind)
+    @property
+    def hint(self):
+        return content.REVIEW_HINT.get(self.kind, "")
 
 
 class Refund(Scoped):

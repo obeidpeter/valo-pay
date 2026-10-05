@@ -67,7 +67,8 @@ def seed_demo():
                 if n == 0:
                     inst.state = "Unknown"
                     loan.on_hold = True
-                    loan.hold_reason = "Unknown result: awaiting final provider evidence."
+                    # New sample workspaces only; hold reasons already saved are never rewritten.
+                    loan.hold_reason = "A payment on this loan has no final result yet. It is waiting for evidence from the bank or payment service."
                     loan.held_by = prep
                     loan.save()
                 if n == 4:

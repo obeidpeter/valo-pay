@@ -6,7 +6,7 @@
 <li><a class="chip" href="/payments/{% if q %}?q={{ q|urlencode }}{% endif %}"{% if not filter %} aria-current="true"{% endif %}>All</a></li>
 <li><a class="chip" href="?filter=confirmed{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'confirmed' %} aria-current="true"{% endif %}>Confirmed</a></li>
 <li><a class="chip" href="?filter=failed{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'failed' %} aria-current="true"{% endif %}>Failed</a></li>
-<li><a class="chip" href="?filter=unknown{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'unknown' %} aria-current="true"{% endif %}>Unknown</a></li></ul>
+<li><a class="chip" href="?filter=unknown{% if q %}&amp;q={{ q|urlencode }}{% endif %}"{% if filter == 'unknown' %} aria-current="true"{% endif %}>Result not known</a></li></ul>
 {% if q or filter %}<p class="resultline" role="status">Filtered{% if filter %} by {{ filter }}{% endif %}{% if q %} matching “{{ q }}”{% endif %} · <a href="/payments/">Clear</a></p>{% endif %}
 
 <section class="card" aria-labelledby="req-h"><h2 id="req-h">Payment requests <small>{{ requests|length }} shown</small></h2>
@@ -17,7 +17,7 @@
 
 <section class="card" aria-labelledby="pm-h"><h2 id="pm-h">Payment records <small>{{ payments|length }} shown</small></h2>
 {% include "includes/pagination.html" with pager=payment_page record_label="payment records" pagination_label="Payment record pages" page_parameter="records_page" %}
-<p class="small muted">Only Confirmed counts as collected. Unknown results are held in Reviews and must not be requested again.</p>
+<p class="small muted">Only Confirmed counts as collected. Payments whose result is not known are held in Reviews and must not be requested again.</p>
 {% if payments %}<div class="tablewrap" role="region" aria-labelledby="pm-h" tabindex="0"><table class="stack"><caption class="vh">Payment records</caption><thead><tr><th scope="col">Reference</th><th scope="col">Customer</th><th scope="col">Status</th><th scope="col">Source</th><th scope="col">Paid at</th><th scope="col" class="num">Amount</th><th scope="col"><span class="vh">Actions</span></th></tr></thead><tbody>
 {% for p in payments %}<tr><td class="mono">{{ p.reference }}</td><td>{{ p.customer_name }}</td><td>{% include "includes/badge.html" with s=p.status %}</td><td class="small">{{ p.source }}</td><td class="small">{% if p.paid_at %}{{ p.paid_at|date:"j M Y H:i" }}{% else %}<span class="muted">No timestamp recorded</span>{% endif %}</td><td class="num">{{ p.amount_display }}</td><td>{% if p.status == 'Confirmed' and can_prepare %}<a class="btn ghost sm" href="/refunds/{{ p.id }}/new/">Request refund<span class="vh"> for {{ p.reference }}</span></a>{% endif %}</td></tr>{% endfor %}
 </tbody></table></div>{% else %}<div class="empty"><b>No payment records</b>Provider-reported payments appear here.</div>{% endif %}</section>

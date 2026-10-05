@@ -209,7 +209,7 @@ def loan_action(request,pk):
         if loan.held_by_id==c["actor"].id:
             messages.error(request,"A different Reviewer must release this hold.")
         elif loan.instalments.filter(state="Unknown").exists():
-            messages.error(request,"Unknown results require final provider evidence. This hold cannot be released.")
+            messages.error(request,"A payment on this loan has no final result yet. This hold cannot be released until there is final evidence from the bank or payment service.")
         else:
             loan.on_hold=False; loan.hold_reason=""; loan.save()
             audit(c["org"],c["actor"],"Hold released",f"{loan.reference}: {reason}",subject=loan,before=before,after={"on_hold":False},reason=reason)
@@ -333,7 +333,11 @@ def reviews(request):
     if filt=="mine": items=items.filter(owner=c["actor"])
     elif filt=="overdue": items=items.filter(deadline__lt=timezone.now(),status__in=["Open","In progress"])
     if request.GET.get("type"): items=items.filter(kind=request.GET["type"])
-    if q: items=items.filter(Q(instalment__loan__customer__name__icontains=q)|Q(kind__icontains=q))
+    if q:
+        # Staff search by the name they see, which can differ from the stored review type (content.REVIEW_LABEL).
+        from .content import REVIEW_LABEL
+        named=[kind for kind,label in REVIEW_LABEL.items() if q.lower() in label.lower()]
+        items=items.filter(Q(instalment__loan__customer__name__icontains=q)|Q(kind__icontains=q)|Q(kind__in=named))
     from django.core.paginator import Paginator
     pager=Paginator(items.order_by("deadline","pk"),50).get_page(request.GET.get("page",1))
     return page(request,"reviews",c,reviews=pager.object_list,page_obj=pager,q=q,filter=filt)
