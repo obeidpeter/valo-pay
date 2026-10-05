@@ -1,0 +1,35 @@
+{% load static %}<!doctype html>
+<html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% if accepted %}Request received{% elif form.errors %}Error: Request a demo{% else %}Request a demo{% endif %} · Valo Pay</title>
+<meta name="description" content="Preview Valo Pay’s demo-request form using synthetic details only. Public enquiries are not yet open.">
+<link rel="stylesheet" href="{% static 'valo.css' %}?v=3"></head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+{% include "includes/site_head.html" %}
+<main id="main" tabindex="-1" class="site" style="padding-top:24px;padding-bottom:56px">
+<div class="grid g2">
+<div>
+{% if accepted %}
+<section class="card" aria-labelledby="ok-h"><div role="status"><p class="eyebrow">Received</p><h1 id="ok-h">Your request was received.</h1></div>
+<p style="margin-top:12px">The server accepted this submission. This is a synthetic test only: public enquiries are not open yet, so <b>no one will contact you and no demo has been booked</b>.</p>
+<div class="actions" style="margin-top:16px"><a class="btn" href="/">Back to home</a><a class="btn ghost" href="/demo/">Try the sample-data demo</a></div></section>
+{% else %}
+<p class="eyebrow">Demo-request preview</p><h1>Try the form with synthetic details</h1>
+<p class="sub" style="color:var(--ink2);margin:10px 0 18px;max-width:56ch">Use a fictional organisation and an example.invalid email address. This preview does not arrange a conversation, send messages or book a walkthrough.</p>
+{% if not privacy_available %}<div class="note warn" style="margin-bottom:16px"><b>Public enquiries are disabled.</b> An approved privacy notice is required before real enquiries can be accepted. Submitting here checks the form and displays the gate; it does not save or send a request. Please do not enter real personal details.</div>{% endif %}
+<section class="card" aria-label="Demo request form">
+<form method="post" class="form" novalidate>{% csrf_token %}
+{% include "includes/form.html" with form=form %}
+<button class="btn" type="submit">{% if privacy_available %}Send request{% else %}Check synthetic form{% endif %}</button>
+<p class="small muted" style="margin-top:12px">Submitting does not book a meeting. If something goes wrong, your entries stay on this page so you can try again.</p>
+</form></section>
+{% endif %}
+</div>
+<aside class="stack" aria-labelledby="exp-h">
+<div class="card"><h2 id="exp-h">What this preview does</h2><ol class="steps"><li><span>Checks the fields you submit.</span></li><li><span>Explains why public request collection is blocked.</span></li><li><span>Lets you explore the separate sample-data demo. No request is reviewed, no message is sent and no walkthrough is scheduled.</span></li></ol></div>
+<div class="note">Prefer to look first? The <a href="/demo/">sample-data demo</a> opens a private sandbox with synthetic records. Staff with an account can <a href="/access/login/">sign in</a>.</div>
+</aside></div>
+</main>
+{% include "includes/site_foot.html" %}
+<script src="{% static 'valo.js' %}?v=3" defer></script>
+</body></html>

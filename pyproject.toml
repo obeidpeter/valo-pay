@@ -1,11 +1,13 @@
 [project]
 name = "valo-pay"
 version = "0.1.0"
-description = "Valo Pay synthetic-data collections sandbox"
+description = "Valo Pay guarded collections workspace and synthetic demo"
 requires-python = ">=3.12"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "dj-database-url>=3.1.2",
     "django>=5.2,<5.3",
+    "django-otp>=1.7.3",
     "gunicorn>=26.2.0",
     "psycopg[binary]>=3.3.6",
     "whitenoise>=6.12.0",
@@ -13,11 +15,17 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "coverage>=7.16.2",
+    "playwright>=1.63.0",
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
 ]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "valo.settings"
-python_files = ["test_*.py"]
+testpaths = ["core"]
+python_files = ["test*.py"]
 filterwarnings = ["ignore:No directory at:UserWarning"]
+# These live-server browser suites need an explicitly installed Chromium.
+# Run them separately with Django's test runner in a browser-enabled environment.
+addopts = "--ignore=core/test_access_browser.py --ignore=core/test_demo_browser.py --ignore=core/test_dense_browser.py --ignore=core/test_presentation_acceptance.py"

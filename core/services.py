@@ -4,31 +4,30 @@ import io
 import calendar
 from datetime import timedelta, date
 from decimal import Decimal, InvalidOperation
-from importlib import import_module
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import F
 from django.utils import timezone
-from . import content
-from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest, Refund, money
-
-# Delete order for a workspace: each model before the rows it protects (on_delete=PROTECT).
-PURGE_ORDER = [Refund, Review, PaymentRequest, Payment, Instalment, Loan, Customer, Audit, Member]
+from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest
 
 
-class WorkspaceRequired(Exception):
-    """The session has no live demo workspace; WorkspaceMiddleware sends the visitor to the start page."""
-
-
-def audit(org, actor, action, detail):
+def audit(org, actor, action, detail, *, subject=None, before=None, after=None, reason="", customer_ids=None):
+    import json
+    scope=customer_ids or []
+    if subject is not None:
+        if isinstance(subject,Customer): scope=[str(subject.pk)]
+        elif isinstance(subject,Loan): scope=[str(subject.customer_id)]
+        elif hasattr(subject,"instalment"): scope=[str(subject.instalment.loan.customer_id)]
+        elif hasattr(subject,"payment"): scope=[str(subject.payment.instalment.loan.customer_id)]
+    structured=json.loads(json.dumps({"actor_user_id":actor.user_id,"entity_type":type(subject).__name__ if subject else "",
+        "entity_id":str(subject.pk) if subject else "", "customer_ids":scope,
+        "before_state":before or {}, "after_state":after or {}, "reason":reason},default=str))
     # Lock the tenant while appending, so concurrent writes cannot fork the chain.
     Organisation.objects.select_for_update().get(pk=org.pk)
     prev = Audit.objects.filter(organisation=org).first()
     previous = prev.digest if prev else ""
-    name = actor.name if actor else "System"
-    digest = hashlib.sha256(f"{previous}|{name}|{action}|{detail}".encode()).hexdigest()
-    Audit.objects.create(organisation=org, actor_name=name, action=action, detail=detail, previous_hash=previous, digest=digest)
+    digest = hashlib.sha256(f"{previous}|{actor.name}|{action}|{detail}|{json.dumps(structured,sort_keys=True)}".encode()).hexdigest()
+    Audit.objects.create(organisation=org, actor_name=actor.name, action=action, detail=detail, previous_hash=previous,
+        digest=digest,schema_version=2,**structured)
 
 
 def month_date(start, offset):
@@ -40,7 +39,7 @@ def month_date(start, offset):
 
 @transaction.atomic
 def seed_demo():
-    org = Organisation.objects.create(demo=True)
+    org = Organisation.objects.create()
     prep = Member.objects.create(organisation=org, name="Ada Okafor", role="Admin")
     reviewer = Member.objects.create(organisation=org, name="Tunde Bello", role="Reviewer")
     Member.objects.create(organisation=org, name="Zainab Yusuf", role="Preparer")
@@ -55,7 +54,7 @@ def seed_demo():
         for j in range(6):
             due = month_date(today, j-1) if j else today-timedelta(days=30)
             if j == 1:
-                # Fatima Ibrahim's consent is still waiting for the bank, so today's debit run shows an instalment it must leave alone.
+                # New demos also illustrate a due debit blocked by pending consent.
                 due = today if n == 2 else today + timedelta(days=(n%4)-1)
             inst = Instalment.objects.create(organisation=org, loan=loan, sequence=j+1, due_date=due, amount=loan.consent_max)
             if j == 0:
@@ -68,242 +67,141 @@ def seed_demo():
                 if n == 0:
                     inst.state = "Unknown"
                     loan.on_hold = True
-                    loan.hold_reason = "A payment on this loan has no final result yet. Collection stays paused until the result is known."
+                    loan.hold_reason = "Unknown result: awaiting final provider evidence."
                     loan.held_by = prep
                     loan.save()
                 if n == 4:
                     inst.state = "Failed"
                 inst.save()
-                Review.objects.create(organisation=org, instalment=inst, kind=kind, amount=inst.amount, owner=reviewer, prepared_by=prep, deadline=timezone.now()+timedelta(days=-1 if n==0 else 2), evidence="Sample item for trying out reviews. No bank or payment provider was contacted, and no money moved.")
-    audit(org, prep, "Demo workspace created", "Sample data loaded. No payment provider is connected, so no money can move.")
+                from .business_days import review_deadline
+                deadline, basis = review_deadline(kind, timezone.now()-timedelta(days=7) if n==0 else timezone.now(), synthetic=True)
+                Review.objects.create(organisation=org, instalment=inst, kind=kind, amount=inst.amount, owner=reviewer, prepared_by=prep, deadline=deadline, deadline_basis=basis, evidence="Synthetic example for exploring the review process. No bank was contacted; no real money moved.")
+    audit(org, prep, "Demo workspace created", "Synthetic examples loaded. Live payment processing is disabled.")
     return org, prep
 
 
-# Days after a failed debit when each retry preset tries again (FR-C3.3); content.RETRY_FOR_CUSTOMER words them for customers.
-RETRY_DAYS = {"Standard": [2, 5], "Gentle": [3], "Off": []}
-IN_PROGRESS = ["Awaiting approval", "Awaiting confirmation", "Unknown"]
-
-
-def debit_blocker(instalment, busy):
-    """Why today's direct-debit run must leave this instalment alone, in plain words, or "" if it may be debited."""
-    loan = instalment.loan
-    if loan.on_hold:
-        return "the loan is on hold"
-    if instalment.state in ("Unknown", "In progress"):
-        return "an earlier payment has no final result yet"
-    if instalment.id in busy:
-        return "a payment request for it is in progress"
-    if loan.consent_status != "Active":
-        return content.CONSENT_NOT_ACTIVE.get(loan.consent_status, "consent is not active")
-    if instalment.amount - instalment.paid > loan.consent_max:
-        return "it is more than the customer's maximum per debit"
-    return ""
-
-
-def sentence(words):
-    return words[:1].upper() + words[1:]
-
-
-def next_try(org, failed_on):
-    days = RETRY_DAYS.get(org.retry_preset, [])
-    if not days:
-        return "no automatic retry: the retry rule is Off"
-    retry = failed_on + timedelta(days=days[0])
-    return f"next try on {retry.day} {retry:%b %Y}"
-
-
-def debit_outlook(org, instalments):
-    """What today's run did, or will do, for each instalment due today: (instalment, outcome, words)."""
-    busy = set(PaymentRequest.objects.filter(organisation=org, status__in=IN_PROGRESS).values_list("instalment_id", flat=True))
-    debited = set(Payment.objects.filter(organisation=org, source="Direct debit", paid_at__date=timezone.localdate()).values_list("instalment_id", flat=True))
-    rows = []
-    for i in instalments:
-        if i.paid >= i.amount:
-            rows.append((i, "done", "Collected by direct debit" if i.id in debited else "Paid"))
-        elif i.state == "Failed":
-            rows.append((i, "failed", f"Debit failed · {next_try(org, i.due_date)}"))
-        elif blocker := debit_blocker(i, busy):
-            rows.append((i, "blocked", f"Not debited: {blocker}"))
-        else:
-            rows.append((i, "ready", "Ready for today's run"))
-    return rows
-
-
-def run_todays_debits(org, actor):
-    """The demo's stand-in for the morning direct-debit run (FR-C3). Sample data only: no bank or Paystack is contacted.
-
-    Debits each instalment due today that debit_blocker() allows. Outcomes are fixed so a presenter can rely on them:
-    every third debit fails for lack of money and waits for the retry preset. An instalment that was paid or already
-    tried is never debited again, so running it twice changes nothing. Returns the collected, failed and skipped instalments.
-    """
-    today = timezone.localdate()
-    collected, failed, skipped = [], [], []
-    with transaction.atomic():
-        due = (Instalment.objects.select_for_update(of=("self",)).filter(organisation=org, due_date=today, loan__status="Open", paid__lt=F("amount"))
-               .select_related("loan__customer").order_by("loan__reference", "sequence"))
-        busy = set(PaymentRequest.objects.filter(organisation=org, status__in=IN_PROGRESS).values_list("instalment_id", flat=True))
-        for inst in due:
-            loan, owed = inst.loan, inst.amount - inst.paid
-            if inst.state == "Failed" or debit_blocker(inst, busy):
-                skipped.append(inst)
-            elif (len(collected) + len(failed) + 1) % 3 == 0:
-                inst.state = "Failed"
-                inst.save(update_fields=["state"])
-                failed.append(inst)
-                audit(org, None, "Direct debit failed", f"{loan.reference} instalment {inst.sequence}, {money(owed)}: not enough money in the account. "
-                                                       f"{sentence(next_try(org, today))}. Sample run: no bank was contacted.")
-            else:
-                Payment.objects.create(organisation=org, instalment=inst, reference=f"DEMO-DD-{str(org.id)[:8]}-{inst.id}", amount=owed,
-                                       paid_at=timezone.now(), source="Direct debit")
-                inst.paid, inst.state = inst.amount, "Paid"
-                inst.save(update_fields=["paid", "state"])
-                collected.append(inst)
-                audit(org, None, "Direct debit confirmed", f"{loan.reference} instalment {inst.sequence}, {money(owed)}, matched to the instalment. "
-                                                          "Sample run: no bank was contacted.")
-        audit(org, actor, "Today's direct debits run", f"{len(collected)} collected, {len(failed)} failed, {len(skipped)} not debited. "
-                                                       "Started from the Dashboard on sample data: no bank was contacted.")
-    return collected, failed, skipped
-
-
-def workspace_exists(request):
-    org_id = request.session.get("org")
-    return bool(org_id) and Organisation.objects.filter(pk=org_id).exists()
-
-
 def context(request):
-    # Workspaces are created only from the start page (a POST), never on a plain visit,
-    # so crawlers, link previews and health checks cannot fill the database.
-    org_id = request.session.get("org")
-    org = Organisation.objects.filter(pk=org_id).first() if org_id else None
-    if org is None:
-        raise WorkspaceRequired
-    now = timezone.now()
-    if org.last_seen_at < now - timedelta(minutes=5):
-        Organisation.objects.filter(pk=org.pk).update(last_seen_at=now)
-    actor = Member.objects.filter(organisation=org, pk=request.session.get("actor")).first() or Member.objects.filter(organisation=org).first()
-    # Expiry is a business state change, not a display-only label. The system expires it, not the viewer.
+    from django.core.exceptions import PermissionDenied
+    if request.user.is_authenticated:
+        import time
+        from .access_services import membership
+        from .models import StaffMembership
+        if not request.session.get("verified_at") or time.time()-request.session.get("staff_idle_at",0)>=1800:
+            raise PermissionDenied("Sign in again to continue.")
+        access=membership(request)
+        org=access.organisation
+        members=[]
+        for m in StaffMembership.objects.filter(organisation=org,active=True,user__is_active=True).select_related("user"):
+            principal,_=Member.objects.get_or_create(organisation=org,user=m.user,defaults={"name":m.user.username,"role":m.role})
+            principal.role=m.role
+            members.append(principal)
+        actor=next((m for m in members if m.user_id==request.user.pk),None)
+        if actor is None:
+            raise PermissionDenied("Current membership is unavailable.")
+    else:
+        org_id = request.session.get("org")
+        org = Organisation.objects.filter(pk=org_id).first() if org_id else None
+        if org is None:
+            raise PermissionDenied("Open the demo start page to intentionally create sample data.")
+        from .models import StaffMembership
+        if StaffMembership.objects.filter(organisation=org).exists() or Member.objects.filter(organisation=org,user__isnull=False).exists():
+            raise PermissionDenied("Staff organisations cannot be accessed through simulated roles.")
+        actor = Member.objects.filter(organisation=org, pk=request.session.get("actor"),user__isnull=True).first()
+        if actor is None:
+            raise PermissionDenied("This demo role is no longer available. Start a separate demo session.")
+        members=Member.objects.filter(organisation=org,user__isnull=True)
+    # Expiry is a business state change, not a display-only label.
     with transaction.atomic():
-        expired = PaymentRequest.objects.select_for_update().filter(organisation=org, status="Awaiting approval", expires_at__lte=now)
+        Organisation.objects.select_for_update().get(pk=org.pk)
+        expired = PaymentRequest.objects.select_for_update().filter(organisation=org, status="Awaiting approval", expires_at__lte=timezone.now())
         for item in expired:
             item.status = "Expired"
             item.save(update_fields=["status"])
-            audit(org, None, "Payment request expired", item.reference)
-    return {"org": org, "actor": actor, "members": Member.objects.filter(organisation=org),
+            from types import SimpleNamespace
+            audit(org, SimpleNamespace(name="System", user_id=None), "Payment request expired", item.reference,subject=item,
+                  before={"status":"Awaiting approval"},after={"status":"Expired"},reason="Request expiry reached")
+    from .demo_flow import tour_bar
+    return {"org": org, "actor": actor, "members": members,"staff_mode":request.user.is_authenticated,
+            "demo_tour": tour_bar(request),
+            "can_prepare":actor.role in ("Admin","Preparer"),"can_review":actor.role in ("Admin","Reviewer"),
+            "can_hold":actor.role in ("Admin","Preparer","Reviewer"),"can_admin":actor.role=="Admin",
+            "idle_remaining":max(0,1800-int(__import__("time").time()-request.session.get("staff_idle_at",0))) if request.user.is_authenticated else None,
             "today": timezone.localdate(), "open_review_count": Review.objects.filter(organisation=org, status__in=["Open","In progress"]).count()}
-
-
-def purge_demo_workspaces(idle_for=None, limit=None):
-    """Delete demo workspaces idle longer than idle_for (default DEMO_WORKSPACE_RETENTION), then expired sessions.
-
-    Sessions end after 30 idle minutes, so a purged workspace can no longer be opened. Returns the number deleted.
-    """
-    cutoff = timezone.now() - (settings.DEMO_WORKSPACE_RETENTION if idle_for is None else idle_for)
-    purged = 0
-    while limit is None or purged < limit:
-        size = 50 if limit is None else min(50, limit - purged)
-        with transaction.atomic():
-            # skip_locked lets concurrent purges share the backlog instead of waiting on each other.
-            ids = list(Organisation.objects.select_for_update(skip_locked=True).filter(demo=True, last_seen_at__lt=cutoff).values_list("pk", flat=True)[:size])
-            if not ids:
-                break
-            for model in PURGE_ORDER:
-                model.objects.filter(organisation_id__in=ids).delete()
-            Organisation.objects.filter(pk__in=ids).delete()
-        purged += len(ids)
-    import_module(settings.SESSION_ENGINE).SessionStore.clear_expired()
-    return purged
-
-
-class RowProblem(ValueError):
-    """A problem with one CSV row, written for the person correcting the file."""
-    def __init__(self, message, column=None):
-        super().__init__(message)
-        self.column = column
-
-
-def shown(value):
-    # Echo a value from the file back to the person, shortened so one bad cell cannot flood the page.
-    return f"\"{value[:40]}\u2026\"" if len(value) > 40 else f"\"{value}\""
 
 
 def validate_csv(text, org):
     errors, rows = [], []
     try:
         reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
-        required = ["customer_id","name","email","phone","loan_id","product","amount","due_date"]
-        if not reader.fieldnames:
-            return ["The file is empty. Choose a CSV file or paste the data, starting with the row of column names."], []
-        missing = [k for k in required if k not in reader.fieldnames]
-        if missing:
-            return [f"The file is missing {'this column' if len(missing) == 1 else 'these columns'}: {', '.join(missing)}. "
-                    f"The first row must name all 8 columns: {', '.join(required)}. Download the CSV template to see the format."], []
+        required = {"customer_id","name","email","phone","loan_id","product","amount","due_date"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            return ["Missing columns: " + ", ".join(sorted(required - set(reader.fieldnames or [])))], []
         seen = set()
         loan_owners = {}
+        customer_metadata = {}
+        loan_metadata = {}
         existing = set(Loan.objects.filter(organisation=org).values_list("reference", flat=True))
         existing_customers = set(Customer.objects.filter(organisation=org).values_list("external_id", flat=True))
-        labels = {"name": "the customer's name", "customer_id": "the customer ID", "loan_id": "the loan ID"}
         for n, row in enumerate(reader, 2):
             if n > 5001:
-                errors.append("This file has more than 5,000 instalments. Split it into files of up to 5,000 rows and import them one at a time.")
+                errors.append("Maximum 5,000 instalments per import.")
                 break
             try:
-                if None in row:
-                    raise RowProblem("This row has more values than there are columns. Check for an extra comma, or put quotes around values that contain a comma.")
-                if any(row.get(k) is None for k in required):
-                    raise RowProblem("This row has fewer values than there are columns. Every row needs all 8 values: leave optional ones empty but keep their commas.")
+                if None in row or any(row.get(k) is None for k in required):
+                    raise ValueError("column count does not match the template")
                 row = {k: v.strip() for k,v in row.items()}
                 for k in ["name", "customer_id", "loan_id"]:
-                    if not row[k]:
-                        raise RowProblem(f"This value is missing. Enter {labels[k]}.", k)
-                    limit = 120 if k == "name" else 60
-                    if len(row[k]) > limit:
-                        raise RowProblem(f"This value is too long. Use up to {limit} characters.", k)
+                    if not row[k] or len(row[k]) > (120 if k == "name" else 60):
+                        raise ValueError(f"{k}: required and too long values are not allowed")
+                field_errors = []
                 try:
                     amount = Decimal(row["amount"])
+                    if not amount.is_finite() or amount <= 0 or amount.as_tuple().exponent < -2 or amount > Decimal("9999999999.99"):
+                        raise InvalidOperation
                 except InvalidOperation:
-                    raise RowProblem(f"{shown(row['amount'])} is not a number. Enter the amount in naira, for example 18450.00.", "amount")
-                if not amount.is_finite():
-                    raise RowProblem(f"{shown(row['amount'])} is not a number. Enter the amount in naira, for example 18450.00.", "amount")
-                if amount <= 0:
-                    raise RowProblem("Enter an amount greater than zero.", "amount")
-                if amount.as_tuple().exponent < -2:
-                    raise RowProblem(f"{shown(row['amount'])} has more than 2 decimal places. Use no more than 2, for example 18450.50.", "amount")
-                if amount > Decimal("9999999999.99"):
-                    raise RowProblem("This amount is too large. Enter an amount below ₦10,000,000,000.", "amount")
+                    field_errors.append("amount: enter a positive number up to 9999999999.99 with at most two decimal places, for example 18450.00")
                 try:
                     due = date.fromisoformat(row["due_date"])
+                    if due.isoformat() != row["due_date"]:
+                        raise ValueError
                 except ValueError:
-                    raise RowProblem(f"{shown(row['due_date'])} is not a date in the format YYYY-MM-DD. Enter it like 2026-11-15.", "due_date")
+                    field_errors.append("due_date: enter a real calendar date in YYYY-MM-DD format, for example 2026-10-31")
+                if field_errors:
+                    errors.extend(f"Row {n}: {message}" for message in field_errors)
+                    continue
                 if row["loan_id"] in existing:
-                    raise RowProblem(f"{row['loan_id']} is already used by a loan in your organisation. An import can only add new loans, so use a different loan ID.", "loan_id")
+                    raise ValueError("loan_id: already exists in this organisation")
                 if row["customer_id"] in existing_customers:
-                    raise RowProblem(f"{row['customer_id']} already exists in your organisation. An import can only add new customers.", "customer_id")
+                    raise ValueError("customer_id: already exists; use the customer form for existing records")
                 if row["loan_id"] in loan_owners and loan_owners[row["loan_id"]] != row["customer_id"]:
-                    raise RowProblem(f"{row['loan_id']} also appears with a different customer_id in this file. Each loan must belong to one customer.", "loan_id")
+                    raise ValueError("loan_id: belongs to two different customers")
+                customer_values = tuple(row[k] for k in ("name", "email", "phone"))
+                loan_values = (row["customer_id"], row["product"])
+                if row["customer_id"] in customer_metadata and customer_metadata[row["customer_id"]] != customer_values:
+                    raise ValueError("customer_id: repeated customer has conflicting name, email or phone")
+                if row["loan_id"] in loan_metadata and loan_metadata[row["loan_id"]] != loan_values:
+                    raise ValueError("loan_id: repeated loan has conflicting customer or product")
+                customer_metadata[row["customer_id"]] = customer_values
+                loan_metadata[row["loan_id"]] = loan_values
                 key = (row["loan_id"], row["due_date"])
                 if key in seen:
-                    raise RowProblem(f"Loan {row['loan_id']} already has an instalment due on {row['due_date']} earlier in this file. Remove the duplicate row.", "due_date")
-                if len(row["phone"]) > 30:
-                    raise RowProblem("This value is too long. Use up to 30 characters.", "phone")
-                if len(row["product"]) > 80:
-                    raise RowProblem("This value is too long. Use up to 80 characters.", "product")
+                    raise ValueError("duplicate instalment for this loan and due date")
+                if len(row["phone"]) > 30 or len(row["product"]) > 80:
+                    raise ValueError("phone or product exceeds maximum length")
                 if row["email"]:
                     from django.core.validators import validate_email
-                    try:
-                        validate_email(row["email"])
-                    except ValidationError:
-                        raise RowProblem(f"{shown(row['email'])} is not a valid email address. Correct it or leave it empty.", "email")
+                    validate_email(row["email"])
                 seen.add(key)
                 loan_owners[row["loan_id"]] = row["customer_id"]
                 rows.append({**row, "kobo": int(amount*100), "date": due})
-            except RowProblem as exc:
-                errors.append(f"Row {n}, {exc.column}: {exc}" if exc.column else f"Row {n}: {exc}")
-            except Exception:
-                errors.append(f"Row {n}: this row could not be read. Check that it follows the CSV template.")
+            except ValidationError:
+                errors.append(f"Row {n}: email: enter a valid email address or leave it blank")
+            except ValueError as exc:
+                errors.append(f"Row {n}: {exc}")
         if not rows and not errors:
-            errors.append("The file has column names but no instalment rows. Add one row for each instalment.")
-    except csv.Error:
-        errors.append("The file could not be read as CSV. Save it from your spreadsheet as a comma-separated (.csv) file and try again.")
+            errors.append("No instalments found.")
+    except csv.Error as exc:
+        errors.append(f"CSV format error: {exc}")
     return errors, rows
 
 
@@ -323,4 +221,5 @@ def commit_csv(rows, org, actor):
         loan.consent_max = max(loan.consent_max, row["kobo"])
         loan.consent_expiry = row["date"]+timedelta(days=30)
         loan.save()
-    audit(org, actor, "CSV imported", f"{len(rows)} instalments across {len(loans)} loans; all rows validated.")
+    audit(org, actor, "CSV imported", f"{len(rows)} instalments across {len(loans)} loans; all rows validated.",
+        customer_ids=[str(c.pk) for c in customers.values()],after={"loan_ids":[l.pk for l in loans.values()],"rows":len(rows)},reason="Confirmed validated import")

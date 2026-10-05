@@ -1,0 +1,9 @@
+<header class="site sitehead">
+<a href="/" class="brand">{% include "includes/logo.html" %}Valo Pay</a>
+<nav aria-label="Site"><ul>
+<li class="hide-sm"><a href="/#how">How it works</a></li>
+<li class="hide-sm"><a href="/#faq">{% if landing_copy %}Questions{% else %}FAQ{% endif %}</a></li>
+<li><a href="/access/login/">{% if landing_copy %}Staff sign in{% else %}Sign in{% endif %}</a></li>
+<li><a class="btn sm" href="/request-demo/">Request a demo</a></li>
+</ul></nav>
+</header>

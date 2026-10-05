@@ -1,0 +1,8 @@
+{% load paging %}
+<p class="resultline">Showing {{ pager.start_index }}–{{ pager.end_index }} of {{ pager.paginator.count }} matching {{ record_label|default:"records" }}. Counts include all pages.</p>
+{% if pager.has_other_pages %}
+<nav class="actions" aria-label="{{ pagination_label|default:'Results pages' }}">
+{% if pager.has_previous %}<a class="btn ghost sm" href="{% page_url 1 page_parameter|default:'page' %}">First<span class="vh"> page</span></a><a class="btn ghost sm" rel="prev" href="{% page_url pager.previous_page_number page_parameter|default:'page' %}">Previous<span class="vh"> page</span></a>{% endif %}
+<span aria-current="page">Page {{ pager.number }} of {{ pager.paginator.num_pages }}</span>
+{% if pager.has_next %}<a class="btn ghost sm" rel="next" href="{% page_url pager.next_page_number page_parameter|default:'page' %}">Next<span class="vh"> page</span></a><a class="btn ghost sm" href="{% page_url pager.paginator.num_pages page_parameter|default:'page' %}">Last<span class="vh"> page</span></a>{% endif %}
+</nav>{% endif %}

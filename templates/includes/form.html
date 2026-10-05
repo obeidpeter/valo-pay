@@ -1,0 +1,15 @@
+{% comment %}Reusable accessible form body. Usage: {% include "includes/form.html" with form=form %}. Renders error summary, labelled fields, hints and inline errors.{% endcomment %}
+{% if form.errors %}<div class="errsum" role="alert" tabindex="-1" aria-labelledby="errsum-h"><h2 id="errsum-h">{{ form.errors|length }} thing{{ form.errors|length|pluralize }} to fix before continuing</h2><ul>
+{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}
+{% for f in form %}{% for e in f.errors %}<li><a href="#{{ f.id_for_label }}">{{ f.label }}: {{ e }}</a></li>{% endfor %}{% endfor %}
+</ul><p class="small" style="margin:6px 0 0">Nothing was saved. Your other entries are kept below.</p></div>{% endif %}
+{% for f in form.hidden_fields %}{{ f }}{% endfor %}
+{% for f in form.visible_fields %}
+<div class="field{% if f.widget_type == 'checkbox' %} inline{% endif %}">
+<label for="{{ f.id_for_label }}">{{ f.label }}{% if f.field.required %} <span class="req" aria-hidden="true">*</span><span class="vh">(required)</span>{% endif %}</label>
+{{ f }}
+{% if f.help_text %}<span class="hint" id="{{ f.auto_id }}_helptext">{{ f.help_text|safe }}</span>{% endif %}
+{% for e in f.errors %}<p class="err" id="{{ f.auto_id }}_error">{{ e }}</p>{% endfor %}
+</div>
+{% endfor %}
+<p class="small muted">Fields marked <span class="req" style="color:var(--red)">*</span> are required.</p>

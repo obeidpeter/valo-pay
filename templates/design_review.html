@@ -1,0 +1,66 @@
+{% load static %}<!doctype html><html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Component review · Development-only · Valo Pay</title><link rel="stylesheet" href="{% static 'valo.css' %}?v=5"></head><body>
+<a class="skip" href="#main">Skip to main content</a>
+<div class="sandbox" role="note">Development-only review surface · <b>Synthetic fixtures</b> · Returns 404 when REPLIT_DEPLOYMENT=1</div>
+<main id="main" class="dr" tabindex="-1">
+<header class="head"><div><p class="eyebrow">Design system · first pass</p><h1>Component review</h1><p class="sub">Semantic tokens and component states used by the landing page, staff sign-in shell and Today. Every value here is synthetic.</p></div><a class="brand" href="/">{% include "includes/logo.html" %}Valo Pay</a></header>
+
+<section aria-labelledby="fx-h"><h2 id="fx-h">Today fixtures</h2>
+<ul class="dr-row" style="list-style:none;padding:0">{% for f in fixtures %}<li><a class="btn ghost sm" href="/__design/today/?fixture={{ f }}">Today · {{ f }}</a></li>{% endfor %}</ul>
+<p class="small muted">dense = many rows; empty = all zero and empty states; long = long accented Nigerian names and organisation; large = exact large sums.</p></section>
+
+<section aria-labelledby="col-h"><h2 id="col-h">Colour tokens</h2>
+<ul class="swatches">
+<li><div class="chipc" style="background:var(--c-navy)"></div><span><b>--c-navy</b> #111D2B</span></li>
+<li><div class="chipc" style="background:var(--c-text)"></div><span><b>--c-text</b> #182333</span></li>
+<li><div class="chipc" style="background:var(--c-warm);border-bottom:1px solid var(--border-fine)"></div><span><b>--c-warm</b> #FFFDFA</span></li>
+<li><div class="chipc" style="background:#fff;border-bottom:1px solid var(--border-fine)"></div><span><b>--c-white</b> #FFFFFF</span></li>
+<li><div class="chipc" style="background:var(--c-muted-bg)"></div><span><b>--c-muted-bg</b> #F4F0EB</span></li>
+<li><div class="chipc" style="background:var(--c-deco)"></div><span><b>--c-deco</b> #ECE6DE</span></li>
+<li><div class="chipc" style="background:var(--c-orange)"></div><span><b>--c-orange</b> #F47735 (decor / on navy)</span></li>
+<li><div class="chipc" style="background:var(--c-orange-d)"></div><span><b>--c-orange-d</b> #BA390C (actions, text)</span></li>
+<li><div class="chipc" style="background:var(--c-orange-pale)"></div><span><b>--c-orange-pale</b> #FFF0E7</span></li>
+<li><div class="chipc" style="background:var(--c-muted-text)"></div><span><b>--c-muted-text</b> #5C6573</span></li>
+<li><div class="chipc" style="background:var(--c-muted-on-dark)"></div><span><b>--c-muted-on-dark</b> #D3D8DF</span></li>
+</ul>
+<h3>Semantic status (text + shape + colour)</h3>
+<div class="dr-row"><p class="note ok" style="margin:0">Success: Confirmed by provider.</p><p class="note bad" style="margin:0">Error: Collection failed.</p><p class="note warn" style="margin:0">Warning: Pending, not money received.</p><p class="note unk" style="margin:0">Unknown: no verified outcome.</p><p class="note" style="margin:0">Info: synthetic record.</p></div>
+<div class="dr-row" id="status-matrix">{% for s in statuses %}{% include "includes/badge.html" with s=s %} {% endfor %}</div></section>
+
+<section aria-labelledby="ty-h"><h2 id="ty-h">Typography — Plus Jakarta Sans (self-hosted)</h2>
+<p style="font-size:var(--fs-hero);font-weight:500;letter-spacing:-.035em;line-height:1.04;margin:0">Hero 64 / 40</p>
+<p style="font-size:var(--fs-h1);font-weight:700;margin:8px 0">Heading 32 · Ọlátúnjí Àdìgún</p>
+<p style="font-size:var(--fs-h2);font-weight:700">Heading 24 · Ìfẹ́olúwa, Chukwuemeka, Ngozi</p>
+<p>Body 16 — Accented names render in-family: Adébáyọ̀, Ọ̀ṣun, Ẹ̀kọ́, Zoë, Ñandú. Naira sign: ₦.</p>
+<p class="small">Small 14 — supporting text and hints.</p>
+<table style="max-width:420px"><caption>Tabular numerals (synthetic)</caption><thead><tr><th scope="col">Case</th><th scope="col" class="num">Amount</th></tr></thead><tbody>{% for a in amounts %}<tr><td>{% cycle "Zero" "One kobo" "Exact large" "Round large" %}</td><td class="num">{{ a }}</td></tr>{% endfor %}<tr><td>Missing</td><td class="num">{% include "includes/badge.html" with s="Missing" %}</td></tr></tbody></table></section>
+
+<section aria-labelledby="bt-h"><h2 id="bt-h">Buttons — all states</h2>
+<div class="dr-row"><button class="btn" type="button">Primary</button><button class="btn force-hover" type="button">Hover</button><button class="btn force-focus" type="button">Focus</button><button class="btn" type="button" aria-busy="true">Submitting…</button><button class="btn" type="button" disabled>Disabled</button></div>
+<div class="dr-row"><button class="btn ghost" type="button">Secondary</button><button class="btn navy" type="button">Navy</button><button class="btn warn" type="button">Destructive</button><button class="btn sm" type="button">Small</button><button class="btn lg" type="button">Large</button></div></section>
+
+<section aria-labelledby="fm-h"><h2 id="fm-h">Form fields — all states</h2>
+<div class="dr-grid">
+<div class="field"><label for="f1">Default</label><input id="f1" type="email" autocomplete="off" placeholder="name@example.invalid"></div>
+<div class="field"><label for="f2">Focus (forced)</label><input id="f2" type="text" class="force-focus" value="Focused value"></div>
+<div class="field"><label for="f3">Error</label><p class="err" id="f3-err">Enter an email address in the correct format.</p><input id="f3" type="email" aria-invalid="true" aria-describedby="f3-err" value="ada@"></div>
+<div class="field"><label for="f4">Disabled</label><input id="f4" type="text" disabled value="Not editable"></div>
+<div class="field"><label for="f5">Read-only</label><input id="f5" type="text" readonly value="SYN-LN-2042"><span class="hint">Hint text sits below.</span></div>
+<div class="field"><label for="f6">Select</label><select id="f6"><option>Admin</option><option>Reviewer</option></select></div>
+</div>
+<div class="errsum" role="group" aria-labelledby="es-h"><h2 id="es-h">There is a problem</h2><ul><li><a href="#f3">Email: Enter an email address in the correct format.</a></li></ul></div></section>
+
+<section aria-labelledby="cp-h"><h2 id="cp-h">Composite components</h2>
+<div class="dr-grid">
+<div class="card"><h2>Card with list <small><a href="#cp-h">Link</a></small></h2><ul class="rows"><li><span class="t1">Unknown result · Amara Okeke (Synthetic)</span><span class="amt">₦35,000.00</span><span class="t2">{% include "includes/badge.html" with s="Overdue" %}<span>Owner Tunde Bello</span></span></li><li><span class="t1">Unclear match · Chidi Nwosu (Synthetic)</span><span class="amt">₦0.00</span><span class="t2"><span>Unassigned</span></span></li></ul></div>
+<div class="card"><h2>Empty state</h2><div class="empty"><div class="ico" aria-hidden="true"></div><b>No reviews waiting</b>Nothing needs a second person right now.</div></div>
+</div>
+<ul class="msgs" style="margin-top:var(--s4)"><li class="success">Request created (synthetic).</li><li class="error">Nothing was saved.</li><li class="warning">Pending is not money received.</li><li class="info">Sandbox only.</li></ul></section>
+
+<section aria-labelledby="br-h"><h2 id="br-h">Brand assets</h2>
+<div class="dr-row"><span style="display:inline-block;width:64px">{% include "includes/logo.html" %}</span><span class="small muted">Mark geometry from the supplied brochure (page 1 vector). Ribbon below is an original composition (aria-hidden).</span></div>
+<div style="background:var(--c-navy);border-radius:var(--r-lg);padding:var(--s4);overflow:hidden">{% include "includes/ribbon.html" %}</div></section>
+
+<section aria-labelledby="tk-h"><h2 id="tk-h">Space, radius, elevation, motion, z</h2>
+<div class="dr-row"><span class="card" style="border-radius:var(--r-sm);box-shadow:var(--e1)">r-sm 6 · e1</span><span class="card" style="border-radius:var(--r-md);box-shadow:var(--e2)">r-md 10 · e2</span><span class="card" style="border-radius:var(--r-lg);box-shadow:var(--e3)">r-lg 16 · e3</span><span class="card" style="border-radius:var(--r-xl)">r-xl 24</span></div>
+<p class="small">Space: 4 · 8 · 12 · 16 · 20 · 24 · 32 · 40 · 48 · 64 · 80. Motion: 120 / 160 / 180 ms, removed under prefers-reduced-motion. Z: base 0 · raised 10 · sticky 100 · menu 200 · skip 1000.</p></section>
+</main></body></html>

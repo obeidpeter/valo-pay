@@ -1,51 +1,75 @@
 # Valo Pay
 
-Django and PostgreSQL demo of Valo Pay: collections and Pay-by-bank software for Nigerian lenders and cooperatives.
+Django 5.2 and PostgreSQL collections workspace for Nigerian lenders and cooperatives.
+This standalone source export matches the safer Replit implementation. It is
+**not a live payment service**: provider execution, real delivery and live onboarding
+remain gated. Never enter real customer data in the synthetic demo.
 
-## Status
+## Features and access
 
-**Demo with sample data only — not production-ready.** Choosing a team member to act as is not authentication. No real payments or emails are sent. Never enter real customer data. See [RELEASE_SCOPE.md](RELEASE_SCOPE.md) for implemented features and launch blockers.
-
-## Included
-
-Customer records, instalment schedules, CSV import, demo consent and payment links, a sample run of today's direct debits, holds, review queues, separate-person refund approval, CSV reports, and audit history. Credit Desk and Cash Desk are previews.
+- Dashboard with full-width Due today, customers with multiple loans, collections,
+  payment requests, independent review, refund approval, CSV import/export and audit.
+- Explicit synthetic demo at `/demo/`: choose **Start the demo** to create sample
+  records. Ordinary visits do not seed data.
+- Ten-step guide with Previous/Next/End controls and sample role switching.
+- Sample debit simulation is restricted to eligible synthetic sessions. No bank is
+  contacted and no automatic retries run.
+- Staff sign-in at `/access/login/` is separate: membership, password and mandatory
+  authenticator verification. There are no default staff credentials; first-account
+  provisioning, delivery and recovery are still deployment gates, not a public signup.
+- Demo inactivity ends the session after 30 minutes. Restart detaches the old
+  workspace; it does not delete its records. No automatic purge is configured.
 
 ## Setup
 
-Requires Python 3.12+, PostgreSQL and an HTTPS reverse proxy.
+Requires Python 3.12+, PostgreSQL and a trusted HTTPS reverse proxy.
 
-1. Install the locked Python dependencies with `uv sync` (uv.lock pins them).
-2. Set `DATABASE_URL` and a strong random `SESSION_SECRET` in your runtime secret manager. Never commit their values.
-3. For a new development database, run `uv run python manage.py migrate`.
-4. Run `uv run python manage.py collectstatic --noinput`.
-5. Start with `uv run gunicorn valo.wsgi:application --bind 0.0.0.0:8000`.
+1. Install locked dependencies with `uv sync --locked`.
+2. Supply `DATABASE_URL` and a strong `SESSION_SECRET` through your runtime secret
+   manager. Never put their values in Git.
+3. Set `VALO_ALLOWED_HOSTS` to comma-separated exact hostnames, without schemes,
+   ports or wildcards. Replit-provided domains are also supported.
+4. **Only for a new, empty development database:** run
+   `uv run python manage.py migrate`.
+5. Run `uv run python manage.py collectstatic --noinput`.
+6. Run `uv run python manage.py check`, then start
+   `uv run gunicorn valo.wsgi:application --bind 0.0.0.0:8000`.
 
-For development, `uv run python manage.py runserver 0.0.0.0:8000` is also available. Secure cookies require HTTPS for functional browser sessions. Configure CSRF_TRUSTED_ORIGINS and ALLOWED_HOSTS in valo/settings.py for your actual host. Trust forwarded HTTPS headers only from a controlled reverse proxy. Current defaults target the Replit preview and must be reviewed before other hosting.
+Development also supports `uv run python manage.py runserver 0.0.0.0:8000`.
+Secure cookies require HTTPS for browser sessions; trust forwarded HTTPS headers
+only from your controlled reverse proxy. CSRF remains same-origin.
 
-Validate configuration with `uv run python manage.py check`. A visitor without a workspace sees a start page; choosing **Open the demo workspace** creates sample records in an isolated session workspace. Plain visits (crawlers, link previews, health checks) create nothing.
+**Existing database warning:** do not run migrations blindly against a database
+created by the older GitHub demo. That version used a conflicting second migration
+and different schema. Back up and review an explicit migration plan first. This PR
+neither upgrades that database nor rewrites migration history. Replit's existing
+database is not part of this export.
 
-## Presenting the demo
+`bin/build` collects assets after configuration checks. `bin/serve` requires `PORT`
+and runs a read-only schema check before Gunicorn; it never migrates or seeds.
+Publishing remains a separate action.
 
-The sidebar puts the **Dashboard** first, then the pages in the order a team uses them: Daily work (Collections, Reviews, Pay-by-bank), Records (Customers, Reports), Organisation (Settings & team) and Coming later (the Credit Desk and Cash Desk previews). The Demo panel at the bottom has the **Demo guide**, the **Start page** and the person you are acting as. In the guide, choose **Start the tour**: a twelve-step tour of the sample lender in which each step opens the right page as the right person. While the tour runs, a bar at the bottom of every page shows the step, what to do on that page, and **Next step**, **All steps** and **End tour**. Step 2 uses **Run today's debits** on the Dashboard, the demo's stand-in for the morning direct-debit run: it works on sample data, contacts no bank and moves no money. The **Start page** offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
+## Checks
 
-## Demo workspace cleanup
+Use `uv run python manage.py check` and
+`uv run python manage.py makemigrations --check --dry-run`.
+CI runs the backend test modules against temporary PostgreSQL test databases.
+It requires a database role with permission to create a test database.
 
-`uv run python manage.py purge_demo_workspaces` deletes demo workspaces with no activity for 24 hours, and expired sessions. Each new workspace also clears up to 10 idle ones, but schedule the command daily too (for example a scheduled deployment or cron job). Workspaces that existed before migration 0002 count as active from the moment it runs, so the first daily run a day later clears that backlog. `--idle-hours` overrides the period.
+Browser tests additionally require Chromium on PATH, Playwright and its system
+libraries. Run them in an isolated test environment, for example:
+`uv run python manage.py test core.test_demo_browser --noinput`.
 
-## Content and wording
+## Layout
 
-User-facing wording follows [docs/content/content-guide.md](docs/content/content-guide.md). State explanations shown next to TRD labels live in core/content.py. [docs/content/copy-review.md](docs/content/copy-review.md) records coverage, test results, discrepancies and the wording that needs owner approval; [copy-inventory.csv](docs/content/copy-inventory.csv) lists each change with its reason and source, and [copy-walk-diff.csv](docs/content/copy-walk-diff.csv) is the complete before-and-after log.
+- `core/`, `valo/`, `manage.py`: application, migrations and tests.
+- `templates/`, `static/`: server-rendered UI and bundled assets.
+- `bin/`: guarded build/start scripts.
+- `tests/`: additional smoke and visual-test helpers.
+- `RELEASE_SCOPE.md`, `UI_CONTRACT.md`: current boundaries and interface contract.
+- `docs/content/`: historical copy-review material from the older demo; it is not
+  the current route, retention or security contract.
 
-## Tests
-
-`uv run pytest` runs the test suite, including the copy checks in core/tests/test_copy.py. It needs `SESSION_SECRET` and a `DATABASE_URL` whose PostgreSQL user can create the test database. CI runs the same checks and tests on PostgreSQL 17 for every push (.github/workflows/ci.yml).
-
-## Repository layout
-
-- core/: models, migrations, forms, services, views and tests
-- valo/: Django settings, routes and WSGI entry point
-- templates/ and static/: server-rendered interface
-- docs/content/: content guide, copy inventory and copy review
-- RELEASE_SCOPE.md: known limitations and launch requirements
-
-This repository is a source snapshot of the Valo Pay app from the Replit workspace, with the Django app at the repository root. Unrelated starter apps, uploaded business documents, generated files, databases and secrets are excluded. It is not an automatic sync of the workspace or its Git history.
+Only app source and necessary setup documentation are exported. Workspace metadata,
+internal handovers, uploaded documents, evidence, databases and credentials are
+excluded. GitHub history is preserved; this is not an automatic workspace sync.

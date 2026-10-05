@@ -11,3 +11,5 @@ staticfiles/
 *.db
 *.log
 .DS_Store
+.coverage*
+evidence/

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+# Replit Publish applies the managed development schema before serving traffic.
+# This command checks it read-only; it must never mutate production schema/data.
+python manage.py publication_check --database
+exec gunicorn valo.wsgi:application --bind "0.0.0.0:${PORT:?PORT is required}" --workers 2 --access-logfile -
