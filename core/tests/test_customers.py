@@ -79,7 +79,7 @@ class CloseLoanTests(WorkspaceTestCase):
         response = self.close(loan)
         loan.refresh_from_db()
         self.assertEqual(loan.status, "Open")
-        self.assertIn("Unknown result", " ".join(self.messages_in(response)))
+        self.assertIn("no final result yet", " ".join(self.messages_in(response)))
 
     def test_in_progress_instalment_blocks_closing(self):
         loan = self.loan_of("Chidi Nwosu")

@@ -6,10 +6,11 @@ This build is a working foundation and interactive demonstration, **not completi
 
 - Django 5.2 server-rendered app, PostgreSQL persistence, responsive staff and borrower pages.
 - Fresh sample organisation for each visitor who opens the demo from the start page, with isolated records. Crawlers and health checks create none; idle workspaces are deleted after 24 hours.
-- Today totals calculated from stored records, with the month starting at midnight WAT; sample financial records clearly labelled.
+- Dashboard totals calculated from stored records, with the month starting at midnight WAT; sample financial records clearly labelled.
 - Customers and monthly instalment schedules, customers with several loans, customer contact edits, search and filtering.
 - CSV validation preview and transactional all-or-nothing commit, duplicate detection, integer-kobo validation.
 - Consent link creation and expiry; provider activation deliberately unavailable.
+- A sample run of today's direct debits, started from the Dashboard by an Admin or Preparer (Run today's debits). It debits only instalments due today with active consent, no hold, no payment in progress and an amount within the customer's maximum per debit; it never debits an instalment twice; every third attempted debit fails so the retry rule can be shown; each result is recorded in the activity log. No bank is contacted and no money moves. The scheduled morning run is not implemented.
 - Payment-request creation with outstanding-amount checks, row locks, unique active request constraint, expiry and cancellation.
 - Public consent and payment pages end on a truthful confirmation page and never claim a payment is successful.
 - Manual holds and distinct-reviewer hold release; Unknown states cannot be released, and loans with Unknown or in-progress money states cannot be closed.
@@ -18,7 +19,7 @@ This build is a working foundation and interactive demonstration, **not completi
 - CSV reports, customer histories, consent registers and Admin-only audit export.
 - Settings, retry preset, demo team-member switching (not sign-in), price example and blocked go-live checklist.
 - Credit Desk / Cash Desk are previews only.
-- Demo guide (an eleven-step tour that switches person where a step needs it, with a step bar offering Next step on every page), a start page reachable from inside the demo, and Start again with fresh sample data.
+- Demo guide (a twelve-step tour that switches person where a step needs it, with a step bar offering Next step on every page), a start page reachable from inside the demo, and Start again with fresh sample data.
 - Automated tests (pytest) and CI on PostgreSQL 17 for every push; locked dependencies.
 - User-facing wording rewritten to the content guide (docs/content/), with automated copy checks. Legal consent and withdrawal wording is unchanged and awaits owner review (docs/content/copy-review.md).
 
@@ -28,7 +29,7 @@ This build is a working foundation and interactive demonstration, **not completi
 - Production multi-tenant RLS, database-enforced append-only audit permissions, independent audit checkpoints, UUIDv7 identifiers.
 - Schedule versions and edits, versioned matches and consents.
 - Real Paystack adapter, encrypted per-lender credentials, webhook signature/IP validation, webhook/verify agreement, provider deactivation, reconciliation.
-- Celery/Redis jobs: scheduled runs, retries, polling, notification window, business-day calendar, notice rule enforcement for debit execution.
+- Celery/Redis jobs: scheduled runs (the demo's Run today's debits button stands in for the morning run), retries, polling, notification window, business-day calendar, notice rule enforcement for debit execution.
 - Outside-payment statements, allocation/credit ledger, duplicate-resolution evidence, actual refunds/reversals.
 - Email provider and actual notifications; no emails are claimed sent.
 - PDF exports, real usage eligibility/invoices and NRS e-invoicing.

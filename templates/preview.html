@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block content %}
 <div class="head"><div><div class="eyebrow">Preview · Not available yet</div><h1>{{ workspace }}</h1><p class="sub">An early look at a workspace planned for a later release. Nothing here is live, and no data is connected.</p></div></div>
 <section class="card" style="border-style:dashed"><h2>Planned features</h2><ul class="list">{% for f in features %}<li><span>{{ f }}</span><span class="tag">planned</span></li>{% endfor %}</ul></section>
-<div class="actions" style="margin-top:16px"><a class="btn ghost" href="/">Back to Today</a></div>
+<div class="actions" style="margin-top:16px"><a class="btn ghost" href="/">Back to the Dashboard</a></div>
 {% endblock %}

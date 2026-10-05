@@ -16,7 +16,7 @@ from django.views.decorators.http import require_POST
 from .models import *
 from . import content, tour
 from .forms import CustomerForm, RequestForm, RefundForm, SettingsForm
-from .services import WorkspaceRequired, context, audit, month_date, validate_csv, commit_csv, seed_demo, workspace_exists, purge_demo_workspaces
+from .services import WorkspaceRequired, context, audit, month_date, validate_csv, commit_csv, seed_demo, workspace_exists, purge_demo_workspaces, debit_outlook, run_todays_debits
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def lookup_or_404(queryset, pk):
     return get_object_or_404(queryset, pk=pk)
 
 
-TITLES = {"today": "Today", "customers": "Customers", "customer_detail": "Customer", "customer_form": "Customer details", "import": "Import instalments",
+TITLES = {"today": "Dashboard", "customers": "Customers", "customer_detail": "Customer", "customer_form": "Customer details", "import": "Import instalments",
           "collections": "Collections", "payments": "Pay-by-bank", "request_form": "New payment request", "request_detail": "Payment request",
           "reviews": "Reviews", "review_detail": "Review", "refund_form": "Request a refund", "reports": "Reports", "settings": "Settings", "guide": "Demo guide"}
 
@@ -71,11 +71,26 @@ def home(request):
     except WorkspaceRequired:
         return render(request, "start.html")
     org = c["org"]
+    due_rows = debit_outlook(org,Instalment.objects.filter(organisation=org,due_date=c["today"]).select_related("loan__customer").order_by("loan__reference","sequence"))
     return page(request,"today",c,metrics=metrics(org),show_guide_hint=not request.session.get("guide_seen"),
                 recent_payments=Payment.objects.filter(organisation=org).select_related("instalment__loan__customer").order_by("-paid_at")[:6],
                 urgent_reviews=Review.objects.filter(organisation=org,status__in=["Open","In progress"]).select_related("owner","instalment__loan__customer").order_by("deadline")[:4],
-                instalments=Instalment.objects.filter(organisation=org,due_date=c["today"]).select_related("loan__customer"),
+                due_rows=due_rows,due_count={outcome:sum(1 for row in due_rows if row[1]==outcome) for outcome in ["done","failed","blocked","ready"]},
+                can_run=c["actor"].role in ["Admin","Preparer"],
                 activity=Audit.objects.filter(organisation=org)[:5])
+
+
+@require_POST
+def run_debits(request):
+    """Demo only: run the morning direct-debit job now, on sample data (see services.run_todays_debits)."""
+    c=context(request); permitted(c,["Admin","Preparer"])
+    collected,failed,skipped=run_todays_debits(c["org"],c["actor"])
+    if collected or failed:
+        messages.success(request,f"Today's direct debits ran on sample data: {len(collected)} collected, {len(failed)} failed and {len(skipped)} not debited. "
+                                 "No bank was contacted and no money moved.")
+    else:
+        messages.info(request,"Nothing new to debit today. Every instalment due today has been collected, tried or held back for a reason shown below.")
+    return redirect("/#due-today")
 
 
 def start(request):
@@ -216,7 +231,7 @@ def loan_action(request,pk):
         elif loan.held_by_id==c["actor"].id:
             messages.error(request,"You put this loan on hold, so a different person must release it.")
         elif loan.instalments.filter(state="Unknown").exists():
-            messages.error(request,"This hold cannot be released yet. A payment on this loan has an Unknown result, and collection stays on hold until the final result is known.")
+            messages.error(request,"This hold cannot be released yet. A payment on this loan has no final result yet, and collection stays on hold until the result is known.")
         else:
             loan.on_hold=False; loan.hold_reason=""; loan.save()
             audit(c["org"],c["actor"],"Hold released",f"{loan.reference}: {reason}")
@@ -236,7 +251,7 @@ def loan_action(request,pk):
             messages.error(request,"This loan is already closed.")
         # An Unknown result holds the instalment until it is resolved (BR-05, FR-P3.2).
         elif loan.instalments.filter(state__in=["Unknown","In progress"]).exists() or PaymentRequest.objects.filter(instalment__loan=loan,status__in=["Awaiting confirmation","Unknown"]).exists():
-            messages.error(request,"A payment on this loan is still in progress or has an Unknown result. Resolve it before closing the loan.")
+            messages.error(request,"A payment on this loan is still in progress or has no final result yet. Resolve it before closing the loan.")
         else:
             loan.status="Closed"; loan.save()
             cancelled=PaymentRequest.objects.filter(instalment__loan=loan,status="Awaiting approval").update(status="Cancelled")
@@ -287,7 +302,7 @@ def request_form(request):
             elif loan.status!="Open": form.add_error(None,"This loan is closed, so a payment cannot be requested for it.")
             elif loan.on_hold: form.add_error(None,"This loan is on hold, so a payment cannot be requested until the hold is released.")
             elif inst.state in ["Unknown","In progress"]:
-                form.add_error(None,"A payment for this instalment is still in progress or has an Unknown result. Wait for the final result before requesting another payment.")
+                form.add_error(None,"A payment for this instalment is still in progress or has no final result yet. Wait for the final result before requesting another payment.")
             elif amount>inst.amount-inst.paid: form.add_error("amount",f"Enter an amount no higher than {money(inst.amount-inst.paid)}, the amount outstanding on this instalment.")
             elif open_request:
                 form.add_error(None,f"This instalment already has an open payment request ({open_request.reference}, {open_request.status}). Cancel it, or wait until it ends, before creating another.")
@@ -328,7 +343,10 @@ def reviews(request):
     if filt=="mine": items=items.filter(owner=c["actor"])
     elif filt=="overdue": items=items.filter(deadline__lt=timezone.now())
     if request.GET.get("type"): items=items.filter(kind=request.GET["type"])
-    if q: items=items.filter(Q(instalment__loan__customer__name__icontains=q)|Q(kind__icontains=q))
+    if q:
+        # Staff search by the name they see, which can differ from the stored review type (content.REVIEW_LABEL).
+        named=[kind for kind,label in content.REVIEW_LABEL.items() if q.lower() in label.lower()]
+        items=items.filter(Q(instalment__loan__customer__name__icontains=q)|Q(kind__icontains=q)|Q(kind__in=named))
     return page(request,"reviews",c,reviews=items,q=q,filter=filt)
 
 
@@ -365,7 +383,7 @@ def review_detail(request,pk):
                     messages.success(request,f"Review {'dismissed' if outcome=='Dismissed' else 'resolved'}. Your note is saved with the decision.")
         return redirect("review_detail",pk=pk)
     actor=c["actor"]
-    return page(request,"review_detail",c,title=f"{item.kind} · Review",review=item,refund=Refund.objects.filter(review=item).first(),
+    return page(request,"review_detail",c,title=f"{item.label} · Review",review=item,refund=Refund.objects.filter(review=item).first(),
                 owners=[m for m in c["members"] if m.role!="Viewer"],can_decide=actor.role in item.decision_roles and actor.id!=item.prepared_by_id)
 
 

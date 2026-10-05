@@ -41,6 +41,21 @@ class StartPageTests(CopyTestCase):
         self.assertIn("Good day", visitor.get("/").content.decode())
 
 
+class NavigationTests(CopyTestCase):
+    def test_navigation_follows_the_working_day(self):
+        html = self.client.get("/").content.decode()
+        start = html.index('aria-label="Main"')
+        main = html[start:html.index("</nav>", start)]
+        order = ["Dashboard", "Daily work", "Collections", "Reviews", "Pay-by-bank", "Records", "Customers", "Reports",
+                 "Organisation", "Settings &amp; team", "Coming later", "Credit Desk", "Cash Desk"]
+        positions = [main.index(label) for label in order]
+        self.assertEqual(positions, sorted(positions))
+        # Demo-only controls sit together, below the product's own navigation.
+        self.assertGreater(html.index('aria-label="Demo"'), start + len(main))
+        self.assertLess(html.index('aria-label="Demo"'), html.index("Acting as"))
+        self.assertEqual(read(html).title, "Dashboard · Valo Pay")
+
+
 class GuideTests(CopyTestCase):
     def go(self, step, **kwargs):
         return self.client.post("/guide/go/", {"step": step}, **kwargs)
@@ -73,20 +88,20 @@ class GuideTests(CopyTestCase):
     def test_steps_open_the_sample_records(self):
         customer = lambda name: f"/customers/{self.loan_of(name).customer_id}/"
         problem = f"/reviews/{self.review('Consent problem').id}/"
-        expected = {1: "/", 2: customer("Chidi Nwosu"), 3: customer("Amara Okeke"), 4: customer("Oluwaseun Adeyemi"),
-                    6: problem, 7: problem, 9: "/reviews/", 10: "/reports/", 11: "/credit/"}
+        expected = {1: "/", 2: "/#due-today", 3: customer("Chidi Nwosu"), 4: customer("Amara Okeke"), 5: customer("Oluwaseun Adeyemi"),
+                    7: problem, 8: problem, 10: "/reviews/", 11: "/reports/", 12: "/credit/"}
         for step, url in expected.items():
             self.assertRedirects(self.go(step), url, fetch_redirect_response=False, msg_prefix=f"step {step}")
-        self.assertRegex(self.go(5)["Location"], r"^/payments/new/\?instalment=\d+$")
-        self.assertRegex(self.go(8)["Location"], r"^/refunds/\d+/new/$")
+        self.assertRegex(self.go(6)["Location"], r"^/payments/new/\?instalment=\d+$")
+        self.assertRegex(self.go(9)["Location"], r"^/refunds/\d+/new/$")
 
     def test_a_step_switches_to_the_person_it_names(self):
         self.act_as("Emeka Obi")
-        response = self.go(7, follow=True)
+        response = self.go(8, follow=True)
         self.assertEqual(response.request["PATH_INFO"], f"/reviews/{self.review('Consent problem').id}/")
         self.assertIn('name="outcome"', response.content.decode())
         self.assertIn("You're now acting as Tunde Bello (Reviewer).", " ".join(self.messages_in(response)))
-        response = self.go(6, follow=True)
+        response = self.go(7, follow=True)
         self.assertEqual(self.acting_as(), "Ada Okafor")
         self.assertIn("You prepared this item, so a different person must decide it.", read(response.content.decode()).text())
         # A step that names nobody keeps the current person and says nothing about switching.
@@ -122,16 +137,16 @@ class GuideTests(CopyTestCase):
 
     def test_the_step_bar_follows_the_tour(self):
         self.assertNotIn('class="tourbar"', self.client.get("/").content.decode())
-        self.go(4)
+        self.go(5)
         response = self.client.get("/customers/")
         text, html = self.check(response, "a page with the step bar"), response.content.decode()
-        for words in [f"Step 4 of {len(tour.STEPS)} · As Ada Okafor", tour.STEPS[3]["title"], tour.STEPS[3]["hint"]]:
+        for words in [f"Step 5 of {len(tour.STEPS)} · As Ada Okafor", tour.STEPS[4]["title"], tour.STEPS[4]["hint"]]:
             self.assertIn(words, text)
-        self.assertIn('href="/guide/#step-4"', html)
-        self.assertIn('name="step" value="5"><button class="btn sm" type="submit">Next step</button>', html)
+        self.assertIn('href="/guide/#step-5"', html)
+        self.assertIn('name="step" value="6"><button class="btn sm" type="submit">Next step</button>', html)
         guide = self.client.get("/guide/").content.decode()
         self.assertNotIn('class="tourbar"', guide)
-        self.assertIn('<li id="step-4" class="now">', guide)
+        self.assertIn('<li id="step-5" class="now">', guide)
         self.assertIn("Continue the tour", guide)
         self.go(len(tour.STEPS))
         buttons = ["".join(b).strip() for b in read(self.client.get("/").content.decode()).buttons]
@@ -146,28 +161,28 @@ class GuideTests(CopyTestCase):
         self.assertNotIn('class="tourbar"', self.client.get("/").content.decode())
 
     def test_approving_opens_the_newest_refund_request(self):
-        """A refund requested while rehearsing must not be the one step 9 opens during the demo."""
-        refund_url = self.go(8)["Location"]
+        """A refund requested while rehearsing must not be the one step 10 opens during the demo."""
+        refund_url = self.go(9)["Location"]
         for reason in ["Paid twice", "Customer overpaid"]:
             self.client.post(refund_url, {"amount": "10.00", "reason": reason})
         requests = Review.objects.filter(organisation=self.org, kind="Refund request")
         self.assertEqual(requests.count(), 2)
-        self.assertEqual(self.go(9)["Location"], f"/reviews/{requests.latest('id').id}/")
+        self.assertEqual(self.go(10)["Location"], f"/reviews/{requests.latest('id').id}/")
 
     def test_the_tour_works_end_to_end(self):
-        """Follow steps 5 to 9 as a presenter would: request a payment, decide as someone else, refund."""
-        instalment = re.search(r"instalment=(\d+)", self.go(5)["Location"]).group(1)
+        """Follow steps 6 to 10 as a presenter would: request a payment, decide as someone else, refund."""
+        instalment = re.search(r"instalment=(\d+)", self.go(6)["Location"]).group(1)
         self.client.post("/payments/new/", {"instalment": instalment, "amount": "100.00", "expiry_hours": 24, "confirmed": "1"})
         self.assertTrue(PaymentRequest.objects.filter(instalment_id=instalment, status="Awaiting approval").exists())
         review = self.review("Consent problem")
-        self.assertEqual(self.go(7)["Location"], f"/reviews/{review.id}/")
+        self.assertEqual(self.go(8)["Location"], f"/reviews/{review.id}/")
         self.client.post(f"/reviews/{review.id}/", {"action": "resolve", "outcome": "Resolved", "note": "Customer re-authorised"})
         review.refresh_from_db()
         self.assertEqual((review.status, review.resolved_by.name), ("Resolved", "Tunde Bello"))
-        self.client.post(self.go(8)["Location"], {"amount": "10.00", "reason": "Paid twice"})
+        self.client.post(self.go(9)["Location"], {"amount": "10.00", "reason": "Paid twice"})
         item = Review.objects.get(organisation=self.org, kind="Refund request")
         self.assertEqual(item.prepared_by.name, "Ada Okafor")
-        self.assertEqual(self.go(9)["Location"], f"/reviews/{item.id}/")
+        self.assertEqual(self.go(10)["Location"], f"/reviews/{item.id}/")
         self.client.post(f"/reviews/{item.id}/", {"action": "resolve", "outcome": "Resolved", "note": "Checked"})
         self.assertEqual(Refund.objects.get(review=item).status, "Approved")
 

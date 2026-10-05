@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block content %}
-<div class="head reveal"><div><div class="eyebrow">{{ today|date:"l j M Y" }}</div><h1>Good day, {{ actor.name }}</h1><p class="sub">What is due, what has been confirmed and what needs a decision.</p></div>
+<div class="head reveal"><div><div class="eyebrow">Dashboard · {{ today|date:"l j M Y" }}</div><h1>Good day, {{ actor.name }}</h1><p class="sub">What is due, what has been confirmed and what needs a decision.</p></div>
 <div class="actions">{% if actor.role == 'Admin' or actor.role == 'Preparer' %}<a class="btn ghost" href="/payments/new/">New payment request</a>{% endif %}<a class="btn" href="/reviews/">Review queue ({{ metrics.review_count }} open)</a></div></div>
 {% if show_guide_hint %}<div class="note" style="margin-bottom:16px">New to Valo Pay? <a href="/guide/">Open the demo guide</a> for a step-by-step tour of this sample lender.</div>{% endif %}
 <section class="hero reveal">
@@ -15,17 +15,18 @@
 </section>
 <div class="grid g2">
 <div>
-  <section class="card reveal"><h2>Needs a decision <small><a href="/reviews/">Review queue</a></small></h2>
-  {% if urgent_reviews %}<ul class="list">{% for r in urgent_reviews %}<li><div><a href="/reviews/{{ r.id }}/"><b>{{ r.kind }}</b></a> · {{ r.customer_name }}<div class="small muted">{% if r.overdue %}<span class="badge b-overdue">Overdue</span> {% endif %}Deadline {{ r.deadline|date:"j M Y, H:i" }} WAT · Owner: {{ r.owner.name }}</div></div><span class="num">{{ r.amount_display }}</span></li>{% endfor %}</ul>
-  {% else %}<div class="empty"><div class="ico" aria-hidden="true">0</div><b>Nothing needs a decision</b>There are no open review items.</div>{% endif %}</section>
-  <section class="card reveal"><h2>Due today <small><a href="/collections/">Collections</a></small></h2>
-  {% if instalments %}<div class="tablewrap"><table><thead><tr><th>Customer</th><th class="hide-sm">Loan</th><th>Status</th><th class="num">Outstanding</th></tr></thead><tbody>
-  {% for i in instalments %}<tr><td>{{ i.loan.customer.name }}</td><td class="mono hide-sm">{{ i.loan.reference }}</td><td><span class="badge b-{{ i.status|slugify }}">{{ i.status }}</span></td><td class="num">{{ i.outstanding_display }}</td></tr>{% endfor %}
+  <section class="card reveal" id="due-today"><h2>Due today <small><a href="/collections/">Collections</a></small></h2>
+  {% if due_rows %}{% if due_count.ready %}{% if can_run %}<div class="runbar"><form method="post" action="/debits/run/">{% csrf_token %}<button class="btn sm" type="submit">Run today's debits</button></form><p class="small">In the live service, this runs by itself every morning. Here it uses sample data: no bank is contacted and no money moves.</p></div>{% else %}<p class="small muted" style="margin:0 0 12px">An Admin or Preparer can run today's debits.</p>{% endif %}{% elif due_count.done or due_count.failed %}<p class="runsum">Today's debits have run: {{ due_count.done }} collected, {{ due_count.failed }} failed and {{ due_count.blocked }} not debited. No bank was contacted.</p>{% endif %}
+  <div class="tablewrap"><table><thead><tr><th>Customer</th><th class="hide-sm">Loan</th><th>Status</th><th>Debit</th><th class="num">Outstanding</th></tr></thead><tbody>
+  {% for i, outcome, words in due_rows %}<tr><td>{{ i.loan.customer.name }}</td><td class="mono hide-sm">{{ i.loan.reference }}</td><td><span class="badge b-{{ i.status|slugify }}">{{ i.status }}</span></td><td class="small debit-{{ outcome }}">{{ words }}</td><td class="num">{{ i.outstanding_display }}</td></tr>{% endfor %}
   </tbody></table></div>{% else %}<div class="empty"><div class="ico" aria-hidden="true">-</div><b>Nothing is due today</b>See upcoming instalments in Collections.</div>{% endif %}</section>
+  <section class="card reveal"><h2>Needs a decision <small><a href="/reviews/">Review queue</a></small></h2>
+  {% if urgent_reviews %}<ul class="list">{% for r in urgent_reviews %}<li><div><a href="/reviews/{{ r.id }}/"><b>{{ r.label }}</b></a> · {{ r.customer_name }}{% if r.hint %}<div class="small">{{ r.hint }}</div>{% endif %}<div class="small muted">{% if r.overdue %}<span class="badge b-overdue">Overdue</span> {% endif %}Deadline {{ r.deadline|date:"j M Y, H:i" }} WAT · Owner: {{ r.owner.name }}</div></div><span class="num">{{ r.amount_display }}</span></li>{% endfor %}</ul>
+  {% else %}<div class="empty"><div class="ico" aria-hidden="true">0</div><b>Nothing needs a decision</b>There are no open review items.</div>{% endif %}</section>
 </div>
 <div>
   <section class="card reveal"><h2>Recent payments <small><a href="/payments/">Pay-by-bank</a></small></h2>
-  {% if recent_payments %}<ul class="list">{% for p in recent_payments %}<li><div>{{ p.customer_name }}<div class="small muted mono">{{ p.reference }}</div></div><div style="text-align:right"><div class="num">{{ p.amount_display }}</div><span class="badge b-{{ p.status|slugify }}">{{ p.status }}</span></div></li>{% endfor %}</ul>
+  {% if recent_payments %}<ul class="list">{% for p in recent_payments %}<li><div>{{ p.customer_name }}<div class="small muted mono">{{ p.reference }} · {{ p.source }}</div></div><div style="text-align:right"><div class="num">{{ p.amount_display }}</div><span class="badge b-{{ p.status|slugify }}">{{ p.status }}</span></div></li>{% endfor %}</ul>
   {% else %}<div class="empty"><b>No confirmed payments yet</b>Payments appear here once they are confirmed.</div>{% endif %}</section>
   <section class="card reveal"><h2>Recent activity</h2>
   {% if activity %}<ul class="list feed">{% for a in activity %}<li><div class="t">{{ a.created_at|date:"j M H:i" }} · {{ a.actor_name }}</div><b>{{ a.action }}</b> <span class="muted small">{{ a.detail }}</span></li>{% endfor %}</ul>

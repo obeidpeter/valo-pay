@@ -35,7 +35,7 @@ BANNED = [
     (r"(?<![\w.,-])1 (?:instalments|customers|loans|items|payments|reviews|requests|days|hours|rows|problems|matches)\b", "1 takes a singular noun"),
     (r"(?<![\w.,₦-])(?:0|[2-9]|[1-9]\d+) (?:instalment|customer|loan|item|payment|review|request|day|hour|row|problem)\b(?! \d)", "a count above 1 takes a plural noun"),
 ]
-NAVIGATION = ["Today", "Customers", "Collections", "Pay-by-bank", "Reviews", "Reports"]
+NAVIGATION = ["Dashboard", "Collections", "Reviews", "Pay-by-bank", "Customers", "Reports"]
 ROLES = ["Admin", "Preparer", "Reviewer", "Viewer"]
 
 
@@ -205,10 +205,10 @@ class StaffPageTests(CopyTestCase):
                       self.check(self.client.get(f"/customers/{active.customer_id}/"), "active consent"))
         unknown = self.loan_of("Amara Okeke")
         text = self.check(self.client.get(f"/customers/{unknown.customer_id}/"), "unknown result")
-        self.assertIn("Unknown result.", text)
+        self.assertIn("Payment result not known.", text)
         self.assertNotIn("Failed", text)
         review = self.review("Unknown result")
-        self.assertIn("No final result arrived for a payment in time. Further collection for this instalment is on hold until the result is known.",
+        self.assertIn("We do not know yet whether this payment went through. Collection for this instalment stays on hold until the result is known.",
                       self.check(self.client.get(f"/reviews/{review.id}/"), "unknown review"))
 
     def test_creating_a_request_never_claims_money_moved(self):

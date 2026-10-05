@@ -25,7 +25,7 @@ Professional, calm, respectful, direct and human. Write for a first-time collect
 ## Style
 
 - **Spelling:** British and Nigerian English: organisation, authorise, authorisation, instalment, cancelled, licence (noun).
-- **Capitals:** sentence case for headings, buttons, labels, table headings and filters. Keep the canonical names as written: Today, Customers, Collections, Pay-by-bank, Reviews, Reports, Credit Desk, Cash Desk, Paystack, Admin, Preparer, Reviewer, Viewer.
+- **Capitals:** sentence case for headings, buttons, labels, table headings and filters. Keep the canonical names as written: Dashboard, Customers, Collections, Pay-by-bank, Reviews, Reports, Settings & team, Credit Desk, Cash Desk, Paystack, Admin, Preparer, Reviewer, Viewer.
 - **Buttons and links:** start with a verb and say exactly what happens, for example Create payment request, Copy link, Request refund, Put on hold, Release hold, Withdraw consent, Close loan, Record decision.
   - Never use Submit, OK or Click here.
   - Use **Cancel** only to stop something that has not finished, such as cancelling a payment request or leaving a form. Never use it for withdrawing, rejecting, refunding or deleting.
@@ -55,6 +55,8 @@ Professional, calm, respectful, direct and human. Write for a first-time collect
 | **payment** | Money a provider has confirmed, or a sample record in the demo | collection (for a single payment) |
 | **Pay-by-bank** | A one-off bank payment for one instalment. Hyphenated, capital P. | pay by bank, pay by transfer |
 | **direct debit** | Collecting an instalment under active consent | auto-debit |
+| **Dashboard** | The team's home screen at /: what is due today, what was confirmed and what needs a decision. Called Today in TRD 8.1; renamed by the owner (D16). | Today (as a screen name), home, overview |
+| **today's debits**, **Run today's debits** | The direct debits for instalments due today. In the live service they run by themselves each morning; in the demo a person starts the run on sample data. | auto-collect, sweep, batch |
 | **payment matching** | Linking a confirmed payment to the instalment it covers. Keep confirmed, suggested and reviewed matches distinct. | reconciliation (for one payment) |
 | **review** | A staff decision on an item in the review queue. Never use it for the customer approving at their bank or giving consent. | approval (unless the decision is to approve or reject) |
 | **hold**, **on hold** | A pause that stops new payment requests and debits for a loan or instalment | pause (as a noun), freeze, "Hold" as a badge |
@@ -96,6 +98,7 @@ Rules that protect financial meaning:
 
 - **Confirmed** is not sent, submitted or awaiting confirmation. A payment is Confirmed only when Valo Pay has verified it with the provider; a return from the bank page is not proof of payment (BR-02, BR-03).
 - **Unknown** is not Failed: "There is no final result yet. Further collection for this instalment is on hold." A browser or network problem is never described as Unknown.
+- **Review types** keep their TRD name in the data and in CSV exports. On screen, show the plain name from `REVIEW_LABEL` where there is one, with its one-line meaning from `REVIEW_HINT`. The owner chose **Payment result not known** for the review type Unknown result (copy-review.md, O15). In sentences, say "has no final result yet" or "whether this payment went through", not "has an Unknown result".
 - **Active** consent does not mean money can be collected now. Debits still follow the schedule, the maximum per debit, the six-hour wait and the notice rule (BR-07, BR-09).
 - **Approved** (refund) is not **Refunded**. Never tell anyone money has been returned until the provider reports Refunded.
 - A link **expiring** is not a payment **failing**.
