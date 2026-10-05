@@ -21,6 +21,7 @@ urlpatterns = [
     path("reports/",v.reports,name="reports"),
     path("settings/",v.settings,name="settings"),
     path("demo-role/",v.demo_role,name="demo_role"),
+    path("debits/run/",v.run_debits,name="run_debits"),
     path("guide/",v.guide,name="guide"),
     path("guide/go/",v.guide_go,name="guide_go"),
     path("guide/end/",v.guide_end,name="guide_end"),

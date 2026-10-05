@@ -183,6 +183,12 @@ class Review(Scoped):
     def kind_meaning(self):
         return content.REVIEW_KIND.get(self.kind, "")
     @property
+    def label(self):
+        return content.REVIEW_LABEL.get(self.kind, self.kind)
+    @property
+    def hint(self):
+        return content.REVIEW_HINT.get(self.kind, "")
+    @property
     def decision_roles(self):
         # Preparers work the queue, so they may close items that cannot move money (TRD 4.1, FR-C5.5).
         return ["Admin", "Reviewer"] if self.affects_money else ["Admin", "Preparer", "Reviewer"]

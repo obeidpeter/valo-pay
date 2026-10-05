@@ -137,3 +137,8 @@ details.act form{padding-bottom:12px;display:flex;flex-direction:column;gap:8px}
 .shell.touring .main{padding-bottom:150px}
 @media(max-width:900px){.flow{grid-template-columns:repeat(2,minmax(0,1fr))}.tourbar{left:12px;right:12px;bottom:12px;width:auto}.shell.touring .main{padding-bottom:190px}}
 @media(max-width:640px){.flow{grid-template-columns:minmax(0,1fr)}.tourbar{flex-direction:column;align-items:stretch;gap:10px;padding:12px}.tb-actions{flex-wrap:wrap}.tb-actions .btn{flex:1;justify-content:center}.tb-actions form{flex:1;display:flex}.shell.touring .main{padding-bottom:240px}}
+@media(min-width:901px){.side{overflow-y:auto;gap:12px;padding:18px 14px}}.side .nav a{padding:7px 10px}.nav .navlabel{padding:10px 10px 3px}.demo{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:2px}.demo .navlabel{padding:0 10px 3px}.demo .who{margin-top:4px;border-top:0;padding:4px 10px 0}
+.runbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--paper);border-radius:8px;padding:10px 12px;margin:0 0 12px}.runbar form{margin:0}.runbar p{margin:0;flex:1;min-width:200px;color:var(--ink2)}
+.runsum{margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--teal);background:var(--teal-bg);border-radius:0 8px 8px 0;font-size:13px;color:var(--ink)}
+#due-today{margin-bottom:16px}#due-today td.mono{white-space:nowrap}.debit-done{color:var(--teal)}.debit-failed{color:var(--red)}.debit-blocked,.debit-ready{color:var(--ink2)}
+@media(max-width:900px){.demo{margin-top:0;border-top:0;padding-top:0}}

@@ -1,6 +1,6 @@
 {% load static %}<!doctype html>
 <html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay demo: collections and Pay-by-bank software for Nigerian lenders and cooperatives, shown with sample data."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=8"></head>
+<title>{{ title }} · Valo Pay</title><meta name="description" content="Valo Pay demo: collections and Pay-by-bank software for Nigerian lenders and cooperatives, shown with sample data."><link rel="stylesheet" href="{% static 'valo.css' %}?layout=9"></head>
 <body>
 <div class="sandbox" role="note">Demo · <b>Sample data only</b> · No real payments</div>
 <div class="shell{% if tour and page != 'guide' %} touring{% endif %}">
@@ -8,30 +8,30 @@
   <a href="/" class="brand"><span class="mark" aria-hidden="true">V</span>Valo Pay</a>
   <div class="org">{{ org.name }}</div>
   <nav class="nav" aria-label="Main">
-    <a href="/" class="{% if page == 'today' %}on{% endif %}">Today</a>
-    <a href="/customers/" class="{% if page == 'customers' %}on{% endif %}">Customers</a>
+    <a href="/" class="{% if page == 'today' %}on{% endif %}">Dashboard</a>
+    <div class="navlabel">Daily work</div>
     <a href="/collections/" class="{% if page == 'collections' %}on{% endif %}">Collections</a>
-    <a href="/payments/" class="{% if page == 'payments' %}on{% endif %}">Pay-by-bank</a>
     <a href="/reviews/" class="{% if page == 'reviews' %}on{% endif %}">Reviews {% if open_review_count %}<span class="count" aria-label="{{ open_review_count }} open">{{ open_review_count }}</span>{% endif %}</a>
+    <a href="/payments/" class="{% if page == 'payments' %}on{% endif %}">Pay-by-bank</a>
+    <div class="navlabel">Records</div>
+    <a href="/customers/" class="{% if page == 'customers' %}on{% endif %}">Customers</a>
     <a href="/reports/" class="{% if page == 'reports' %}on{% endif %}">Reports</a>
+    <div class="navlabel">Organisation</div>
+    <a href="/settings/" class="{% if page == 'settings' %}on{% endif %}">Settings &amp; team</a>
+    <div class="navlabel">Coming later</div>
+    <a href="/credit/" class="{% if page == 'credit' %}on{% endif %}">Credit Desk <span class="tag">preview</span></a>
+    <a href="/cash/" class="{% if page == 'cash' %}on{% endif %}">Cash Desk <span class="tag">preview</span></a>
   </nav>
-  <div class="subwrap">
+  <div class="demo">
     <div class="navlabel">Demo</div>
     <nav class="nav sub" aria-label="Demo">
       <a href="/guide/" class="{% if page == 'guide' %}on{% endif %}">Demo guide</a>
       <a href="/start/">Start page</a>
     </nav>
-    <div class="navlabel" style="margin-top:14px">Account</div>
-    <nav class="nav sub" aria-label="Account"><a href="/settings/" class="{% if page == 'settings' %}on{% endif %}">Settings &amp; team</a></nav>
-    <div class="navlabel" style="margin-top:14px">Previews</div>
-    <nav class="nav sub" aria-label="Previews">
-      <a href="/credit/" class="{% if page == 'credit' %}on{% endif %}">Credit Desk <span class="tag">preview</span></a>
-      <a href="/cash/" class="{% if page == 'cash' %}on{% endif %}">Cash Desk <span class="tag">preview</span></a>
-    </nav>
-  </div>
-  <div class="who">
-    <div class="muted small">Acting as</div>
-    <div class="n">{{ actor.name }}</div><div class="r">{{ actor.role }} · <a href="/settings/#role">Switch person</a></div>
+    <div class="who">
+      <div class="muted small">Acting as</div>
+      <div class="n">{{ actor.name }}</div><div class="r">{{ actor.role }} · <a href="/settings/#role">Switch person</a></div>
+    </div>
   </div>
 </aside>
 <main class="main">

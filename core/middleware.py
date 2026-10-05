@@ -4,7 +4,7 @@ from .services import WorkspaceRequired
 
 
 class WorkspaceMiddleware:
-    """Send staff requests without a live demo workspace to the start page (Today renders it)."""
+    """Send staff requests without a live demo workspace to the start page (the Dashboard URL renders it)."""
 
     def __init__(self, get_response):
         self.get_response = get_response

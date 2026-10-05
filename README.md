@@ -8,7 +8,7 @@ Django and PostgreSQL demo of Valo Pay: collections and Pay-by-bank software for
 
 ## Included
 
-Customer records, instalment schedules, CSV import, demo consent and payment links, holds, review queues, separate-person refund approval, CSV reports, and audit history. Credit Desk and Cash Desk are previews.
+Customer records, instalment schedules, CSV import, demo consent and payment links, a sample run of today's direct debits, holds, review queues, separate-person refund approval, CSV reports, and audit history. Credit Desk and Cash Desk are previews.
 
 ## Setup
 
@@ -26,7 +26,7 @@ Validate configuration with `uv run python manage.py check`. A visitor without a
 
 ## Presenting the demo
 
-The sidebar's Demo group has the **Demo guide** and the **Start page**. In the guide, choose **Start the tour**: an eleven-step tour of the sample lender in which each step opens the right page as the right person. While the tour runs, a bar at the bottom of every page shows the step, what to do on that page, and **Next step**, **All steps** and **End tour**. The **Start page** offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
+The sidebar puts the **Dashboard** first, then the pages in the order a team uses them: Daily work (Collections, Reviews, Pay-by-bank), Records (Customers, Reports), Organisation (Settings & team) and Coming later (the Credit Desk and Cash Desk previews). The Demo panel at the bottom has the **Demo guide**, the **Start page** and the person you are acting as. In the guide, choose **Start the tour**: a twelve-step tour of the sample lender in which each step opens the right page as the right person. While the tour runs, a bar at the bottom of every page shows the step, what to do on that page, and **Next step**, **All steps** and **End tour**. Step 2 uses **Run today's debits** on the Dashboard, the demo's stand-in for the morning direct-debit run: it works on sample data, contacts no bank and moves no money. The **Start page** offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
 
 ## Demo workspace cleanup
 

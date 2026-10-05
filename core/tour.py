@@ -1,8 +1,8 @@
-"""The demo guide's tour: eleven steps through the sample lender, and the bar that walks a presenter through them.
+"""The demo guide's tour: twelve steps through the sample lender, and the bar that walks a presenter through them.
 
 Each step opens one page, as the person it names, so a presenter can choose Next step and keep talking. The page
 is worked out when the step is opened, because some records exist only after an earlier step: the refund request
-in step 9 comes from step 8. If a sample record was changed or deleted, the step opens its list page instead.
+in step 10 comes from step 9. If a sample record was changed or deleted, the step opens its list page instead.
 """
 from django.http import Http404
 
@@ -12,9 +12,13 @@ ADA, TUNDE = "Ada Okafor", "Tunde Bello"
 OPEN = ["Open", "In progress"]
 
 STEPS = [
-    {"page": "today", "person": None, "label": "Open Today", "title": "See today's work",
-     "text": "Today is the team's home screen. It shows what is due, what failed, what is on hold and what needs a decision.",
-     "hint": "Point to the figures at the top, then to Needs a decision."},
+    {"page": "today", "person": None, "label": "Open the Dashboard", "title": "See today's work",
+     "text": "The Dashboard is the team's home screen. It shows what is due, what failed, what is on hold and what needs a decision.",
+     "hint": "Point to the figures at the top, then to Due today and Needs a decision."},
+    {"page": "due today", "person": ADA, "label": "Open Due today", "title": "Run today's direct debits",
+     "text": "In the live service, Valo Pay debits every instalment due today by itself each morning, but only where consent is "
+             "active and the loan is not on hold. Here you start the run yourself, on sample data. No bank is contacted.",
+     "hint": "Choose Run today's debits. Then point to the Debit column: collected, failed with a next try, or not debited and why."},
     {"page": "CUS-1002", "person": None, "label": "Open Chidi Nwosu", "title": "Open a customer's record",
      "text": "Each customer has one page: the loan, the consent, every instalment, every payment and an audit trail of who did what.",
      "hint": "Scroll down to show the instalments and the audit trail."},
@@ -51,7 +55,7 @@ STEPS = [
      "text": "Credit Desk and Cash Desk are previews of workspaces planned for later. They do not work yet.",
      "hint": "Show the Credit Desk preview. Then choose Cash Desk in the sidebar.", "links": [("Open Cash Desk", "/cash/")]},
 ]
-FIXED = {"today": "/", "reports": "/reports/", "credit": "/credit/"}
+FIXED = {"today": "/", "due today": "/#due-today", "reports": "/reports/", "credit": "/credit/"}
 
 
 def number(value):

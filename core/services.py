@@ -8,8 +8,10 @@ from importlib import import_module
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
-from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest, Refund
+from . import content
+from .models import Organisation, Member, Customer, Loan, Instalment, Payment, Review, Audit, PaymentRequest, Refund, money
 
 # Delete order for a workspace: each model before the rows it protects (on_delete=PROTECT).
 PURGE_ORDER = [Refund, Review, PaymentRequest, Payment, Instalment, Loan, Customer, Audit, Member]
@@ -53,7 +55,8 @@ def seed_demo():
         for j in range(6):
             due = month_date(today, j-1) if j else today-timedelta(days=30)
             if j == 1:
-                due = today + timedelta(days=(n%4)-1)
+                # Fatima Ibrahim's consent is still waiting for the bank, so today's debit run shows an instalment it must leave alone.
+                due = today if n == 2 else today + timedelta(days=(n%4)-1)
             inst = Instalment.objects.create(organisation=org, loan=loan, sequence=j+1, due_date=due, amount=loan.consent_max)
             if j == 0:
                 inst.paid = inst.amount
@@ -65,7 +68,7 @@ def seed_demo():
                 if n == 0:
                     inst.state = "Unknown"
                     loan.on_hold = True
-                    loan.hold_reason = "A payment on this loan has an Unknown result. Collection stays paused until the final result is known."
+                    loan.hold_reason = "A payment on this loan has no final result yet. Collection stays paused until the result is known."
                     loan.held_by = prep
                     loan.save()
                 if n == 4:
@@ -74,6 +77,92 @@ def seed_demo():
                 Review.objects.create(organisation=org, instalment=inst, kind=kind, amount=inst.amount, owner=reviewer, prepared_by=prep, deadline=timezone.now()+timedelta(days=-1 if n==0 else 2), evidence="Sample item for trying out reviews. No bank or payment provider was contacted, and no money moved.")
     audit(org, prep, "Demo workspace created", "Sample data loaded. No payment provider is connected, so no money can move.")
     return org, prep
+
+
+# Days after a failed debit when each retry preset tries again (FR-C3.3); content.RETRY_FOR_CUSTOMER words them for customers.
+RETRY_DAYS = {"Standard": [2, 5], "Gentle": [3], "Off": []}
+IN_PROGRESS = ["Awaiting approval", "Awaiting confirmation", "Unknown"]
+
+
+def debit_blocker(instalment, busy):
+    """Why today's direct-debit run must leave this instalment alone, in plain words, or "" if it may be debited."""
+    loan = instalment.loan
+    if loan.on_hold:
+        return "the loan is on hold"
+    if instalment.state in ("Unknown", "In progress"):
+        return "an earlier payment has no final result yet"
+    if instalment.id in busy:
+        return "a payment request for it is in progress"
+    if loan.consent_status != "Active":
+        return content.CONSENT_NOT_ACTIVE.get(loan.consent_status, "consent is not active")
+    if instalment.amount - instalment.paid > loan.consent_max:
+        return "it is more than the customer's maximum per debit"
+    return ""
+
+
+def sentence(words):
+    return words[:1].upper() + words[1:]
+
+
+def next_try(org, failed_on):
+    days = RETRY_DAYS.get(org.retry_preset, [])
+    if not days:
+        return "no automatic retry: the retry rule is Off"
+    retry = failed_on + timedelta(days=days[0])
+    return f"next try on {retry.day} {retry:%b %Y}"
+
+
+def debit_outlook(org, instalments):
+    """What today's run did, or will do, for each instalment due today: (instalment, outcome, words)."""
+    busy = set(PaymentRequest.objects.filter(organisation=org, status__in=IN_PROGRESS).values_list("instalment_id", flat=True))
+    debited = set(Payment.objects.filter(organisation=org, source="Direct debit", paid_at__date=timezone.localdate()).values_list("instalment_id", flat=True))
+    rows = []
+    for i in instalments:
+        if i.paid >= i.amount:
+            rows.append((i, "done", "Collected by direct debit" if i.id in debited else "Paid"))
+        elif i.state == "Failed":
+            rows.append((i, "failed", f"Debit failed · {next_try(org, i.due_date)}"))
+        elif blocker := debit_blocker(i, busy):
+            rows.append((i, "blocked", f"Not debited: {blocker}"))
+        else:
+            rows.append((i, "ready", "Ready for today's run"))
+    return rows
+
+
+def run_todays_debits(org, actor):
+    """The demo's stand-in for the morning direct-debit run (FR-C3). Sample data only: no bank or Paystack is contacted.
+
+    Debits each instalment due today that debit_blocker() allows. Outcomes are fixed so a presenter can rely on them:
+    every third debit fails for lack of money and waits for the retry preset. An instalment that was paid or already
+    tried is never debited again, so running it twice changes nothing. Returns the collected, failed and skipped instalments.
+    """
+    today = timezone.localdate()
+    collected, failed, skipped = [], [], []
+    with transaction.atomic():
+        due = (Instalment.objects.select_for_update(of=("self",)).filter(organisation=org, due_date=today, loan__status="Open", paid__lt=F("amount"))
+               .select_related("loan__customer").order_by("loan__reference", "sequence"))
+        busy = set(PaymentRequest.objects.filter(organisation=org, status__in=IN_PROGRESS).values_list("instalment_id", flat=True))
+        for inst in due:
+            loan, owed = inst.loan, inst.amount - inst.paid
+            if inst.state == "Failed" or debit_blocker(inst, busy):
+                skipped.append(inst)
+            elif (len(collected) + len(failed) + 1) % 3 == 0:
+                inst.state = "Failed"
+                inst.save(update_fields=["state"])
+                failed.append(inst)
+                audit(org, None, "Direct debit failed", f"{loan.reference} instalment {inst.sequence}, {money(owed)}: not enough money in the account. "
+                                                       f"{sentence(next_try(org, today))}. Sample run: no bank was contacted.")
+            else:
+                Payment.objects.create(organisation=org, instalment=inst, reference=f"DEMO-DD-{str(org.id)[:8]}-{inst.id}", amount=owed,
+                                       paid_at=timezone.now(), source="Direct debit")
+                inst.paid, inst.state = inst.amount, "Paid"
+                inst.save(update_fields=["paid", "state"])
+                collected.append(inst)
+                audit(org, None, "Direct debit confirmed", f"{loan.reference} instalment {inst.sequence}, {money(owed)}, matched to the instalment. "
+                                                          "Sample run: no bank was contacted.")
+        audit(org, actor, "Today's direct debits run", f"{len(collected)} collected, {len(failed)} failed, {len(skipped)} not debited. "
+                                                       "Started from the Dashboard on sample data: no bank was contacted.")
+    return collected, failed, skipped
 
 
 def workspace_exists(request):
