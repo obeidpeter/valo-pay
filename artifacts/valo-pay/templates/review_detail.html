@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% block content %}
+<p class="note">Deadline basis: {{ review.deadline_label }}. New targets exclude weekends and configured holidays: payment result not known 1, refund request 2, other reviews 3, refund after withdrawal 5 business days. “Overdue” compares the stored date, not verified regulatory compliance.</p>
+<div class="head"><div><nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/reviews/">Reviews</a></li><li aria-current="page">#{{ review.id }}</li></ol></nav><h1>{{ review.label }}</h1><p class="sub">{{ review.customer_name }} · {{ review.amount_display }} · {% include "includes/badge.html" with s=review.status %}{% if review.overdue %} {% include "includes/badge.html" with s="Overdue" %}{% endif %}</p></div></div>
+<div class="grid g2"><div>
+<section class="card" aria-labelledby="ev-h"><h2 id="ev-h">Problem and evidence</h2><dl class="kv"><dt>Problem</dt><dd>{{ review.label }}</dd><dt>Customer</dt><dd>{{ review.customer_name }}</dd><dt>Amount</dt><dd class="mono">{{ review.amount_display }}</dd><dt>Deadline</dt><dd>{{ review.deadline|date:"j M Y, H:i" }}{% if review.overdue %} (overdue){% endif %}</dd><dt>Owner</dt><dd>{% if review.owner %}{{ review.owner.name }}{% else %}Unassigned{% endif %}</dd><dt>Prepared by</dt><dd>{% if review.prepared_by %}{{ review.prepared_by.name }}{% else %}System{% endif %}</dd>{% if review.outcome %}<dt>Outcome</dt><dd>{{ review.outcome }}</dd>{% endif %}</dl>
+{% if review.evidence %}<pre class="evidence">{{ review.evidence }}</pre>{% else %}<p class="small muted" style="margin-top:12px">No evidence attached.</p>{% endif %}
+{% if review.note %}<div class="note" style="margin-top:12px"><b>Decision note:</b> {{ review.note }}</div>{% endif %}</section>
+<details class="help card"><summary>Why does another person have to decide?</summary><p>Separating the person who prepares an item from the person who approves it prevents single-person errors on money. The system enforces this on submission, regardless of what this page shows.</p></details>
+</div><div>
+{% if review.status != 'Resolved' and review.status != 'Dismissed' and review.status != 'Approved' %}
+{% if can_hold %}<section class="card" aria-labelledby="as-h"><h2 id="as-h">Assign owner</h2><form method="post" class="form">{% csrf_token %}<input type="hidden" name="action" value="assign"><div class="field"><label for="owner">Owner</label><select id="owner" name="owner">{% for m in members %}<option value="{{ m.id }}"{% if review.owner and review.owner.name == m.name %} selected{% endif %}>{{ m.name }} — {{ m.role }}</option>{% endfor %}</select></div><button class="btn ghost" type="submit">Save owner</button></form></section>{% endif %}
+<section class="card" aria-labelledby="dc-h"><h2 id="dc-h">Decision</h2>
+{% if not can_review %}<p class="note">Decisions require a separate Reviewer or Admin. Your role cannot submit a decision.</p>{% else %}
+{% if review.kind == 'Unknown result' or review.kind == 'Unclear match' or review.kind == 'Possible duplicate' or review.kind == 'Reversal' %}
+<div class="note bad"><b>Decision blocked: provider evidence needed.</b> An item like this can only be resolved with a verified provider or bank record. That connection is not available in the sandbox, so no outcome can be recorded. Nothing can be marked paid by hand. Keep the instalment on hold and do not request the payment again.</div>
+{% elif review.prepared_by and review.prepared_by.name == actor.name %}
+<div class="note warn"><b>You prepared this item.</b> A different Admin or Reviewer must decide it. <a href="/settings/#role">Switch simulated role</a> to continue the demo.</div>
+{% elif actor.role != 'Admin' and actor.role != 'Reviewer' %}
+<div class="note warn"><b>Your role ({{ actor.role }}) cannot decide reviews.</b> Only an Admin or Reviewer can. You can still assign an owner.</div>
+{% else %}
+<form method="post" class="form" data-confirm="Record this decision? It is saved to the audit log and cannot be edited afterwards.">{% csrf_token %}<input type="hidden" name="action" value="resolve">
+<fieldset class="field"><legend>Outcome <span class="req">*</span></legend>
+{% if review.kind == 'Refund request' or review.kind == 'Refund after withdrawal' %}
+<div class="field inline"><input type="radio" id="o-res" name="outcome" value="Resolved" required><label for="o-res">Approve refund <span class="hint">Marks Approved. No money is returned in the sandbox.</span></label></div>
+<div class="field inline"><input type="radio" id="o-dis" name="outcome" value="Dismissed"><label for="o-dis">Reject refund</label></div>
+{% else %}
+<div class="field inline"><input type="radio" id="o-res" name="outcome" value="Resolved" required><label for="o-res">Resolved <span class="hint">The issue was investigated and handled.</span></label></div>
+<div class="field inline"><input type="radio" id="o-dis" name="outcome" value="Dismissed"><label for="o-dis">Dismissed <span class="hint">No action needed.</span></label></div>
+{% endif %}</fieldset>
+<div class="field"><label for="note">Decision note <span class="req">*</span></label><textarea id="note" name="note" required aria-describedby="note-h"></textarea><span class="hint" id="note-h">What you checked and why. This is kept in the audit log.</span></div>
+<button class="btn" type="submit">Record decision</button></form>
+{% endif %}{% endif %}</section>
+{% else %}<section class="card"><div class="empty"><b>Closed: {{ review.status }}</b>{% if review.outcome %}Outcome: {{ review.outcome }}.{% endif %} No further action.</div></section>{% endif %}
+<p style="margin-top:16px"><a href="/reviews/">Back to Reviews</a></p>
+</div></div>{% endblock %}

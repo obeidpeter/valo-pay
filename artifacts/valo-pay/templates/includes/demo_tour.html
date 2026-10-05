@@ -1,0 +1,12 @@
+{% if demo_tour %}
+<section class="card tourcard" aria-label="Demo tour controls">
+<p><strong>Demo guide · Step {{ demo_tour.number }} of {{ demo_tour.total }}</strong> · As {{ actor.name }} ({{ actor.role }})</p>
+<p class="tour-title">{{ demo_tour.title }}</p>
+<p class="tour-hint">{{ demo_tour.hint }}</p>
+<div class="actions">
+{% if demo_tour.previous %}<form method="post" action="/demo/guide/action/">{% csrf_token %}<input type="hidden" name="step" value="{{ demo_tour.previous }}"><button class="btn ghost sm" type="submit">Previous step</button></form>{% endif %}
+{% if demo_tour.next %}<form method="post" action="/demo/guide/action/">{% csrf_token %}<input type="hidden" name="step" value="{{ demo_tour.next }}"><button class="btn sm" type="submit">Next step</button></form>{% endif %}
+<a class="btn ghost sm" href="/demo/guide/">Read the guide</a>
+<form method="post" action="/demo/guide/end/">{% csrf_token %}<button class="btn ghost sm" type="submit">End tour</button></form>
+</div></section>
+{% endif %}

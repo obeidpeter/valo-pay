@@ -1,0 +1,89 @@
+{% load static %}<!doctype html>
+<html lang="en-NG"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Valo Pay · Loan repayments for Nigerian lenders and cooperatives</title>
+<meta name="description" content="Keep repayment schedules, payment records and reviews in one place. Explore Valo Pay with sample data. Live payments and demo requests are not open yet.">
+<meta property="og:description" content="Explore loan repayment tools for Nigerian lenders and cooperatives with sample data. No real payments or messages are sent. Live payments and demo requests are not open yet.">
+<meta property="og:title" content="Valo Pay — a clearer way to manage loan repayments"><meta property="og:type" content="website">
+<link rel="preload" href="{% static 'fonts/pjs-latin.woff2' %}" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{% static 'valo.css' %}?v=5"></head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<div class="lp-top lp-headbar">
+{% include "includes/site_head.html" with landing_copy=True %}
+</div>
+<main id="main" tabindex="-1">
+<section class="lp-top" aria-labelledby="hero-h">{% include "includes/ribbon.html" with rid="h" %}<div class="site"><div class="lp-hero">
+<p class="eyebrow">Pre-launch · For Nigerian lenders and cooperatives</p>
+<h1 id="hero-h">A clearer way to manage loan repayments.</h1>
+<p class="lede">Keep repayment schedules, payment records and reviews in one place, so your team can see what needs attention.</p>
+<div class="actions"><a class="btn lg" href="/request-demo/">Request a demo</a><a class="btn ghost lg" href="/demo/">Try the sample-data demo</a></div>
+<p class="fine">Try the demo with sample data. No sign-up is needed, and no money moves or messages are sent. Demo requests are not open yet.</p>
+</div></div></section>
+
+<section class="lp-section" aria-labelledby="prob-h"><div class="site lp-split">
+<div><p class="eyebrow">The problem</p>
+<h2 id="prob-h">Repayments are tracked across spreadsheets, bank alerts and phone calls.</h2>
+<p class="intro">When records are spread out, it is hard to see who is due to pay and which repayments have arrived. Your team has to check bank alerts against loan records. An unclear result can leave staff unsure whether to try again.</p>
+<ol class="lp-qs">
+<li><span class="n" aria-hidden="true">01</span><div><h3>Is the payment confirmed?</h3><p>In the planned live service, Valo Pay will check the result with the payment service before showing Confirmed. An email or a return from a bank page is not confirmation.</p></div></li>
+<li><span class="n" aria-hidden="true">02</span><div><h3>What needs checking?</h3><p>A result that is not known is not a failure. Further collection stays on hold until there is a verified result from the bank or payment service.</p></div></li>
+<li><span class="n" aria-hidden="true">03</span><div><h3>Who made the decision?</h3><p>Decisions are recorded so staff can review them later. The person who prepares a refund request cannot approve it. Another authorised team member must review it. Approval does not mean money has been returned.</p></div></li>
+</ol></div>
+<figure class="illus" aria-labelledby="flow-cap">
+<figcaption><span id="flow-cap">Planned live process for one instalment</span><span class="synth">Shown with sample records</span></figcaption>
+<ol class="flow">
+<li><span class="n" aria-hidden="true">1</span><span><b>Add the schedule</b><span class="s">Check every row before saving it</span></span>{% include "includes/badge.html" with s="Upcoming" %}</li>
+<li><span class="n" aria-hidden="true">2</span><span><b>Ask for permission</b><span class="s">The customer agrees before payments can be taken</span></span>{% include "includes/badge.html" with s="Active" %}</li>
+<li><span class="n" aria-hidden="true">3</span><span><b>Request the payment</b><span class="s">Only one payment attempt at a time for an instalment</span></span>{% include "includes/badge.html" with s="In progress" %}</li>
+<li><span class="n" aria-hidden="true">4</span><span><b>Check an unclear result</b><span class="s">Keep collection on hold until there is a verified bank or payment-service result</span></span>{% include "includes/badge.html" with s="Unknown" %}</li>
+<li><span class="n" aria-hidden="true">5</span><span><b>Confirm the payment</b><span class="s">A verified result is required before showing Confirmed for the payment</span></span>{% include "includes/badge.html" with s="Confirmed" %}</li>
+</ol></figure>
+</div></section>
+
+<section class="lp-section lp-sunk" id="how" aria-labelledby="how-h"><div class="site">
+<p class="eyebrow">How it works</p>
+<h2 id="how-h">Two planned ways to collect repayments</h2>
+<p class="intro">The demo shows two planned payment methods using sample records. For live use, each lender would connect its own Paystack account. Valo Pay does not hold money.</p>
+<div class="lp-two">
+<div class="panel"><p class="eyebrow">Collections</p><h3>Scheduled payments with the customer's permission</h3><ul><li>Add a repayment schedule from a CSV spreadsheet file</li><li>Ask for permission to take payments — this is called consent</li><li>Keep collection on hold when a payment result is not known, until the bank or payment service verifies it</li><li>Record why a loan is paused</li></ul></div>
+<div class="panel accent"><p class="eyebrow">Pay-by-bank</p><h3>A payment link towards one instalment</h3><ul><li>Show the amount requested and when the link expires</li><li>Let customers pay through Paystack using their bank account or a bank transfer</li><li>Wait for confirmation from the payment service</li><li>Cancel a request that is still waiting for approval</li></ul></div>
+</div></div></section>
+
+<section class="lp-section" id="for" aria-labelledby="for-h"><div class="site">
+<p class="eyebrow">Who it is for</p>
+<h2 id="for-h">For teams who manage repayments every day</h2>
+<p class="intro">For repayment teams at Nigerian microfinance lenders, digital lenders and cooperatives. Valo Pay is designed to work alongside your loan system. It does not issue loans or make lending decisions.</p>
+<div class="lp-controls" aria-labelledby="ctrl-h">
+<h3 class="vh" id="ctrl-h">Tools to help your team check records</h3>
+<div><h3>Dashboard</h3><p>See what is due, what is on hold and what needs review. Open a list to see the records behind each total.</p></div>
+<div><h3>Separate review</h3><p>The person who prepares a refund request cannot approve it. Another authorised team member must review it.</p></div>
+<div><h3>Clear status words</h3><p>Upcoming, In progress, Failed, Result not known and Confirmed are shown in words, not just colours.</p></div>
+<div><h3>Downloadable records</h3><p>Download payment records, consent records, reviews, activity history and a daily summary as CSV files.</p></div>
+</div>
+<div class="lp-later" style="margin-top:var(--s10)" aria-labelledby="later-h"><span class="tag">Planned later</span><div><h3 id="later-h">Not available today</h3><p style="margin:4px 0 0"><b>Credit Desk</b> is a planned tool to help staff review whether a borrower can afford repayments. <b>Cash Desk</b> is planned for viewing balances and expected collections. Both appear only as sample previews in the demo. Neither is an available service.</p></div></div>
+</div></section>
+
+<section class="lp-section lp-sunk faq" id="faq" aria-labelledby="faq-h"><div class="site faq-grid">
+<div><p class="eyebrow">FAQ</p><h2 id="faq-h">Questions lenders ask</h2></div>
+<div>
+<details><summary>Is Valo Pay available now?</summary><p>The sample demo is available. Live payments are not available yet. {% include "includes/landing_availability.html" %}</p></details>
+<details><summary>Does Valo Pay hold our money?</summary><p>No. Valo Pay does not hold money. The planned live service would use each lender's own Paystack account to receive payments. This connection is not available yet.</p></details>
+<details><summary>Which payment methods are planned?</summary><p>Collections is for scheduled payments with the customer's permission. Pay-by-bank offers a payment link towards one instalment, using a bank account or bank transfer through Paystack. These methods are not live yet.</p></details>
+<details><summary>What happens when a payment result is unclear?</summary><p>A result that is not known is not a failure. Further collection stays on hold until there is a verified result from the bank or payment service.</p></details>
+<details><summary>How much does it cost?</summary><p>Public pricing is not available yet.</p></details>
+<details><summary>Can I try it without talking to anyone?</summary><p>Yes. Open the <a href="/demo/">sample-data demo</a> page and choose Start the demo. It uses made-up customers and records. No sign-up is needed. Do not enter real customer details.</p></details>
+</div></div></section>
+
+<section class="site" style="padding-top:var(--s16)"><div class="ink-band" aria-labelledby="cta-h">
+{% include "includes/ribbon.html" with rid="c" %}
+<h2 id="cta-h">Explore how your team could manage repayments.</h2>
+<p>{% include "includes/landing_availability.html" %}</p>
+<div class="actions"><a class="btn" href="/request-demo/">Request a demo</a><a class="btn ghost" href="/access/login/">Staff sign in</a></div>
+</div></section>
+</main>
+<footer class="site sitefoot">
+<p><b>Valo Pay</b> — repayment tools for Nigerian lenders and cooperatives. Pre-launch. Valo Pay does not hold money.</p>
+<p>A privacy notice is required before enquiries open. You can explore the <a href="/demo/">sample-data demo</a> now. Do not enter real customer details.</p>
+</footer>
+</body></html>

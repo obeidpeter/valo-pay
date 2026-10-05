@@ -1,23 +1,16 @@
 [project]
-name = "valo-pay"
+name = "repl-nix-workspace"
 version = "0.1.0"
-description = "Valo Pay synthetic-data collections sandbox"
+description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
+    "argon2-cffi>=25.1.0",
+    "coverage>=7.16.2",
     "dj-database-url>=3.1.2",
     "django>=5.2,<5.3",
+    "django-otp>=1.7.3",
     "gunicorn>=26.2.0",
+    "playwright>=1.63.0",
     "psycopg[binary]>=3.3.6",
     "whitenoise>=6.12.0",
 ]
-
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-    "pytest-django>=4.14.0",
-]
-
-[tool.pytest.ini_options]
-DJANGO_SETTINGS_MODULE = "valo.settings"
-python_files = ["test_*.py"]
-filterwarnings = ["ignore:No directory at:UserWarning"]

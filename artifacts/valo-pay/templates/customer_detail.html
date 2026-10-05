@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% block content %}
+<div class="head"><div><nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/customers/">Customers</a></li><li aria-current="page">{{ customer.external_id }}</li></ol></nav><h1>{{ customer.name }}</h1><p class="sub">{{ customer.email|default:"No email on file" }} · {{ customer.phone|default:"No phone on file" }} · Customer ID <span class="mono">{{ customer.external_id }}</span></p></div>
+<div class="actions"><a class="btn ghost" href="/exports/customer/?customer={{ customer.id }}">Download history (CSV)</a>{% if can_prepare %}<a class="btn ghost" href="/customers/{{ customer.id }}/edit/">Edit details</a>{% endif %}</div></div>
+<nav aria-label="On this page" class="jump"><a href="#loans-h">Loans</a><a href="#pay-h">Payments</a><a href="#rev-h">Reviews</a><a href="#hist-h">History</a><a class="jump-dl" href="/exports/schedule/?customer={{ customer.id }}">Download instalment schedule (CSV)</a></nav>
+
+<h2 id="loans-h" class="vh">Loans</h2>
+{% if loans %}{% for loan in loans %}{% include "includes/loan_block.html" %}{% endfor %}
+{% elif loan %}{% include "includes/loan_block.html" with instalment_list=instalments %}
+{% else %}<section class="card"><div class="empty"><b>No loan on file</b>Only customer contact details can be edited here. No schedule has been created.</div></section>{% endif %}
+{% include "includes/pagination.html" with pager=loans page_parameter="loans_page" record_label="loans" pagination_label="Loan pages" %}
+
+<div class="grid g2" style="margin-top:16px"><div>
+<section class="card" aria-labelledby="pay-h"><h2 id="pay-h">Payments</h2><p class="small muted">Stored synthetic payment states, not connected-provider evidence. Pending is not counted as received money.</p>
+{% if payments %}<ul class="list">{% for p in payments %}<li><div><span class="mono">{{ p.reference }}</span><div class="small muted">{{ p.source }}{% if p.paid_at %} · {{ p.paid_at|date:"j M Y H:i" }}{% endif %}</div></div><div style="text-align:right"><div class="num">{{ p.amount_display }}</div>{% include "includes/badge.html" with s=p.status %}</div></li>{% endfor %}</ul>{% else %}<div class="empty"><b>No payments recorded</b>Payment records appear once a provider reports them.</div>{% endif %}
+{% include "includes/pagination.html" with pager=payments page_parameter="payments_page" record_label="payments" pagination_label="Payment pages" %}</section>
+</div><div>
+<section class="card" aria-labelledby="rev-h"><h2 id="rev-h">Reviews</h2>{% if reviews %}<ul class="list">{% for r in reviews %}<li><a href="/reviews/{{ r.id }}/">{{ r.label }}</a>{% include "includes/badge.html" with s=r.status %}</li>{% endfor %}</ul>{% else %}<p class="muted small">No reviews for this customer.</p>{% endif %}
+{% include "includes/pagination.html" with pager=reviews page_parameter="reviews_page" record_label="reviews" pagination_label="Review pages" %}</section>
+<section class="card" aria-labelledby="hist-h"><h2 id="hist-h">History</h2>{% if activity %}<ul class="list feed">{% for a in activity %}<li><div class="t">{{ a.created_at|date:"j M Y H:i" }} · {{ a.actor_name }}</div><b>{{ a.action }}</b> <span class="muted small">{{ a.detail }}</span></li>{% endfor %}</ul>{% else %}<p class="muted small">No recorded activity yet.</p>{% endif %}
+{% include "includes/pagination.html" with pager=activity page_parameter="history_page" record_label="history events" pagination_label="History pages" %}
+<p class="small muted">This history contains explicitly scoped events for this customer. Older unscoped entries have not been assigned by text matching or deleted; an Admin can retrieve them in the complete organisation audit export.</p></section>
+</div></div>{% endblock %}

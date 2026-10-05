@@ -1,0 +1,82 @@
+{% load static %}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="same-origin"><title>{% if form.errors %}Error: {% endif %}{{ title }} · Valo Pay</title><link rel="preload" href="{% static 'fonts/pjs-latin.woff2' %}" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="{% static 'valo.css' %}?v=5"></head><body>
+<a class="skip" href="#content">Skip to content</a><div class="sandbox" role="note">Sandbox only · <b>Live disabled</b> · No real messages sent</div>
+<div class="auth">
+<aside class="auth-brand" aria-label="About staff access">
+{% include "includes/ribbon.html" with rid="a" %}
+<a href="/" class="brand">{% include "includes/logo.html" %}Valo Pay</a>
+<div><h2>Staff access for repayment operations.</h2>
+<p>Sign in with your email, password and authenticator. Verification by authenticator is required for every staff account.</p>
+<ul><li>Separate from the synthetic product preview</li><li>Sessions end after 30 minutes of inactivity</li><li>No real payments or messages in this sandbox</li></ul></div>
+</aside>
+<div class="auth-form">
+<header class="auth-mhead"><a href="/" class="brand">{% include "includes/logo.html" %}Valo Pay</a><a href="/access/help/">Help</a></header>
+<main id="content" class="inner" tabindex="-1">
+<header style="margin-bottom:var(--s5)"><p class="eyebrow">Staff access · Sandbox</p>
+<h1>{{ title }}</h1>
+<p class="helptext">Staff access is separate from the synthetic product preview.</p></header>
+
+{% if request.GET.expired %}<div class="alert" role="alert"><p><strong>Your session ended after 30 minutes of inactivity.</strong> Sign in again. Unsaved form submissions were not resent.</p></div>{% endif %}
+{% if return_to %}<p><a class="btn" href="{{ return_to }}">Return to the action — nothing is submitted automatically</a></p>{% endif %}
+{% if verify_url %}<p><a class="btn" href="{{ verify_url }}">Verify your identity for this decision</a></p>{% endif %}
+{% if staff_refunds %}<h2>Refunds awaiting independent review</h2><ul>{% for refund in staff_refunds %}<li><a href="/access/refunds/{{ refund.id }}/">Review refund {{ refund.id }}</a></li>{% endfor %}</ul>{% endif %}
+{% if staff_member.role == "Admin" %}<p><a href="/access/settings/">Payment connection settings (unavailable)</a></p>{% endif %}
+
+{% if form and form.errors %}
+<div class="errsum" role="alert" tabindex="-1" id="errsum" aria-labelledby="errsum-h">
+<h2 id="errsum-h">There {% if form.errors|length == 1 %}is a problem{% else %}are problems{% endif %}</h2>
+<ul>{% for e in form.non_field_errors %}<li>{{ e }}</li>{% endfor %}
+{% for f in form %}{% for e in f.errors %}<li><a href="#{{ f.id_for_label }}">{{ f.label }}: {{ e }}</a></li>{% endfor %}{% endfor %}</ul>
+<p class="support-line"><span class="lbl">Need help?</span> <a href="/access/help/">Account access help</a> <span aria-hidden="true">·</span> <span class="lbl">Support</span> <a href="mailto:obeidpeter1@gmail.com">obeidpeter1@gmail.com</a></p>
+</div>{% endif %}
+
+{% if notice %}<div class="card" role="status"><p style="margin:0">{{ notice }}</p></div>{% endif %}
+
+{% if staff_member %}<div class="card"><h2>Current access</h2><dl style="margin:0"><dt class="lbl">Organisation</dt><dd style="margin:0 0 8px">{{ staff_member.organisation.name }}</dd><dt class="lbl">Role</dt><dd style="margin:0">{{ staff_member.role }}</dd></dl>
+{% if staff_member.role == "Admin" %}<p style="margin-top:12px"><a href="/access/invitations/">Manage staff invitations</a></p>{% endif %}</div>{% endif %}
+
+{% if idle_remaining is not None %}
+<div class="card" id="idle" data-remaining="{{ idle_remaining }}" hidden>
+<h2 id="idle-h">Your session is about to end</h2>
+<p id="idle-msg" role="alert" aria-live="assertive"></p>
+<p><span aria-hidden="true">Time left: <strong id="idle-clock"></strong></span></p>
+<form method="post" action="/access/continue/">{% csrf_token %}<input type="hidden" name="next" value="/access/workspace/"><button class="btn" type="submit">Stay signed in</button></form>
+</div>
+<noscript><p class="helptext">Sessions end after 30 minutes of inactivity.</p></noscript>
+{% endif %}
+
+{% if setup_key %}
+<div class="card"><h2>Add Valo Pay to your authenticator</h2>
+<p>In your authenticator app, choose to enter a setup key manually. Keep this key private; do not screenshot or share it.</p>
+<div class="field"><label for="setup-key">Setup key (time-based, 6 digits)</label>
+<input id="setup-key" type="text" readonly value="{{ setup_key }}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" style="font-family:var(--mono);width:100%;letter-spacing:.08em" aria-describedby="setup-key-hint">
+<span class="hint" id="setup-key-hint">Account: Valo Pay. Then enter the 6-digit code it shows below to confirm.</span>
+<button type="button" class="btn ghost sm" data-copy="setup-key" style="margin-top:8px">Copy setup key</button> <span role="status" class="hint" data-copy-status></span></div>
+{% if setup_uri %}<details><summary>Using an authenticator on this device?</summary><p><a href="{{ setup_uri }}" rel="noreferrer">Open in authenticator app</a></p></details>{% endif %}
+</div>{% endif %}
+
+{% if form.organisation and form.organisation.field.choices|length <= 1 %}<div class="card note-empty" role="status"><h2>No organisation access</h2><p>Your sign-in and authenticator were verified, but this account has no current organisation membership. Nothing is shown and no organisation data is available.</p><p class="hint">Ask an Admin of your organisation to invite you again, or contact support below. Choosing Continue without an organisation will not grant access.</p></div>{% endif %}
+{% if form %}
+<form method="post" action="{{ request.get_full_path }}" novalidate class="card" data-access-form>{% csrf_token %}
+{% for f in form.hidden_fields %}{{ f }}{% endfor %}
+{% for f in form.visible_fields %}
+<div class="field" data-field>
+<label for="{{ f.id_for_label }}">{{ f.label }}{% if not f.field.required %} <span class="hint" style="display:inline">(optional)</span>{% endif %}</label>
+{% if f.help_text %}<span class="hint" id="{{ f.id_for_label }}-hint">{{ f.help_text }}</span>{% endif %}
+{% if f.errors %}<p class="err" id="{{ f.id_for_label }}-err">{% for e in f.errors %}{{ e }} {% endfor %}</p>{% endif %}
+{{ f }}
+</div>{% endfor %}
+<p class="btnrow"><button class="btn" type="submit">Continue</button>{% if title == "Staff sign in" %}<a class="btn ghost" href="/">Back to home</a>{% elif user.is_authenticated %}<a class="btn ghost" href="/access/workspace/">Back to workspace</a>{% else %}<a class="btn ghost" href="/access/login/">Back to sign in</a>{% endif %}</p>
+{% if title == "Staff sign in" %}<p style="margin:var(--s4) 0 0"><a href="/access/reset/">Forgot your password?</a></p><p class="mfa-note"><span><b>Authenticator required.</b> After your password, you will confirm a 6-digit code from your authenticator app.</span></p>{% endif %}
+</form>{% endif %}
+
+{% if fallback_available %}<form method="post" action="/access/email-fallback/" class="card">{% csrf_token %}<p>Can't use your authenticator right now?</p><button class="btn ghost" type="submit">Send a one-time code by email instead</button><p class="hint">Email delivery is isolated in this preview; no real message is sent.</p></form>{% endif %}
+
+{% if invitations is not None %}<section class="card" aria-labelledby="inv-h"><h2 id="inv-h">Pending invitations</h2>
+{% if invitations %}<ul style="list-style:none;padding:0;margin:0">{% for i in invitations %}
+<li style="border-top:1px solid var(--line);padding:10px 0;display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center"><span><strong>{{ i.email }}</strong> · {{ i.role }}<br><span class="hint">Expires {{ i.expires_at|date:"j M Y, H:i" }}</span></span>
+<form method="post" action="/access/invitations/{{ i.id }}/revoke/">{% csrf_token %}<button class="btn warn sm" type="submit" aria-label="Revoke invitation for {{ i.email }}">Revoke</button></form></li>{% endfor %}</ul>
+{% else %}<p>No pending invitations.</p>{% endif %}</section>{% endif %}
+
+<nav aria-label="Access help" class="auth-links-wrap">{% if request.path != "/access/help/" %}<p><a href="/access/help/">Account and recovery help</a></p>{% endif %}{% if request.path != "/access/reset/" %}<p><a href="/access/reset/">Request a password reset</a></p>{% endif %}{% if request.path != "/access/login/" %}<p><a href="/access/login/">Back to sign in</a></p>{% endif %}{% if user.is_authenticated %}<p><a href="/today/">Open your organisation’s Dashboard</a></p>{% endif %}<p><a href="/">Public home</a></p><p><span>Support:</span> <a href="mailto:obeidpeter1@gmail.com">obeidpeter1@gmail.com</a></p>{% if not user.is_authenticated %}<p><a href="/demo/">Explore the synthetic demo</a></p>{% endif %}</nav>
+{% if user.is_authenticated %}<form action="/access/logout/" method="post">{% csrf_token %}<button class="btn ghost" type="submit">Sign out</button></form>{% endif %}
+</main></div></div><script src="{% static 'access.js' %}" defer></script></body></html>

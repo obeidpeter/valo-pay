@@ -1,51 +1,32 @@
 # Valo Pay
 
-Django and PostgreSQL demo of Valo Pay: collections and Pay-by-bank software for Nigerian lenders and cooperatives.
+Collections and Pay-by-bank software for Nigerian lenders and cooperatives. This repository mirrors the Replit workspace: the Django app is in [`artifacts/valo-pay/`](artifacts/valo-pay/).
 
-## Status
+**Demo with sample data only: not production-ready.** No real payments or messages are sent. Never enter real customer data.
 
-**Demo with sample data only — not production-ready.** Choosing a team member to act as is not authentication. No real payments or emails are sent. Never enter real customer data. See [RELEASE_SCOPE.md](RELEASE_SCOPE.md) for implemented features and launch blockers.
+## Layout
 
-## Included
+- `artifacts/valo-pay/`: the Django app as it runs on Replit (`core/`, `valo/`, `templates/`, `static/`, `manage.py`)
+- `pyproject.toml`, `uv.lock`: Python dependencies, as locked in the Replit workspace
+- `docs/github-copy-2026-10/`: documents for the earlier GitHub copy of the app, kept for reference
 
-Customer records, instalment schedules, CSV import, demo consent and payment links, a sample run of today's direct debits, holds, review queues, separate-person refund approval, CSV reports, and audit history. Credit Desk and Cash Desk are previews.
+## Run the tests
 
-## Setup
+```sh
+uv sync --locked
+cd artifacts/valo-pay
+export SESSION_SECRET="<a long random test-only value>"
+export DATABASE_URL="postgres://<user>@<host>/<database>"
+uv run python manage.py test
+```
 
-Requires Python 3.12+, PostgreSQL and an HTTPS reverse proxy.
+The browser tests also need Playwright's Chromium (`uv run python -m playwright install chromium`) and axe-core in `node_modules/` at the repository root (`npm install --no-save axe-core@4`). CI runs all of this on PostgreSQL 16 for every push (`.github/workflows/ci.yml`).
 
-1. Install the locked Python dependencies with `uv sync` (uv.lock pins them).
-2. Set `DATABASE_URL` and a strong random `SESSION_SECRET` in your runtime secret manager. Never commit their values.
-3. For a new development database, run `uv run python manage.py migrate`.
-4. Run `uv run python manage.py collectstatic --noinput`.
-5. Start with `uv run gunicorn valo.wsgi:application --bind 0.0.0.0:8000`.
+## Keeping GitHub and Replit in step
 
-For development, `uv run python manage.py runserver 0.0.0.0:8000` is also available. Secure cookies require HTTPS for functional browser sessions. Configure CSRF_TRUSTED_ORIGINS and ALLOWED_HOSTS in valo/settings.py for your actual host. Trust forwarded HTTPS headers only from a controlled reverse proxy. Current defaults target the Replit preview and must be reviewed before other hosting.
+The app runs on Replit, and this repository is not synced automatically. Before working in one place, bring over what changed in the other:
 
-Validate configuration with `uv run python manage.py check`. A visitor without a workspace sees a start page; choosing **Open the demo workspace** creates sample records in an isolated session workspace. Plain visits (crawlers, link previews, health checks) create nothing.
+- **Replit to GitHub:** ask Replit Agent to push the workspace's `artifacts/valo-pay/` to a new branch of this repository, then open a pull request.
+- **GitHub to Replit:** ask Replit Agent to fetch `main` and apply the changes under `artifacts/valo-pay/` to the workspace, then restart the app and run its tests.
 
-## Presenting the demo
-
-The sidebar puts the **Dashboard** first, then the pages in the order a team uses them: Daily work (Collections, Reviews, Pay-by-bank), Records (Customers, Reports), Organisation (Settings & team) and Coming later (the Credit Desk and Cash Desk previews). The Demo panel at the bottom has the **Demo guide**, the **Start page** and the person you are acting as. In the guide, choose **Start the tour**: a twelve-step tour of the sample lender in which each step opens the right page as the right person. While the tour runs, a bar at the bottom of every page shows the step, what to do on that page, and **Next step**, **All steps** and **End tour**. Step 2 uses **Run today's debits** on the Dashboard, the demo's stand-in for the morning direct-debit run: it works on sample data, contacts no bank and moves no money. The **Start page** offers **Continue the demo** or **Start again with fresh sample data**. Rehearse, then start again so the audience sees clean sample data. Sessions end after 30 minutes without activity (TRD FR-X1.3); if that happens, open the demo again from the start page. Customer pages are labelled "Customer's view", and nothing in the demo moves money or sends messages.
-
-## Demo workspace cleanup
-
-`uv run python manage.py purge_demo_workspaces` deletes demo workspaces with no activity for 24 hours, and expired sessions. Each new workspace also clears up to 10 idle ones, but schedule the command daily too (for example a scheduled deployment or cron job). Workspaces that existed before migration 0002 count as active from the moment it runs, so the first daily run a day later clears that backlog. `--idle-hours` overrides the period.
-
-## Content and wording
-
-User-facing wording follows [docs/content/content-guide.md](docs/content/content-guide.md). State explanations shown next to TRD labels live in core/content.py. [docs/content/copy-review.md](docs/content/copy-review.md) records coverage, test results, discrepancies and the wording that needs owner approval; [copy-inventory.csv](docs/content/copy-inventory.csv) lists each change with its reason and source, and [copy-walk-diff.csv](docs/content/copy-walk-diff.csv) is the complete before-and-after log.
-
-## Tests
-
-`uv run pytest` runs the test suite, including the copy checks in core/tests/test_copy.py. It needs `SESSION_SECRET` and a `DATABASE_URL` whose PostgreSQL user can create the test database. CI runs the same checks and tests on PostgreSQL 17 for every push (.github/workflows/ci.yml).
-
-## Repository layout
-
-- core/: models, migrations, forms, services, views and tests
-- valo/: Django settings, routes and WSGI entry point
-- templates/ and static/: server-rendered interface
-- docs/content/: content guide, copy inventory and copy review
-- RELEASE_SCOPE.md: known limitations and launch requirements
-
-This repository is a source snapshot of the Valo Pay app from the Replit workspace, with the Django app at the repository root. Unrelated starter apps, uploaded business documents, generated files, databases and secrets are excluded. It is not an automatic sync of the workspace or its Git history.
+Until 5 October 2026 this repository held a separate copy of the app at the repository root, which is why changes merged here did not appear on Replit. See `docs/github-copy-2026-10/`.

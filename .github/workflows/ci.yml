@@ -9,7 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        # Replit runs PostgreSQL 16 (.replit modules).
+        image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
         ports: ["5432:5432"]
@@ -20,16 +21,27 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      SESSION_SECRET: ci-only-not-a-real-secret
+    defaults:
+      run:
+        working-directory: artifacts/valo-pay
     steps:
       - uses: actions/checkout@v5
       - name: Install uv
         run: pipx install uv
       - name: Install locked dependencies
         run: uv sync --locked
+      - name: Test-only session secret
+        # A fresh random value each run; Django's deployment check rejects short keys.
+        run: echo "SESSION_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" >> "$GITHUB_ENV"
+      - name: Browser for the browser tests
+        run: uv run python -m playwright install --with-deps chromium
+      - name: Accessibility checker for the browser tests
+        # core/browser_audit.py loads node_modules/axe-core from the repository root.
+        working-directory: .
+        run: npm install --no-save --no-audit --no-fund axe-core@4
       - name: Django checks
         run: |
           uv run python manage.py check
           uv run python manage.py makemigrations --check --dry-run
       - name: Tests
-        run: uv run pytest
+        run: uv run python manage.py test --noinput

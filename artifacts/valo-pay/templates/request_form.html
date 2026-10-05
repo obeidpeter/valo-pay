@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block content %}
+<p class="note">The selector shows up to 50 eligible instalments, plus your selected record. To find any other record, <a href="/collections/">search or page through Collections</a> and choose its Request payment action. Every choice is checked against your organisation again when submitted.</p>
+<div class="head"><div><nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/payments/">Pay-by-bank</a></li><li aria-current="page">New request</li></ol></nav><h1>New payment request</h1><p class="sub">Creates one shareable link for one instalment, from <b>{{ org.name }}</b> to the customer.</p></div></div>
+<div class="grid g2"><section class="card"><form method="post" class="form" novalidate>{% csrf_token %}
+{% include "includes/form.html" with form=form %}
+<div class="note small" style="margin-bottom:8px">Check before creating: the instalment shows the customer and due date; the amount cannot exceed what is outstanding; the link expires after the hours you choose (1–168).</div>
+<div class="check"><input type="checkbox" id="confirmed" name="confirmed" value="1" required><label for="confirmed">I have checked the customer, instalment, amount and expiry. I understand this creates a <b>demo link only</b>: no money moves and no message is sent.</label></div>
+<div class="actions"><button class="btn" type="submit">Create request link</button><a class="btn ghost" href="/payments/">Cancel</a></div></form></section>
+<aside class="card" aria-labelledby="next-h"><h2 id="next-h">What happens next</h2><ol class="steps"><li><span>You get a link to share with the customer yourself.</span></li><li><span>The customer sees {{ org.name }}, the amount and expiry. Valo Pay never asks for bank passwords.</span></li><li><span>When live, payment happens with Paystack bank or bank-transfer channels. Here the provider is not connected, so the customer is told payment is unavailable.</span></li><li><span>The request is only marked paid when a confirmed provider record exists.</span></li></ol></aside></div>
+{% endblock %}
